@@ -141,30 +141,6 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 
 ---
 
-### `defineCachedHandler`
-
-```ts
-function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
-  handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
-): EventHandler<E>;
-```
-
-Wraps an HTTP event handler with response caching.
-
-Automatically generates cache keys from the URL path and variable headers,
-sets `cache-control`, `etag`, and `last-modified` headers, and handles
-`304 Not Modified` responses via conditional request headers.
-
-**Parameters:**
-
-- **`handler`** — The event handler to cache.
-- **`opts`** — Cache and HTTP-specific configuration options.
-
-**Returns:** — A new event handler that serves cached responses when available.
-
----
-
 ### `createMemoryStorage`
 
 ```ts
@@ -192,6 +168,30 @@ function setStorage(storage: StorageInterface): void;
 ```
 
 Sets a custom storage implementation to be used by all cached functions.
+
+---
+
+### `defineCachedHandler`
+
+```ts
+function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
+): EventHandler<E>;
+```
+
+Wraps an HTTP event handler with response caching.
+
+Automatically generates cache keys from the URL path and variable headers,
+sets `cache-control`, `etag`, and `last-modified` headers, and handles
+`304 Not Modified` responses via conditional request headers.
+
+**Parameters:**
+
+- **`handler`** — The event handler to cache.
+- **`opts`** — Cache and HTTP-specific configuration options.
+
+**Returns:** — A new event handler that serves cached responses when available.
 
 ---
 
@@ -270,9 +270,7 @@ Conditional cache header options passed to the `handleCacheHeaders` hook.
 ### `CachedEventHandlerOptions`
 
 ```ts
-interface CachedEventHandlerOptions<
-  E extends HTTPEvent = HTTPEvent,
-> extends Omit<
+interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
   CacheOptions<ResponseCacheEntry, [E]>,
   "transform" | "validate"
 >
