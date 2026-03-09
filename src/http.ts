@@ -54,7 +54,8 @@ export function defineCachedHandler(
       const _path = _url.pathname + _url.search;
       let _pathname: string;
       try {
-        _pathname = escapeKey(decodeURI(new URL(_path, "http://localhost").pathname)).slice(0, 16) || "index";
+        _pathname =
+          escapeKey(decodeURI(new URL(_path, "http://localhost").pathname)).slice(0, 16) || "index";
       } catch {
         _pathname = "-";
       }
