@@ -144,10 +144,10 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 ### `defineCachedHandler`
 
 ```ts
-function defineCachedHandler(
-  handler: EventHandler,
-  opts: CachedEventHandlerOptions = defaultCacheOptions(),
-): EventHandler;
+function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
+): EventHandler<E>;
 ```
 
 Wraps an HTTP event handler with response caching.
@@ -220,7 +220,7 @@ Minimal HTTP event object containing a request and an optional pre-parsed URL.
 ### `EventHandler`
 
 ```ts
-type EventHandler = (event: HTTPEvent) => unknown | Promise<unknown>;
+type EventHandler<E extends HTTPEvent = HTTPEvent> = (
 ```
 
 Handler function that receives an [`HTTPEvent`](#httpevent) and returns a response value.
@@ -257,11 +257,23 @@ Serialized HTTP response stored in the cache by `defineCachedHandler`.
 
 ---
 
+### `CacheConditions`
+
+```ts
+interface CacheConditions
+```
+
+Conditional cache header options passed to the `handleCacheHeaders` hook.
+
+---
+
 ### `CachedEventHandlerOptions`
 
 ```ts
-interface CachedEventHandlerOptions extends Omit<
-  CacheOptions<ResponseCacheEntry, [HTTPEvent]>,
+interface CachedEventHandlerOptions<
+  E extends HTTPEvent = HTTPEvent,
+> extends Omit<
+  CacheOptions<ResponseCacheEntry, [E]>,
   "transform" | "validate"
 >
 ```

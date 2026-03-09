@@ -24,11 +24,15 @@ src/
 
 ### HTTP handler caching (`http.ts`)
 
-- `defineCachedHandler(handler, opts)` — wraps an `EventHandler` with response caching
+- `defineCachedHandler<E extends HTTPEvent>(handler, opts)` — wraps an `EventHandler` with response caching (generic over event type)
 - Auto-generates cache keys from URL path + variable headers
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
 - Sets `cache-control`, `etag`, `last-modified` headers
 - Filters non-variable headers before calling the handler (for consistent cache keys)
+- Framework integration hooks on `CachedEventHandlerOptions`:
+  - `toResponse(value, event)` — convert handler return value to Response (default: plain Response constructor)
+  - `createResponse(body, init)` — create the final Response from cached data (default: `new Response()`)
+  - `handleCacheHeaders(event, conditions)` — custom 304 conditional check (default: built-in if-none-match/if-modified-since)
 
 ### Storage (`storage.ts`)
 
@@ -39,10 +43,11 @@ src/
 ### Types (`types.ts`)
 
 - `HTTPEvent` — `{ req: Request; url?: URL }` (url falls back to `new URL(req.url)`)
-- `EventHandler` — `(event: HTTPEvent) => unknown | Promise<unknown>`
+- `EventHandler<E>` — `(event: E) => unknown | Promise<unknown>` (generic, defaults to HTTPEvent)
 - `CacheEntry<T>` — stored cache entry with value, expires, mtime, integrity
 - `CacheOptions<T>` — maxAge, swr, staleMaxAge, getKey, validate, transform, etc.
-- `CachedEventHandlerOptions` — extends CacheOptions with headersOnly, varies
+- `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
+- `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
 - `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
 
 ## Dependencies

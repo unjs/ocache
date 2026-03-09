@@ -11,5 +11,6 @@ export type {
   CacheEntry,
   CacheOptions,
   CachedEventHandlerOptions,
+  CacheConditions,
   ResponseCacheEntry,
 } from "./types.ts";

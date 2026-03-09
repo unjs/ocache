@@ -20,7 +20,9 @@ export interface HTTPEvent {
 /**
  * Handler function that receives an {@link HTTPEvent} and returns a response value.
  */
-export type EventHandler = (event: HTTPEvent) => unknown | Promise<unknown>;
+export type EventHandler<E extends HTTPEvent = HTTPEvent> = (
+  event: E,
+) => unknown | Promise<unknown>;
 
 /**
  * Stored cache entry wrapping a cached value with metadata.
@@ -83,16 +85,44 @@ export interface ResponseCacheEntry {
 }
 
 /**
+ * Conditional cache header options passed to the `handleCacheHeaders` hook.
+ */
+export interface CacheConditions {
+  modifiedTime?: Date;
+  maxAge?: number;
+  etag?: string;
+}
+
+/**
  * Options for configuring cached HTTP handlers created by `defineCachedHandler`.
  *
  * Extends {@link CacheOptions} (without `transform` and `validate`, which are set internally).
  */
-export interface CachedEventHandlerOptions extends Omit<
-  CacheOptions<ResponseCacheEntry, [HTTPEvent]>,
+export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
+  CacheOptions<ResponseCacheEntry, [E]>,
   "transform" | "validate"
 > {
   /** When `true`, only handles conditional headers (304 responses) without full response caching. */
   headersOnly?: boolean;
   /** Request header names that should vary the cache key (e.g., `["accept-language"]`). */
   varies?: string[] | readonly string[];
+
+  /**
+   * Convert handler return value to a Response.
+   * Default: `rawValue instanceof Response ? rawValue : new Response(String(rawValue))`.
+   */
+  toResponse?: (value: unknown, event: E) => Response | Promise<Response>;
+
+  /**
+   * Create the final cached Response from serialized cache entry data.
+   * Default: `new Response(body, init)`.
+   */
+  createResponse?: (body: string | null, init: ResponseInit) => Response;
+
+  /**
+   * Check conditional request headers (etag/if-modified-since).
+   * Return `true` to short-circuit with a 304 response.
+   * Default: built-in if-none-match / if-modified-since check.
+   */
+  handleCacheHeaders?: (event: E, conditions: CacheConditions) => boolean;
 }

@@ -6,6 +6,7 @@ import type {
   EventHandler,
   CacheOptions,
   CachedEventHandlerOptions,
+  CacheConditions,
   ResponseCacheEntry,
 } from "./types.ts";
 
@@ -29,14 +30,24 @@ function defaultCacheOptions() {
  * @param opts - Cache and HTTP-specific configuration options.
  * @returns A new event handler that serves cached responses when available.
  */
-export function defineCachedHandler(
-  handler: EventHandler,
-  opts: CachedEventHandlerOptions = defaultCacheOptions(),
-): EventHandler {
+export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
+): EventHandler<E> {
   const variableHeaderNames = (opts.varies || [])
     .filter(Boolean)
     .map((h) => h.toLowerCase())
     .sort();
+
+  const _toResponse =
+    opts.toResponse ||
+    ((rawValue: unknown) =>
+      rawValue instanceof Response ? rawValue : new Response(String(rawValue)));
+
+  const _createResponse =
+    opts.createResponse || ((body: string | null, init: ResponseInit) => new Response(body, init));
+
+  const _handleCacheHeaders = opts.handleCacheHeaders || _defaultHandleCacheHeaders;
 
   const _opts: CacheOptions<ResponseCacheEntry> = {
     ...opts,
@@ -45,7 +56,7 @@ export function defineCachedHandler(
     },
     getKey: async (event: HTTPEvent) => {
       // Custom user-defined key
-      const customKey = await opts.getKey?.(event);
+      const customKey = await opts.getKey?.(event as E);
       if (customKey) {
         return escapeKey(customKey);
       }
@@ -108,8 +119,8 @@ export function defineCachedHandler(
     }
 
     // Call handler
-    const rawValue = await handler(event);
-    const res = rawValue instanceof Response ? rawValue : new Response(String(rawValue));
+    const rawValue = await handler(event as E);
+    const res = await _toResponse(rawValue, event as E);
 
     // Stringified body
     // TODO: support binary responses
@@ -153,8 +164,8 @@ export function defineCachedHandler(
   return async (event) => {
     // Headers-only mode
     if (opts.headersOnly) {
-      if (handleCacheHeaders(event, { maxAge: opts.maxAge })) {
-        return new Response(null, { status: 304 });
+      if (_handleCacheHeaders(event, { maxAge: opts.maxAge })) {
+        return _createResponse(null, { status: 304 });
       }
       return handler(event);
     }
@@ -164,17 +175,17 @@ export function defineCachedHandler(
 
     // Check for cache headers
     if (
-      handleCacheHeaders(event, {
+      _handleCacheHeaders(event, {
         modifiedTime: new Date(response.headers["last-modified"] as string),
         etag: response.headers.etag as string,
         maxAge: opts.maxAge,
       })
     ) {
-      return new Response(null, { status: 304 });
+      return _createResponse(null, { status: 304 });
     }
 
     // Send Response
-    return new Response(response.body, {
+    return _createResponse(response.body ?? null, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -188,23 +199,17 @@ function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
 }
 
-interface CacheConditions {
-  modifiedTime?: Date;
-  maxAge?: number;
-  etag?: string;
-}
-
-function handleCacheHeaders(event: HTTPEvent, opts: CacheConditions): boolean {
+function _defaultHandleCacheHeaders(event: HTTPEvent, conditions: CacheConditions): boolean {
   // Check if-none-match
   const ifNoneMatch = event.req.headers.get("if-none-match");
-  if (ifNoneMatch && opts.etag && ifNoneMatch === opts.etag) {
+  if (ifNoneMatch && conditions.etag && ifNoneMatch === conditions.etag) {
     return true;
   }
 
   // Check if-modified-since
   const ifModifiedSince = event.req.headers.get("if-modified-since");
-  if (ifModifiedSince && opts.modifiedTime) {
-    if (new Date(ifModifiedSince) >= opts.modifiedTime) {
+  if (ifModifiedSince && conditions.modifiedTime) {
+    if (new Date(ifModifiedSince) >= conditions.modifiedTime) {
       return true;
     }
   }

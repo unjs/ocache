@@ -6,6 +6,7 @@ import {
   createMemoryStorage,
   setStorage,
   useStorage,
+  type HTTPEvent,
 } from "../src/index.ts";
 beforeEach(() => {
   setStorage(createMemoryStorage());
@@ -695,5 +696,109 @@ describe("defineCachedHandler", () => {
 
     const res = (await handler(makeEvent(path))) as Response;
     expect(res.headers.get("cache-control")).toBeNull();
+  });
+
+  it("uses custom toResponse hook", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => ({ message: "hello" }), {
+      maxAge: 10,
+      toResponse: (value) =>
+        new Response(JSON.stringify(value), {
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(await res.text()).toBe('{"message":"hello"}');
+  });
+
+  it("uses custom createResponse hook", async () => {
+    const path = uniquePath();
+    const createResponse = vi.fn(
+      (body: string | null, init: ResponseInit) => new Response(body, init),
+    );
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      createResponse,
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(await res.text()).toBe("ok");
+    expect(createResponse).toHaveBeenCalled();
+  });
+
+  it("uses custom createResponse for 304", async () => {
+    const path = uniquePath();
+    const createResponse = vi.fn(
+      (body: string | null, init: ResponseInit) => new Response(body, init),
+    );
+    const handler = defineCachedHandler(
+      () => new Response("body", { headers: { etag: '"test-etag"' } }),
+      { maxAge: 10, createResponse },
+    );
+
+    await handler(makeEvent(path));
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": '"test-etag"' } }),
+    )) as Response;
+    expect(res.status).toBe(304);
+    expect(createResponse).toHaveBeenCalledWith(null, { status: 304 });
+  });
+
+  it("uses custom handleCacheHeaders hook", async () => {
+    const path = uniquePath();
+    const handleCacheHeaders = vi.fn(() => true);
+    const handler = defineCachedHandler(() => new Response("body"), {
+      maxAge: 10,
+      headersOnly: true,
+      handleCacheHeaders,
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.status).toBe(304);
+    expect(handleCacheHeaders).toHaveBeenCalledWith(
+      expect.objectContaining({ req: expect.any(Request) }),
+      expect.objectContaining({ maxAge: 10 }),
+    );
+  });
+
+  it("custom handleCacheHeaders returning false continues normally", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("body", { headers: { etag: '"my-etag"' } }),
+      {
+        maxAge: 10,
+        handleCacheHeaders: () => false,
+      },
+    );
+
+    await handler(makeEvent(path));
+    // Even with matching etag, custom hook says "don't 304"
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": '"my-etag"' } }),
+    )) as Response;
+    expect(res.status).toBe(200);
+  });
+
+  it("works with generic event type", async () => {
+    interface CustomEvent extends HTTPEvent {
+      custom: string;
+    }
+    const path = uniquePath();
+    let receivedCustom: string | undefined;
+    const handler = defineCachedHandler<CustomEvent>(
+      (event) => {
+        receivedCustom = event.custom;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const event: CustomEvent = {
+      req: new Request(`http://localhost${path}`),
+      custom: "test-value",
+    };
+    await handler(event);
+    expect(receivedCustom).toBe("test-value");
   });
 });
