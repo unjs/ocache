@@ -48,7 +48,6 @@ src/
 ## Dependencies
 
 - `ohash` — hashing for cache keys and integrity
-- `ufo` — URL parsing (used in `http.ts` only)
 
 ## Dev Commands
 
