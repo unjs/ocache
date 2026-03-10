@@ -780,6 +780,16 @@ describe("defineCachedHandler", () => {
     expect(res.status).toBe(200);
   });
 
+  it("merges default options when partial opts are provided", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 60 });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    const cc = res.headers.get("cache-control")!;
+    expect(cc).toContain("s-maxage=60");
+    expect(cc).toContain("stale-while-revalidate");
+  });
+
   it("works with generic event type", async () => {
     interface CustomEvent extends HTTPEvent {
       custom: string;

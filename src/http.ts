@@ -32,8 +32,10 @@ function defaultCacheOptions() {
  */
 export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
+  opts: CachedEventHandlerOptions<E> = {},
 ): EventHandler<E> {
+  opts = { ...defaultCacheOptions(), ...opts };
+
   const variableHeaderNames = (opts.varies || [])
     .filter(Boolean)
     .map((h) => h.toLowerCase())
