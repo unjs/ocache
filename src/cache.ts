@@ -67,14 +67,15 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     }
 
     const ttl = (opts.maxAge ?? 0) * 1000;
-    if (ttl) {
+    if (ttl > 0) {
       entry.expires = Date.now() + ttl;
     }
 
     const expired =
       shouldInvalidateCache ||
       entry.integrity !== integrity ||
-      (ttl && Date.now() - (entry.mtime || 0) > ttl) ||
+      ttl === 0 ||
+      Date.now() - (entry.mtime || 0) > ttl ||
       validate(entry) === false;
 
     const _resolve = async () => {
@@ -108,7 +109,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         delete pending[key];
         if (validate(entry) !== false) {
           let setOpts: { ttl?: number } | undefined;
-          if (opts.maxAge && !opts.swr /* TODO: respect staleMaxAge */) {
+          if (opts.maxAge != null && opts.maxAge > 0 && !opts.swr /* TODO: respect staleMaxAge */) {
             setOpts = { ttl: opts.maxAge };
           }
           const promise = Promise.resolve(useStorage().set(cacheKey, entry, setOpts)).catch(
