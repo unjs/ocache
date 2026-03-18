@@ -112,6 +112,59 @@ setStorage(redisStorage);
 
 <!-- automd:docs4ts -->
 
+### `defineCachedFunction`
+
+```ts
+function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
+  fn: (...args: ArgsT) => T | Promise<T>,
+  opts: CacheOptions<T, ArgsT> =
+```
+
+Wraps a function with caching support including TTL, SWR, integrity checks, and request deduplication.
+
+**Parameters:**
+
+- **`fn`** — The function to cache.
+- **`opts`** — Cache configuration options.
+
+**Returns:** — A new async function that returns cached results when available.
+
+---
+
+### `cachedFunction`
+
+```ts
+const cachedFunction = defineCachedFunction;
+```
+
+Alias for [`defineCachedFunction`](#definecachedfunction).
+
+---
+
+### `defineCachedHandler`
+
+```ts
+function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
+): EventHandler<E>;
+```
+
+Wraps an HTTP event handler with response caching.
+
+Automatically generates cache keys from the URL path and variable headers,
+sets `cache-control`, `etag`, and `last-modified` headers, and handles
+`304 Not Modified` responses via conditional request headers.
+
+**Parameters:**
+
+- **`handler`** — The event handler to cache.
+- **`opts`** — Cache and HTTP-specific configuration options.
+
+**Returns:** — A new event handler that serves cached responses when available.
+
+---
+
 ### `createMemoryStorage`
 
 ```ts
@@ -139,30 +192,6 @@ function setStorage(storage: StorageInterface): void;
 ```
 
 Sets a custom storage implementation to be used by all cached functions.
-
----
-
-### `defineCachedHandler`
-
-```ts
-function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
-  handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
-): EventHandler<E>;
-```
-
-Wraps an HTTP event handler with response caching.
-
-Automatically generates cache keys from the URL path and variable headers,
-sets `cache-control`, `etag`, and `last-modified` headers, and handles
-`304 Not Modified` responses via conditional request headers.
-
-**Parameters:**
-
-- **`handler`** — The event handler to cache.
-- **`opts`** — Cache and HTTP-specific configuration options.
-
-**Returns:** — A new event handler that serves cached responses when available.
 
 ---
 
@@ -250,35 +279,6 @@ interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omi
 Options for configuring cached HTTP handlers created by `defineCachedHandler`.
 
 Extends [`CacheOptions`](#cacheoptions) (without `transform` and `validate`, which are set internally).
-
----
-
-### `defineCachedFunction`
-
-```ts
-function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
-  fn: (...args: ArgsT) => T | Promise<T>,
-  opts: CacheOptions<T, ArgsT> =
-```
-
-Wraps a function with caching support including TTL, SWR, integrity checks, and request deduplication.
-
-**Parameters:**
-
-- **`fn`** — The function to cache.
-- **`opts`** — Cache configuration options.
-
-**Returns:** — A new async function that returns cached results when available.
-
----
-
-### `cachedFunction`
-
-```ts
-const cachedFunction = defineCachedFunction;
-```
-
-Alias for [`defineCachedFunction`](#definecachedfunction).
 
 <!-- /automd-->
 
