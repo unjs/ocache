@@ -207,13 +207,10 @@ describe("cachedFunction", () => {
 
   it("no maxAge caches indefinitely", async () => {
     let callCount = 0;
-    const fn = defineCachedFunction(
-      () => {
-        callCount++;
-        return `v${callCount}`;
-      },
-      {},
-    );
+    const fn = defineCachedFunction(() => {
+      callCount++;
+      return `v${callCount}`;
+    }, {});
 
     expect(await fn()).toBe("v1");
     expect(await fn()).toBe("v1");

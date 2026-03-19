@@ -165,6 +165,36 @@ sets `cache-control`, `etag`, and `last-modified` headers, and handles
 
 ---
 
+### `createMemoryStorage`
+
+```ts
+function createMemoryStorage(): StorageInterface;
+```
+
+Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
+
+---
+
+### `useStorage`
+
+```ts
+function useStorage(): StorageInterface;
+```
+
+Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
+
+---
+
+### `setStorage`
+
+```ts
+function setStorage(storage: StorageInterface): void;
+```
+
+Sets a custom storage implementation to be used by all cached functions.
+
+---
+
 ### `ServerRequest`
 
 ```ts
@@ -249,36 +279,6 @@ interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omi
 Options for configuring cached HTTP handlers created by `defineCachedHandler`.
 
 Extends [`CacheOptions`](#cacheoptions) (without `transform` and `validate`, which are set internally).
-
----
-
-### `createMemoryStorage`
-
-```ts
-function createMemoryStorage(): StorageInterface;
-```
-
-Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
-
----
-
-### `useStorage`
-
-```ts
-function useStorage(): StorageInterface;
-```
-
-Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
-
----
-
-### `setStorage`
-
-```ts
-function setStorage(storage: StorageInterface): void;
-```
-
-Sets a custom storage implementation to be used by all cached functions.
 
 <!-- /automd-->
 

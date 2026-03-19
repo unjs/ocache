@@ -74,7 +74,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const expired =
       shouldInvalidateCache ||
       entry.integrity !== integrity ||
-      (opts.maxAge === 0) ||
+      opts.maxAge === 0 ||
       (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
       validate(entry) === false;
 
