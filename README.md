@@ -121,6 +121,29 @@ setStorage(redisStorage);
 
 <!-- automd:docs4ts -->
 
+### `defineCachedHandler`
+
+```ts
+function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> =
+```
+
+Wraps an HTTP event handler with response caching.
+
+Automatically generates cache keys from the URL path and variable headers,
+sets `cache-control`, `etag`, and `last-modified` headers, and handles
+`304 Not Modified` responses via conditional request headers.
+
+**Parameters:**
+
+- **`handler`** — The event handler to cache.
+- **`opts`** — Cache and HTTP-specific configuration options.
+
+**Returns:** — A new event handler that serves cached responses when available.
+
+---
+
 ### `defineCachedFunction`
 
 ```ts
@@ -182,29 +205,6 @@ const key = await resolveCacheKey({
 });
 await useStorage().set(key, null); // invalidate
 ```
-
----
-
-### `defineCachedHandler`
-
-```ts
-function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
-  handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> =
-```
-
-Wraps an HTTP event handler with response caching.
-
-Automatically generates cache keys from the URL path and variable headers,
-sets `cache-control`, `etag`, and `last-modified` headers, and handles
-`304 Not Modified` responses via conditional request headers.
-
-**Parameters:**
-
-- **`handler`** — The event handler to cache.
-- **`opts`** — Cache and HTTP-specific configuration options.
-
-**Returns:** — A new event handler that serves cached responses when available.
 
 ---
 
