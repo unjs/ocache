@@ -130,6 +130,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         // Make sure entries that reject get removed.
         if (!isPending) {
           delete pending[key];
+          // Evict stale entry from storage so SWR doesn't keep serving it
+          _evictFromStorage(key, bases, group, name);
         }
         // Re-throw error to make sure the caller knows the task failed.
         throw error;
@@ -168,6 +170,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           if ((event?.req as any)?.waitUntil) {
             (event!.req as any).waitUntil(promise);
           }
+        } else {
+          // Revalidation produced an invalid result — evict stale entry from storage
+          _evictFromStorage(key, bases, group, name);
         }
       }
     };
@@ -307,6 +312,12 @@ function _buildCacheKey(
 function _normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {
   if (Array.isArray(base)) return base as [string, ...string[]];
   return [base ?? "/cache"];
+}
+
+function _evictFromStorage(key: string, bases: string[], group: string, name: string) {
+  for (const b of bases) {
+    useStorage().set(_buildCacheKey(key, { group, name }, b), null);
+  }
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
