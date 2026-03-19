@@ -18,6 +18,8 @@ export type CachedFunction<T, ArgsT extends unknown[]> = {
   (...args: ArgsT): Promise<T>;
   /** Resolves all storage keys (one per base prefix) for the given arguments. */
   resolveKeys: (...args: ArgsT) => Promise<string[]>;
+  /** Invalidates (removes) cached entries for the given arguments across all base prefixes. */
+  invalidate: (...args: ArgsT) => Promise<void>;
 };
 
 /**
@@ -209,6 +211,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   };
 
   cachedFn.resolveKeys = (...args: ArgsT) => resolveCacheKeys({ options: opts, args });
+  cachedFn.invalidate = (...args: ArgsT) => invalidateCache({ options: opts, args });
 
   return cachedFn;
 }
@@ -252,6 +255,33 @@ export async function resolveCacheKeys<ArgsT extends unknown[] = any[]>(
   const args = input.args ?? ([] as unknown as ArgsT);
   const key = await (opts.getKey || getKey)(...args);
   return _normalizeBases(opts.base).map((base) => _buildCacheKey(key, opts, base));
+}
+
+/**
+ * Invalidates (removes) cached entries for given arguments and cache options across all base prefixes.
+ *
+ * Uses the same key derivation as `defineCachedFunction` / `resolveCacheKeys`.
+ *
+ * @param input - Object with `options` (cache options) and optional `args` (function arguments).
+ *
+ * @example
+ * ```ts
+ * // Invalidate a specific cached entry
+ * await invalidateCache({
+ *   options: { name: "fetchUser", getKey: (id: string) => id },
+ *   args: ["user-123"],
+ * });
+ * ```
+ */
+export async function invalidateCache<ArgsT extends unknown[] = any[]>(
+  input: {
+    options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey">;
+    args?: ArgsT;
+  } = {},
+): Promise<void> {
+  const keys = await resolveCacheKeys(input);
+  const storage = useStorage();
+  await Promise.all(keys.map((key) => storage.set(key, null)));
 }
 
 // --- Internal helpers ---

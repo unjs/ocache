@@ -8,7 +8,7 @@ Issues and PRs from [nitrojs/nitro](https://github.com/nitrojs/nitro) that ocach
 
 ### Key takeaways for ocache:
 
-- Cache invalidation is the #1 pain point — users need a first-class API for it
+- ~~Cache invalidation is the #1 pain point — users need a first-class API for it~~ ✅ Added `invalidateCache()` and `.invalidate()` method
 - SWR logic is buggy — staleMaxAge isn't respected properly, empty/404 responses get stuck
 - Expired entries leak memory — they're never cleaned up
 - Binary/streaming responses aren't handled well
@@ -16,13 +16,13 @@ Issues and PRs from [nitrojs/nitro](https://github.com/nitrojs/nitro) that ocach
 - Query param filtering for cache keys is a common request (allowQuery)
 - Server-only caching (no Cache-Control headers sent to client) is wanted
 
-### Cache Invalidation (most requested)
+### Cache Invalidation (most requested) — ✅ Resolved
 
-- [#2218](https://github.com/nitrojs/nitro/issues/2218) — No API to invalidate cached function entries
-- [#3935](https://github.com/nitrojs/nitro/issues/3935) — Need easy cache invalidation helper for `defineCachedFunction`/`defineCachedHandler`
-- [#3969](https://github.com/nitrojs/nitro/issues/3969) — Programmatic cache invalidation at runtime
-- [#2738](https://github.com/nitrojs/nitro/issues/2738) — Clearing cache from handlers doesn't work as intended
-- [#2611](https://github.com/nitrojs/nitro/pull/2611) — PR: remove cached value when revalidation errors
+- [#2218](https://github.com/nitrojs/nitro/issues/2218) — ✅ No API to invalidate cached function entries → `fn.invalidate()` + `invalidateCache()`
+- [#3935](https://github.com/nitrojs/nitro/issues/3935) — ✅ Need easy cache invalidation helper → `.invalidate(...args)` on cached functions
+- [#3969](https://github.com/nitrojs/nitro/issues/3969) — ✅ Programmatic cache invalidation at runtime → `invalidateCache()` standalone helper
+- [#2738](https://github.com/nitrojs/nitro/issues/2738) — Clearing cache from handlers doesn't work as intended (browser-side caching — out of scope)
+- [#2611](https://github.com/nitrojs/nitro/pull/2611) — PR: remove cached value when revalidation errors (separate concern)
 
 ### SWR (Stale-While-Revalidate) Bugs
 
