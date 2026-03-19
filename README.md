@@ -88,6 +88,37 @@ const handler = defineCachedHandler(myHandler, {
 });
 ```
 
+### Cache Invalidation
+
+Every cached function has a `.resolveKey()` method that returns the exact storage key for given arguments — useful for cache invalidation:
+
+```ts
+import { defineCachedFunction, useStorage } from "ocache";
+
+const fetchUser = defineCachedFunction(async (id: string) => {
+  return db.users.find(id);
+}, {
+  name: "fetchUser",
+  maxAge: 60,
+  getKey: (id: string) => id,
+});
+
+// Resolve the storage key for a specific call
+const key = await fetchUser.resolveKey("user-123");
+await useStorage().set(key, null); // invalidate
+```
+
+You can also use the standalone `resolveCacheKey` utility with the same options:
+
+```ts
+import { resolveCacheKey } from "ocache";
+
+const key = await resolveCacheKey({
+  options: { name: "fetchUser", getKey: (id: string) => id },
+  args: ["user-123"],
+});
+```
+
 ### Custom Storage
 
 By default, ocache uses an in-memory `Map`-based storage. You can provide a custom storage implementation:
@@ -161,6 +192,28 @@ sets `cache-control`, `etag`, and `last-modified` headers, and handles
 - **`opts`** — Cache and HTTP-specific configuration options.
 
 **Returns:** — A new event handler that serves cached responses when available.
+
+---
+
+### `resolveCacheKey`
+
+```ts
+function resolveCacheKey<ArgsT extends unknown[] = any[]>(input: {
+  options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey">;
+  args?: ArgsT;
+}): Promise<string>;
+```
+
+Resolves the full storage key for given arguments and cache options.
+
+Uses the same key derivation as `defineCachedFunction` internally — when `getKey` is provided it is called with the args, otherwise args are hashed with `ohash`.
+
+**Parameters:**
+
+- **`input.options`** — Same cache options (`base`, `group`, `name`, `getKey`) used when defining the cached function.
+- **`input.args`** — The arguments you would pass to the cached function.
+
+**Returns:** — The full storage key string.
 
 ---
 

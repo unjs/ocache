@@ -14,17 +14,23 @@ function defaultCacheOptions() {
 
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T };
 
+export type CachedFunction<T, ArgsT extends unknown[]> = {
+  (...args: ArgsT): Promise<T>;
+  /** Resolves the full storage key for the given arguments. */
+  resolveKey: (...args: ArgsT) => Promise<string>;
+};
+
 /**
  * Wraps a function with caching support including TTL, SWR, integrity checks, and request deduplication.
  *
  * @param fn - The function to cache.
  * @param opts - Cache configuration options.
- * @returns A new async function that returns cached results when available.
+ * @returns A cached function with a `.resolveKey(...args)` method for cache key resolution.
  */
 export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   fn: (...args: ArgsT) => T | Promise<T>,
   opts: CacheOptions<T, ArgsT> = {},
-): (...args: ArgsT) => Promise<T> {
+): CachedFunction<T, ArgsT> {
   opts = { ...defaultCacheOptions(), ...opts };
 
   const pending: { [key: string]: Promise<T> } = {};
@@ -49,10 +55,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     event?: HTTPEvent,
   ): Promise<ResolvedCacheEntry<T>> {
     // Use extension for key to avoid conflicting with parent namespace (foo/bar and foo/bar/baz)
-    const cacheKey = [opts.base, group, name, key + ".json"]
-      .filter(Boolean)
-      .join(":")
-      .replace(/:\/$/, ":index");
+    const cacheKey = _buildCacheKey(key, { base: opts.base, group, name });
 
     let entry: CacheEntry<T> = {} as CacheEntry<T>;
     try {
@@ -172,7 +175,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     return _resolvePromise.then(() => entry) as Promise<ResolvedCacheEntry<T>>;
   }
 
-  return async (...args) => {
+  const cachedFn = async (...args: ArgsT) => {
     const shouldBypassCache = await opts.shouldBypassCache?.(...args);
     if (shouldBypassCache) {
       return fn(...args);
@@ -191,10 +194,50 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     }
     return value;
   };
+
+  cachedFn.resolveKey = (...args: ArgsT) => resolveCacheKey({ options: opts, args });
+
+  return cachedFn;
 }
 
 /** Alias for {@link defineCachedFunction}. */
 export const cachedFunction = defineCachedFunction;
+
+// --- Public helpers ---
+
+/**
+ * Resolves the full cache storage key for given arguments and cache options.
+ *
+ * Uses the same key derivation as `defineCachedFunction` internally:
+ * - When `opts.getKey` is provided, it is called with `args` to produce the key segment.
+ * - Otherwise, `args` are hashed with `ohash` (same default as `defineCachedFunction`).
+ *
+ * Pass the same `getKey`, `name`, `group`, and `base` options you use in
+ * `defineCachedFunction` / `defineCachedHandler` to get the exact storage key.
+ *
+ * @param input - Object with `options` (cache options) and optional `args` (function arguments).
+ * @returns The full storage key string.
+ *
+ * @example
+ * ```ts
+ * const key = await resolveCacheKey({
+ *   options: { name: "fetchUser", getKey: (id: string) => id },
+ *   args: ["user-123"],
+ * });
+ * await useStorage().set(key, null); // invalidate
+ * ```
+ */
+export async function resolveCacheKey<ArgsT extends unknown[] = any[]>(
+  input: {
+    options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey">;
+    args?: ArgsT;
+  } = {},
+): Promise<string> {
+  const opts = input.options ?? {};
+  const args = input.args ?? ([] as unknown as ArgsT);
+  const key = await (opts.getKey || getKey)(...args);
+  return _buildCacheKey(key, opts);
+}
 
 // --- Internal helpers ---
 
@@ -204,4 +247,17 @@ function isHTTPEvent(input: unknown): input is HTTPEvent {
 
 function getKey(...args: unknown[]) {
   return args.length > 0 ? hash(args) : "";
+}
+
+function _buildCacheKey(
+  key: string,
+  opts: Pick<CacheOptions, "base" | "group" | "name">,
+): string {
+  const base = opts.base ?? "/cache";
+  const group = opts.group || "ocache/functions";
+  const name = opts.name || "_";
+  return [base, group, name, key + ".json"]
+    .filter(Boolean)
+    .join(":")
+    .replace(/:\/$/, ":index");
 }
