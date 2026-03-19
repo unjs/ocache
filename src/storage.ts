@@ -19,6 +19,10 @@ export function createMemoryStorage(): StorageInterface {
       return entry.value as any;
     },
     set(key, value, opts) {
+      if (value === null || value === undefined) {
+        map.delete(key);
+        return;
+      }
       map.set(key, {
         value,
         expires: opts?.ttl ? Date.now() + opts.ttl * 1000 : undefined,

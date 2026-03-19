@@ -118,6 +118,11 @@ const redisStorage: StorageInterface = {
     return JSON.parse(await redis.get(key));
   },
   set: async (key, value, opts) => {
+    // Setting null/undefined deletes the entry (used for cache invalidation)
+    if (value === null || value === undefined) {
+      await redis.del(key);
+      return;
+    }
     await redis.set(key, JSON.stringify(value), opts?.ttl ? { EX: opts.ttl } : undefined);
   },
 };

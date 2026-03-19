@@ -518,6 +518,28 @@ describe("storage", () => {
     setStorage(custom);
     expect(useStorage()).toBe(custom);
   });
+
+  it("set with null deletes the entry", () => {
+    const storage = createMemoryStorage();
+    storage.set("key", "hello");
+    expect(storage.get("key")).toBe("hello");
+    storage.set("key", null);
+    expect(storage.get("key")).toBeNull();
+  });
+
+  it("set with undefined deletes the entry", () => {
+    const storage = createMemoryStorage();
+    storage.set("key", "hello");
+    expect(storage.get("key")).toBe("hello");
+    storage.set("key", undefined);
+    expect(storage.get("key")).toBeNull();
+  });
+
+  it("set null on nonexistent key is a no-op", () => {
+    const storage = createMemoryStorage();
+    storage.set("nonexistent", null);
+    expect(storage.get("nonexistent")).toBeNull();
+  });
 });
 
 describe("defineCachedHandler", () => {

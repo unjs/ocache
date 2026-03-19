@@ -37,6 +37,7 @@ src/
 ### Storage (`storage.ts`)
 
 - `StorageInterface` — minimal `get`/`set` with optional TTL
+- Setting a nullish value (`null`/`undefined`) via `set` deletes the entry instead of storing dead weight
 - `createMemoryStorage()` — in-memory Map-based implementation with TTL expiry
 - `useStorage()` / `setStorage()` — global singleton, lazy-inits to memory storage
 
