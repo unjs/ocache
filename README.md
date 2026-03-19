@@ -92,14 +92,11 @@ Cached functions have a `.resolveKey()` method that returns the exact storage ke
 ```ts
 import { defineCachedFunction, useStorage } from "ocache";
 
-const getUser = defineCachedFunction(
-  async (id: string) => db.users.find(id),
-  {
-    name: "getUser",
-    maxAge: 60,
-    getKey: (id: string) => id,
-  },
-);
+const getUser = defineCachedFunction(async (id: string) => db.users.find(id), {
+  name: "getUser",
+  maxAge: 60,
+  getKey: (id: string) => id,
+});
 
 const user = await getUser("user-123");
 
@@ -131,29 +128,6 @@ setStorage(redisStorage);
 ## API
 
 <!-- automd:docs4ts -->
-
-### `defineCachedHandler`
-
-```ts
-function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
-  handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> =
-```
-
-Wraps an HTTP event handler with response caching.
-
-Automatically generates cache keys from the URL path and variable headers,
-sets `cache-control`, `etag`, and `last-modified` headers, and handles
-`304 Not Modified` responses via conditional request headers.
-
-**Parameters:**
-
-- **`handler`** — The event handler to cache.
-- **`opts`** — Cache and HTTP-specific configuration options.
-
-**Returns:** — A new event handler that serves cached responses when available.
-
----
 
 ### `defineCachedFunction`
 
@@ -246,6 +220,29 @@ function setStorage(storage: StorageInterface): void;
 ```
 
 Sets a custom storage implementation to be used by all cached functions.
+
+---
+
+### `defineCachedHandler`
+
+```ts
+function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> =
+```
+
+Wraps an HTTP event handler with response caching.
+
+Automatically generates cache keys from the URL path and variable headers,
+sets `cache-control`, `etag`, and `last-modified` headers, and handles
+`304 Not Modified` responses via conditional request headers.
+
+**Parameters:**
+
+- **`handler`** — The event handler to cache.
+- **`opts`** — Cache and HTTP-specific configuration options.
+
+**Returns:** — A new event handler that serves cached responses when available.
 
 ---
 
