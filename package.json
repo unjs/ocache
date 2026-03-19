@@ -27,17 +27,17 @@
     "ohash": "^2.0.11"
   },
   "devDependencies": {
-    "@types/node": "latest",
-    "@typescript/native-preview": "latest",
-    "@vitest/coverage-v8": "latest",
-    "automd": "latest",
-    "changelogen": "latest",
+    "@types/node": "^25.5.0",
+    "@typescript/native-preview": "^7.0.0-dev.20260319.1",
+    "@vitest/coverage-v8": "^4.1.0",
+    "automd": "^0.4.3",
+    "changelogen": "^0.6.2",
     "docs4ts": "^0.0.3",
-    "obuild": "latest",
-    "oxfmt": "latest",
-    "oxlint": "latest",
-    "typescript": "latest",
-    "vitest": "latest"
+    "obuild": "^0.4.32",
+    "oxfmt": "^0.41.0",
+    "oxlint": "^1.56.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
   },
-  "packageManager": "pnpm@10.29.3"
+  "packageManager": "pnpm@10.32.1"
 }
