@@ -132,6 +132,59 @@ setStorage(redisStorage);
 
 <!-- automd:docs4ts -->
 
+### `defineCachedHandler`
+
+```ts
+function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> =
+```
+
+Wraps an HTTP event handler with response caching.
+
+Automatically generates cache keys from the URL path and variable headers,
+sets `cache-control`, `etag`, and `last-modified` headers, and handles
+`304 Not Modified` responses via conditional request headers.
+
+**Parameters:**
+
+- **`handler`** — The event handler to cache.
+- **`opts`** — Cache and HTTP-specific configuration options.
+
+**Returns:** — A new event handler that serves cached responses when available.
+
+---
+
+### `createMemoryStorage`
+
+```ts
+function createMemoryStorage(): StorageInterface
+```
+
+Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
+
+---
+
+### `useStorage`
+
+```ts
+function useStorage(): StorageInterface
+```
+
+Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
+
+---
+
+### `setStorage`
+
+```ts
+function setStorage(storage: StorageInterface): void
+```
+
+Sets a custom storage implementation to be used by all cached functions.
+
+---
+
 ### `defineCachedFunction`
 
 ```ts
@@ -193,59 +246,6 @@ const key = await resolveCacheKey({
 });
 await useStorage().set(key, null); // invalidate
 ```
-
----
-
-### `defineCachedHandler`
-
-```ts
-function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
-  handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> =
-```
-
-Wraps an HTTP event handler with response caching.
-
-Automatically generates cache keys from the URL path and variable headers,
-sets `cache-control`, `etag`, and `last-modified` headers, and handles
-`304 Not Modified` responses via conditional request headers.
-
-**Parameters:**
-
-- **`handler`** — The event handler to cache.
-- **`opts`** — Cache and HTTP-specific configuration options.
-
-**Returns:** — A new event handler that serves cached responses when available.
-
----
-
-### `createMemoryStorage`
-
-```ts
-function createMemoryStorage(): StorageInterface
-```
-
-Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
-
----
-
-### `useStorage`
-
-```ts
-function useStorage(): StorageInterface
-```
-
-Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
-
----
-
-### `setStorage`
-
-```ts
-function setStorage(storage: StorageInterface): void
-```
-
-Sets a custom storage implementation to be used by all cached functions.
 
 ---
 
