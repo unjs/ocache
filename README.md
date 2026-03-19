@@ -72,9 +72,6 @@ const handler = defineCachedHandler(
     varies: ["accept-language"], // Vary cache by these headers
   },
 );
-
-// Use with any server that provides Request/Response
-// e.g., Bun, Deno, Cloudflare Workers, srvx, etc.
 ```
 
 #### Headers-only Mode
@@ -90,11 +87,25 @@ const handler = defineCachedHandler(myHandler, {
 
 ### Cache Invalidation
 
-Use `.resolveKey()` on any cached function to get the exact storage key for invalidation:
+Cached functions have a `.resolveKey()` method that returns the exact storage key for given arguments, making invalidation straightforward:
 
 ```ts
-const key = await fetchUser.resolveKey("user-123");
-await useStorage().set(key, null); // invalidate
+import { defineCachedFunction, useStorage } from "ocache";
+
+const getUser = defineCachedFunction(
+  async (id: string) => db.users.find(id),
+  {
+    name: "getUser",
+    maxAge: 60,
+    getKey: (id: string) => id,
+  },
+);
+
+const user = await getUser("user-123");
+
+// When you need to invalidate:
+const key = await getUser.resolveKey("user-123");
+await useStorage().set(key, null);
 ```
 
 ### Custom Storage
