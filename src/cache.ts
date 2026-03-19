@@ -56,8 +56,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     let entry: CacheEntry<T> = {} as CacheEntry<T>;
     try {
-      entry =
-        ((await useStorage().get(cacheKey)) as CacheEntry<T>) || {};
+      entry = ((await useStorage().get(cacheKey)) as CacheEntry<T>) || {};
     } catch (error) {
       _onError("[cache] Cache read error.", error);
     }
