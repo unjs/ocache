@@ -161,8 +161,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           // Multi-tier write: only write to tiers up to the one that matched.
           // If no tier had a hit (hitIndex === -1), write to all tiers.
           // If tier N matched, write to tiers 0..N (promote upward + refresh hit tier).
-          const writeBases =
-            hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
+          const writeBases = hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
           const promise = (async () => {
             try {
               await Promise.all(
