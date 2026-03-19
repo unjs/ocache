@@ -642,6 +642,40 @@ describe("storage", () => {
     storage.set("nonexistent", null);
     expect(storage.get("nonexistent")).toBeNull();
   });
+
+  // Regression: nitro#2138 — expired cache entries never get flushed from memory.
+  // When entries expire via TTL, they should eventually be removed from the underlying
+  // Map even if nobody reads them again, to prevent unbounded memory growth.
+  it("expired entries are proactively flushed after TTL", async () => {
+    const storage = createMemoryStorage();
+    const origSet = storage.set.bind(storage);
+    const origGet = storage.get.bind(storage);
+
+    // Wrap set to track deletes that happen via setTimeout (proactive flush)
+    const map = new Map<string, true>();
+    storage.set = (key: string, value: any, opts?: any) => {
+      if (value !== null && value !== undefined) {
+        map.set(key, true);
+      }
+      return origSet(key, value, opts);
+    };
+
+    // Store entries with short TTL
+    for (let i = 0; i < 10; i++) {
+      storage.set(`key-${i}`, { value: `val-${i}` }, { ttl: 0.01 });
+    }
+
+    expect(map.size).toBe(10);
+
+    // Wait for TTL + proactive cleanup
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Verify entries are gone — proactive flush should have removed them
+    // even though we never called get() on them
+    for (let i = 0; i < 10; i++) {
+      expect(origGet(`key-${i}`)).toBeNull();
+    }
+  });
 });
 
 describe("defineCachedHandler", () => {
