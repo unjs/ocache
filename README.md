@@ -90,36 +90,11 @@ const handler = defineCachedHandler(myHandler, {
 
 ### Cache Invalidation
 
-Every cached function has a `.resolveKey()` method that returns the exact storage key for given arguments — useful for cache invalidation:
+Use `.resolveKey()` on any cached function to get the exact storage key for invalidation:
 
 ```ts
-import { defineCachedFunction, useStorage } from "ocache";
-
-const fetchUser = defineCachedFunction(
-  async (id: string) => {
-    return db.users.find(id);
-  },
-  {
-    name: "fetchUser",
-    maxAge: 60,
-    getKey: (id: string) => id,
-  },
-);
-
-// Resolve the storage key for a specific call
 const key = await fetchUser.resolveKey("user-123");
 await useStorage().set(key, null); // invalidate
-```
-
-You can also use the standalone `resolveCacheKey` utility with the same options:
-
-```ts
-import { resolveCacheKey } from "ocache";
-
-const key = await resolveCacheKey({
-  options: { name: "fetchUser", getKey: (id: string) => id },
-  args: ["user-123"],
-});
 ```
 
 ### Custom Storage
