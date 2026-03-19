@@ -4,6 +4,7 @@ import {
   defineCachedFunction,
   defineCachedHandler,
   resolveCacheKeys,
+  invalidateCache,
   createMemoryStorage,
   setStorage,
   useStorage,
@@ -1163,6 +1164,91 @@ describe("resolveCacheKeys", () => {
       args: ["k"],
     });
     expect(keys).toEqual(["/tier1:functions:myFn:k.json", "/tier2:functions:myFn:k.json"]);
+  });
+});
+
+describe("invalidateCache", () => {
+  it("removes cached entry so next call re-invokes the function", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return `v${callCount}`;
+      },
+      { maxAge: 60, name: "myFn", getKey: () => "k", swr: false },
+    );
+
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    await fn.invalidate();
+
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("invalidates with specific args", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      (id: string) => {
+        callCount++;
+        return `${id}-v${callCount}`;
+      },
+      { maxAge: 60, name: "byId", getKey: (id: string) => id, swr: false },
+    );
+
+    expect(await fn("a")).toBe("a-v1");
+    expect(await fn("b")).toBe("b-v2");
+
+    // Invalidate only "a"
+    await fn.invalidate("a");
+
+    expect(await fn("a")).toBe("a-v3"); // re-invoked
+    expect(await fn("b")).toBe("b-v2"); // still cached
+    expect(callCount).toBe(3);
+  });
+
+  it("invalidates across all base prefixes (multi-tier)", async () => {
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 60,
+      base: ["/tier1", "/tier2"],
+      name: "myFn",
+      getKey: () => "k",
+    });
+
+    await fn();
+
+    const storage = useStorage();
+    expect(await storage.get("/tier1:functions:myFn:k.json")).not.toBeNull();
+    expect(await storage.get("/tier2:functions:myFn:k.json")).not.toBeNull();
+
+    await fn.invalidate();
+
+    expect(await storage.get("/tier1:functions:myFn:k.json")).toBeNull();
+    expect(await storage.get("/tier2:functions:myFn:k.json")).toBeNull();
+  });
+
+  it("standalone invalidateCache works with same options", async () => {
+    let callCount = 0;
+    const opts = { maxAge: 60, name: "myFn", getKey: () => "k", swr: false } as const;
+    const fn = defineCachedFunction(() => {
+      callCount++;
+      return `v${callCount}`;
+    }, opts);
+
+    expect(await fn()).toBe("v1");
+
+    await invalidateCache({ options: opts });
+
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("invalidating non-existent key is a no-op", async () => {
+    // Should not throw
+    await invalidateCache({
+      options: { name: "nonexistent", getKey: () => "nope" },
+    });
   });
 });
 

@@ -88,10 +88,10 @@ const handler = defineCachedHandler(myHandler, {
 
 ### Cache Invalidation
 
-Cached functions have a `.resolveKeys()` method that returns all storage keys (one per base prefix) for given arguments, making invalidation straightforward:
+Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:
 
 ```ts
-import { defineCachedFunction, useStorage } from "ocache";
+import { defineCachedFunction } from "ocache";
 
 const getUser = defineCachedFunction(async (id: string) => db.users.find(id), {
   name: "getUser",
@@ -101,11 +101,29 @@ const getUser = defineCachedFunction(async (id: string) => db.users.find(id), {
 
 const user = await getUser("user-123");
 
-// When you need to invalidate:
+// Invalidate a specific entry
+await getUser.invalidate("user-123");
+
+// Next call will re-invoke the function
+const freshUser = await getUser("user-123");
+```
+
+You can also use the standalone `invalidateCache()` when you don't have a reference to the cached function — just pass the same options:
+
+```ts
+import { invalidateCache } from "ocache";
+
+await invalidateCache({
+  options: { name: "getUser", getKey: (id: string) => id },
+  args: ["user-123"],
+});
+```
+
+For advanced use cases, `.resolveKeys()` returns the raw storage keys:
+
+```ts
 const keys = await getUser.resolveKeys("user-123");
-for (const key of keys) {
-  await useStorage().set(key, null);
-}
+// ["/cache:functions:getUser:user-123.json"]
 ```
 
 ### Multi-tier Caching
@@ -225,6 +243,33 @@ type EventHandler<E extends HTTPEvent = HTTPEvent> = (
 ```
 
 Handler function that receives an [`HTTPEvent`](#httpevent) and returns a response value.
+
+---
+
+### `invalidateCache`
+
+```ts
+async function invalidateCache<ArgsT extends unknown[] = any[]>(
+  input:
+```
+
+Invalidates (removes) cached entries for given arguments and cache options across all base prefixes.
+
+Uses the same key derivation as `defineCachedFunction` / `resolveCacheKeys`.
+
+**Parameters:**
+
+- **`input`** — Object with `options` (cache options) and optional `args` (function arguments).
+
+**Example:**
+
+```ts
+// Invalidate a specific cached entry
+await invalidateCache({
+  options: { name: "fetchUser", getKey: (id: string) => id },
+  args: ["user-123"],
+});
+```
 
 ---
 

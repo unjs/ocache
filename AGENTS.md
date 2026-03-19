@@ -8,17 +8,22 @@ Standalone caching utilities extracted from [nitro](https://github.com/nitrojs/n
 src/
 ├── index.ts        # Public exports (re-exports from all modules)
 ├── types.ts        # All type definitions (HTTPEvent, CacheEntry, CacheOptions, etc.)
-├── cache.ts        # Core: defineCachedFunction, cachedFunction
+├── cache.ts        # Core: defineCachedFunction, cachedFunction, invalidateCache, resolveCacheKeys
 ├── http.ts         # HTTP layer: defineCachedHandler (depends on cache.ts)
 └── storage.ts      # Storage interface + built-in memory storage
 ```
 
-## Architecture
+## Docs
+
+Never touch contents inside `<!-- automd -->` in README.md. They are auto generated (use `pnpm fmt` to update).
 
 ### Core caching (`cache.ts`)
 
 - `defineCachedFunction(fn, opts)` — wraps any function with caching (SWR, TTL, integrity checks, deduplication of in-flight requests)
 - `cachedFunction(fn, opts)` — alias for `defineCachedFunction`
+- Returned cached function has `.resolveKeys(...args)` and `.invalidate(...args)` methods
+- `resolveCacheKeys({ options, args })` — standalone helper to resolve storage keys
+- `invalidateCache({ options, args })` — standalone helper to remove cached entries across all base prefixes
 - Uses `StorageInterface` via `useStorage()` for persistence
 - Supports `waitUntil` on `event.req` (srvx/Cloudflare ServerRequest pattern) for background cache writes
 
