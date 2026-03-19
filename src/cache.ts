@@ -249,15 +249,9 @@ function getKey(...args: unknown[]) {
   return args.length > 0 ? hash(args) : "";
 }
 
-function _buildCacheKey(
-  key: string,
-  opts: Pick<CacheOptions, "base" | "group" | "name">,
-): string {
+function _buildCacheKey(key: string, opts: Pick<CacheOptions, "base" | "group" | "name">): string {
   const base = opts.base ?? "/cache";
   const group = opts.group || "ocache/functions";
   const name = opts.name || "_";
-  return [base, group, name, key + ".json"]
-    .filter(Boolean)
-    .join(":")
-    .replace(/:\/$/, ":index");
+  return [base, group, name, key + ".json"].filter(Boolean).join(":").replace(/:\/$/, ":index");
 }

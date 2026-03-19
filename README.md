@@ -95,13 +95,16 @@ Every cached function has a `.resolveKey()` method that returns the exact storag
 ```ts
 import { defineCachedFunction, useStorage } from "ocache";
 
-const fetchUser = defineCachedFunction(async (id: string) => {
-  return db.users.find(id);
-}, {
-  name: "fetchUser",
-  maxAge: 60,
-  getKey: (id: string) => id,
-});
+const fetchUser = defineCachedFunction(
+  async (id: string) => {
+    return db.users.find(id);
+  },
+  {
+    name: "fetchUser",
+    maxAge: 60,
+    getKey: (id: string) => id,
+  },
+);
 
 // Resolve the storage key for a specific call
 const key = await fetchUser.resolveKey("user-123");
@@ -158,7 +161,7 @@ Wraps a function with caching support including TTL, SWR, integrity checks, and 
 - **`fn`** — The function to cache.
 - **`opts`** — Cache configuration options.
 
-**Returns:** — A new async function that returns cached results when available.
+**Returns:** — A cached function with a `.resolveKey(...args)` method for cache key resolution.
 
 ---
 
@@ -169,6 +172,41 @@ const cachedFunction = defineCachedFunction;
 ```
 
 Alias for [`defineCachedFunction`](#definecachedfunction).
+
+---
+
+### `resolveCacheKey`
+
+```ts
+async function resolveCacheKey<ArgsT extends unknown[] = any[]>(
+  input:
+```
+
+Resolves the full cache storage key for given arguments and cache options.
+
+Uses the same key derivation as `defineCachedFunction` internally:
+
+- When `opts.getKey` is provided, it is called with `args` to produce the key segment.
+- Otherwise, `args` are hashed with `ohash` (same default as `defineCachedFunction`).
+
+Pass the same `getKey`, `name`, `group`, and `base` options you use in
+`defineCachedFunction` / `defineCachedHandler` to get the exact storage key.
+
+**Parameters:**
+
+- **`input`** — Object with `options` (cache options) and optional `args` (function arguments).
+
+**Returns:** — The full storage key string.
+
+**Example:**
+
+```ts
+const key = await resolveCacheKey({
+  options: { name: "fetchUser", getKey: (id: string) => id },
+  args: ["user-123"],
+});
+await useStorage().set(key, null); // invalidate
+```
 
 ---
 
@@ -192,28 +230,6 @@ sets `cache-control`, `etag`, and `last-modified` headers, and handles
 - **`opts`** — Cache and HTTP-specific configuration options.
 
 **Returns:** — A new event handler that serves cached responses when available.
-
----
-
-### `resolveCacheKey`
-
-```ts
-function resolveCacheKey<ArgsT extends unknown[] = any[]>(input: {
-  options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey">;
-  args?: ArgsT;
-}): Promise<string>;
-```
-
-Resolves the full storage key for given arguments and cache options.
-
-Uses the same key derivation as `defineCachedFunction` internally — when `getKey` is provided it is called with the args, otherwise args are hashed with `ohash`.
-
-**Parameters:**
-
-- **`input.options`** — Same cache options (`base`, `group`, `name`, `getKey`) used when defining the cached function.
-- **`input.args`** — The arguments you would pass to the cached function.
-
-**Returns:** — The full storage key string.
 
 ---
 
