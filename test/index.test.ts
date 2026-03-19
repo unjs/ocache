@@ -1239,12 +1239,8 @@ describe("defineCachedHandler", () => {
       { maxAge: 10, varies: ["cookie"] },
     );
 
-    const r1 = (await handler(
-      makeEvent(path, { headers: { cookie: "session=abc" } }),
-    )) as Response;
-    const r2 = (await handler(
-      makeEvent(path, { headers: { cookie: "session=xyz" } }),
-    )) as Response;
+    const r1 = (await handler(makeEvent(path, { headers: { cookie: "session=abc" } }))) as Response;
+    const r2 = (await handler(makeEvent(path, { headers: { cookie: "session=xyz" } }))) as Response;
 
     // Different cookie values should produce different cache entries
     expect(callCount).toBe(2);
