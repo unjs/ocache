@@ -1,7 +1,7 @@
 export {
   defineCachedFunction,
   cachedFunction,
-  resolveCacheKey,
+  resolveCacheKeys,
   type CachedFunction,
 } from "./cache.ts";
 

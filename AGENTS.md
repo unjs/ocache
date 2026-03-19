@@ -46,7 +46,7 @@ src/
 - `HTTPEvent` — `{ req: Request; url?: URL }` (url falls back to `new URL(req.url)`)
 - `EventHandler<E>` — `(event: E) => unknown | Promise<unknown>` (generic, defaults to HTTPEvent)
 - `CacheEntry<T>` — stored cache entry with value, expires, mtime, integrity
-- `CacheOptions<T>` — maxAge, swr, staleMaxAge, getKey, validate, transform, etc.
+- `CacheOptions<T>` — maxAge, swr, staleMaxAge, base (string | string[] for multi-tier), getKey, validate, transform, etc.
 - `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
 - `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
 - `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
@@ -67,3 +67,6 @@ src/
 - `waitUntil` accessed via `(event.req as any).waitUntil` — runtime-specific (srvx ServerRequest, Cloudflare), not typed on `Request`
 - `event.url` is optional — `http.ts` falls back to `new URL(event.req.url)`
 - Storage methods are `get`/`set` (not `getItem`/`setItem`)
+- `base` supports `string | string[]` — multi-tier: reads try each prefix in order (first hit wins), writes go to all prefixes
+- Default cache key group is `"functions"` (cache.ts) / `"handlers"` (http.ts) — no `ocache/` prefix
+- Integrity hash excludes `base`, `group`, `name` (storage-location fields) so entries remain valid across different base configurations

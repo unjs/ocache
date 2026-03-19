@@ -33,6 +33,7 @@
     "automd": "^0.4.3",
     "changelogen": "^0.6.2",
     "docs4ts": "^0.0.4",
+    "mitata": "^1.0.34",
     "obuild": "^0.4.32",
     "oxfmt": "^0.41.0",
     "oxlint": "^1.56.0",
