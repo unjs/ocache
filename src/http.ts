@@ -136,15 +136,16 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
     const cacheControl = [];
     if (opts.swr) {
-      if (opts.maxAge) {
+      if (opts.maxAge != null) {
         cacheControl.push(`s-maxage=${opts.maxAge}`);
       }
-      if (opts.staleMaxAge) {
+      if (opts.staleMaxAge != null) {
         cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
       } else {
         cacheControl.push("stale-while-revalidate");
       }
     } else if (opts.maxAge) {
+      // For non-SWR, set max-age directly
       cacheControl.push(`max-age=${opts.maxAge}`);
     }
     if (cacheControl.length > 0) {

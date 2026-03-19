@@ -190,6 +190,33 @@ describe("cachedFunction", () => {
     expect(waitUntilFn).toHaveBeenCalled();
   });
 
+  it("maxAge: 0 always expires (never caches)", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return `v${callCount}`;
+      },
+      { maxAge: 0 },
+    );
+
+    expect(await fn()).toBe("v1");
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("no maxAge caches indefinitely", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(() => {
+      callCount++;
+      return `v${callCount}`;
+    }, {});
+
+    expect(await fn()).toBe("v1");
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+  });
+
   it("SWR returns stale value and revalidates in background", async () => {
     let callCount = 0;
     const fn = defineCachedFunction(
@@ -688,6 +715,33 @@ describe("defineCachedHandler", () => {
     await handler({ req: new Request(`http://localhost${path}`), url });
     await handler({ req: new Request(`http://localhost${path}`), url });
     expect(callCount).toBe(1);
+  });
+
+  it("sets s-maxage=0 when swr with maxAge: 0", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 0,
+      swr: true,
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    const cc = res.headers.get("cache-control")!;
+    expect(cc).toContain("s-maxage=0");
+    expect(cc).toContain("stale-while-revalidate");
+  });
+
+  it("sets stale-while-revalidate=0 when swr with staleMaxAge: 0", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 60,
+      swr: true,
+      staleMaxAge: 0,
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    const cc = res.headers.get("cache-control")!;
+    expect(cc).toContain("s-maxage=60");
+    expect(cc).toContain("stale-while-revalidate=0");
   });
 
   it("no cache-control when no maxAge and no swr", async () => {
