@@ -146,8 +146,7 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 ```ts
 function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> = defaultCacheOptions() as CachedEventHandlerOptions<E>,
-): EventHandler<E>;
+  opts: CachedEventHandlerOptions<E> =
 ```
 
 Wraps an HTTP event handler with response caching.
