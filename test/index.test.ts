@@ -1196,6 +1196,115 @@ describe("defineCachedHandler", () => {
     expect(cc).not.toContain("max-age=30");
   });
 
+  // Regression: nitro#1745 — defineCachedHandler replaces event.req with a new
+  // Request that only had { method, headers } — dropping the body. While GET
+  // requests don't carry bodies, the fix ensures body is forwarded for
+  // correctness when shouldBypassCache is overridden to allow non-GET caching.
+  it("forwards request body on filtered request when cache is not bypassed", async () => {
+    const path = uniquePath();
+    let receivedBody: string | null = null;
+    const handler = defineCachedHandler(
+      async (event) => {
+        receivedBody = await event.req.text();
+        return new Response(`echo: ${receivedBody}`);
+      },
+      {
+        maxAge: 10,
+        // Override default bypass to allow POST through the cache path
+        shouldBypassCache: () => false,
+      },
+    );
+
+    await handler({
+      req: new Request(`http://localhost${path}`, {
+        method: "POST",
+        body: "hello world",
+      }),
+    });
+    expect(receivedBody).toBe("hello world");
+  });
+
+  // Regression: nitro#3468/#3464 — cookie header is stripped from the filtered request
+  // This is by-design: non-variable headers are removed for cache key consistency.
+  // But when cookies ARE in the varies list, they should be preserved in the cache key
+  // (even though they're still filtered from the handler's request).
+  it("varies on cookie header produces different cache keys", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, varies: ["cookie"] },
+    );
+
+    const r1 = (await handler(
+      makeEvent(path, { headers: { cookie: "session=abc" } }),
+    )) as Response;
+    const r2 = (await handler(
+      makeEvent(path, { headers: { cookie: "session=xyz" } }),
+    )) as Response;
+
+    // Different cookie values should produce different cache entries
+    expect(callCount).toBe(2);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-2");
+  });
+
+  // Regression: nitro#3997 — allow server-only caching (disable Cache-Control headers)
+  // When sendHeaders is false, the response should not include cache-control, etag, or last-modified.
+  it.fails("sendHeaders: false suppresses cache-related response headers", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 60,
+      swr: true,
+      sendHeaders: false,
+    } as any);
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-control")).toBeNull();
+    // etag and last-modified are still set internally for cache integrity,
+    // but should not be sent to the client
+    expect(res.headers.get("etag")).toBeNull();
+    expect(res.headers.get("last-modified")).toBeNull();
+    // Server-side caching should still work
+    let callCount = 0;
+    const handler2 = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 60, sendHeaders: false } as any,
+    );
+    const p = uniquePath();
+    await handler2(makeEvent(p));
+    await handler2(makeEvent(p));
+    expect(callCount).toBe(1);
+  });
+
+  // Regression: nitro#1695 — add custom headers for cached response (x-cache: HIT/MISS)
+  // Currently no way to know if a response was served from cache or freshly resolved.
+  it.fails("exposes cache hit/miss status", async () => {
+    const path = uniquePath();
+    let callCount = 0;
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // First response is a cache MISS, second is a HIT
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(1);
+  });
+
   // Regression: issue #5 — handler returning undefined etag/last-modified should invalidate cache
   it("invalidates cached entry when etag resolves to string 'undefined'", async () => {
     let callCount = 0;

@@ -111,6 +111,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       (event as any).req = new Request(event.req.url, {
         method: event.req.method,
         headers: filteredHeaders,
+        body: event.req.body,
+        // @ts-expect-error -- needed for streaming request bodies
+        duplex: "half",
       });
       // Inherit runtime context
       if ((originalReq as any).runtime) {
