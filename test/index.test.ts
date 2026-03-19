@@ -3,6 +3,7 @@ import {
   cachedFunction,
   defineCachedFunction,
   defineCachedHandler,
+  resolveCacheKey,
   createMemoryStorage,
   setStorage,
   useStorage,
@@ -1075,5 +1076,61 @@ describe("defineCachedHandler", () => {
     await handler(makeEvent(path));
     await handler(makeEvent(path));
     expect(callCount).toBe(2);
+  });
+});
+
+describe("resolveCacheKey", () => {
+  it("uses default hash when no getKey is provided", async () => {
+    const key = await resolveCacheKey({ options: { name: "myFn" }, args: ["my-arg"] });
+    expect(key).toMatch(/^\/cache:ocache\/functions:myFn:.+\.json$/);
+  });
+
+  it("uses custom getKey", async () => {
+    const key = await resolveCacheKey({
+      options: { name: "myFn", getKey: (id: string) => id },
+      args: ["my-key"],
+    });
+    expect(key).toBe("/cache:ocache/functions:myFn:my-key.json");
+  });
+
+  it("uses custom base, group, and name", async () => {
+    const key = await resolveCacheKey({
+      options: { base: "/my-cache", group: "app/handlers", name: "myFn", getKey: (k: string) => k },
+      args: ["k"],
+    });
+    expect(key).toBe("/my-cache:app/handlers:myFn:k.json");
+  });
+
+  it("matches the key used internally by defineCachedFunction", async () => {
+    const setSpy = vi.fn();
+    setStorage({ get: () => null, set: setSpy });
+
+    const opts = {
+      maxAge: 10,
+      getKey: () => "test-key",
+      name: "myFn",
+      group: "myGroup",
+      base: "/cache" as const,
+    };
+
+    const fn = defineCachedFunction(() => "value", opts);
+    await fn();
+
+    const expectedKey = await resolveCacheKey({ options: opts });
+    expect(setSpy).toHaveBeenCalledWith(expectedKey, expect.any(Object), undefined);
+  });
+
+  it("matches .resolveKey on the cached function", async () => {
+    const fn = defineCachedFunction(async (id: string) => id, {
+      name: "myFn",
+      getKey: (id: string) => id,
+    });
+    const key = await fn.resolveKey("test-id");
+    expect(key).toBe("/cache:ocache/functions:myFn:test-id.json");
+  });
+
+  it("returns default key with no args and no getKey", async () => {
+    const key = await resolveCacheKey({});
+    expect(key).toBe("/cache:ocache/functions:_:.json");
   });
 });

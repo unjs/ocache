@@ -72,9 +72,6 @@ const handler = defineCachedHandler(
     varies: ["accept-language"], // Vary cache by these headers
   },
 );
-
-// Use with any server that provides Request/Response
-// e.g., Bun, Deno, Cloudflare Workers, srvx, etc.
 ```
 
 #### Headers-only Mode
@@ -86,6 +83,29 @@ const handler = defineCachedHandler(myHandler, {
   headersOnly: true,
   maxAge: 60,
 });
+```
+
+### Cache Invalidation
+
+Cached functions have a `.resolveKey()` method that returns the exact storage key for given arguments, making invalidation straightforward:
+
+```ts
+import { defineCachedFunction, useStorage } from "ocache";
+
+const getUser = defineCachedFunction(
+  async (id: string) => db.users.find(id),
+  {
+    name: "getUser",
+    maxAge: 60,
+    getKey: (id: string) => id,
+  },
+);
+
+const user = await getUser("user-123");
+
+// When you need to invalidate:
+const key = await getUser.resolveKey("user-123");
+await useStorage().set(key, null);
 ```
 
 ### Custom Storage
@@ -127,7 +147,7 @@ Wraps a function with caching support including TTL, SWR, integrity checks, and 
 - **`fn`** — The function to cache.
 - **`opts`** — Cache configuration options.
 
-**Returns:** — A new async function that returns cached results when available.
+**Returns:** — A cached function with a `.resolveKey(...args)` method for cache key resolution.
 
 ---
 
@@ -138,6 +158,41 @@ const cachedFunction = defineCachedFunction;
 ```
 
 Alias for [`defineCachedFunction`](#definecachedfunction).
+
+---
+
+### `resolveCacheKey`
+
+```ts
+async function resolveCacheKey<ArgsT extends unknown[] = any[]>(
+  input:
+```
+
+Resolves the full cache storage key for given arguments and cache options.
+
+Uses the same key derivation as `defineCachedFunction` internally:
+- When `opts.getKey` is provided, it is called with `args` to produce the key segment.
+- Otherwise, `args` are hashed with `ohash` (same default as `defineCachedFunction`).
+
+Pass the same `getKey`, `name`, `group`, and `base` options you use in
+`defineCachedFunction` / `defineCachedHandler` to get the exact storage key.
+
+**Parameters:**
+
+- **`input`** — Object with `options` (cache options) and optional `args` (function arguments).
+
+**Returns:** — The full storage key string.
+
+
+**Example:**
+
+```ts
+const key = await resolveCacheKey({
+  options: { name: "fetchUser", getKey: (id: string) => id },
+  args: ["user-123"],
+});
+await useStorage().set(key, null); // invalidate
+```
 
 ---
 
@@ -167,7 +222,7 @@ sets `cache-control`, `etag`, and `last-modified` headers, and handles
 ### `createMemoryStorage`
 
 ```ts
-function createMemoryStorage(): StorageInterface;
+function createMemoryStorage(): StorageInterface
 ```
 
 Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
@@ -177,7 +232,7 @@ Creates an in-memory storage backed by a `Map` with optional TTL support (in sec
 ### `useStorage`
 
 ```ts
-function useStorage(): StorageInterface;
+function useStorage(): StorageInterface
 ```
 
 Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
@@ -187,7 +242,7 @@ Returns the current storage instance. If none has been set via `setStorage`, laz
 ### `setStorage`
 
 ```ts
-function setStorage(storage: StorageInterface): void;
+function setStorage(storage: StorageInterface): void
 ```
 
 Sets a custom storage implementation to be used by all cached functions.

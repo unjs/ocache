@@ -1,4 +1,9 @@
-export { defineCachedFunction, cachedFunction } from "./cache.ts";
+export {
+  defineCachedFunction,
+  cachedFunction,
+  resolveCacheKey,
+  type CachedFunction,
+} from "./cache.ts";
 
 export { defineCachedHandler } from "./http.ts";
 
