@@ -405,6 +405,107 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(3);
   });
 
+  // Regression: nitro#1992 / nitro#4060 — SWR should stop serving stale when background
+  // revalidation throws (e.g. handler returns 404 error).
+  // After a bg revalidation error, the stale cache entry should be removed from storage
+  // so that the NEXT request does not serve the old stale value again.
+  it("SWR evicts stale entry from storage when background revalidation throws", async () => {
+    const errors: unknown[] = [];
+    let callCount = 0;
+    let shouldThrow = false;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 5));
+        if (shouldThrow) {
+          throw new Error("handler 404");
+        }
+        return `v${callCount}`;
+      },
+      {
+        maxAge: 0.001,
+        swr: true,
+        staleMaxAge: 10,
+        getKey: () => "swr-throw-key",
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    // Prime cache
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Wait for maxAge to expire
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Now make the resolver throw
+    shouldThrow = true;
+
+    // SWR returns stale "v1" while revalidation runs in background
+    const r2 = await fn();
+    expect(r2).toBe("v1");
+
+    // Wait for background revalidation to complete (and throw)
+    await new Promise((r) => setTimeout(r, 20));
+    expect(callCount).toBe(2);
+
+    // The stale entry should have been removed from storage after the bg error.
+    const keys = await fn.resolveKeys();
+    const staleEntry = await useStorage().get(keys[0]!);
+    // BUG: stale entry persists in storage — it should be null after failed revalidation
+    expect(staleEntry).toBeNull();
+  });
+
+  // Regression: nitro#1992 — SWR should stop serving stale when background
+  // revalidation returns a value that fails validation (e.g. empty/404 response).
+  // After a bg revalidation with invalid result, the stale cache entry should be
+  // removed from storage so the NEXT request does not serve the old stale value.
+  it("SWR evicts stale entry from storage when revalidation result fails validation", async () => {
+    let callCount = 0;
+    let returnEmpty = false;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 5));
+        if (returnEmpty) {
+          return undefined as any; // simulates empty/null/404 response
+        }
+        return `v${callCount}`;
+      },
+      {
+        maxAge: 0.001,
+        swr: true,
+        staleMaxAge: 10,
+        getKey: () => "swr-invalid-key",
+        // Default validate rejects undefined values
+      },
+    );
+
+    // Prime cache
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Wait for maxAge to expire
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Now make resolver return invalid value
+    returnEmpty = true;
+
+    // SWR returns stale while revalidating in background
+    const r2 = await fn();
+    expect(r2).toBe("v1");
+
+    // Wait for bg revalidation to complete
+    await new Promise((r) => setTimeout(r, 20));
+
+    // The stale entry should have been removed from storage because the
+    // bg revalidation produced an invalid result (undefined).
+    const keys = await fn.resolveKeys();
+    const staleEntry = await useStorage().get(keys[0]!);
+    // BUG: stale entry persists in storage — it should be null after failed revalidation
+    expect(staleEntry).toBeNull();
+  });
+
   it("SWR without staleMaxAge serves stale indefinitely", async () => {
     let callCount = 0;
     const fn = defineCachedFunction(
