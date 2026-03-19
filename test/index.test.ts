@@ -3,7 +3,7 @@ import {
   cachedFunction,
   defineCachedFunction,
   defineCachedHandler,
-  resolveCacheKey,
+  resolveCacheKeys,
   createMemoryStorage,
   setStorage,
   useStorage,
@@ -1101,26 +1101,27 @@ describe("defineCachedHandler", () => {
   });
 });
 
-describe("resolveCacheKey", () => {
+describe("resolveCacheKeys", () => {
   it("uses default hash when no getKey is provided", async () => {
-    const key = await resolveCacheKey({ options: { name: "myFn" }, args: ["my-arg"] });
-    expect(key).toMatch(/^\/cache:ocache\/functions:myFn:.+\.json$/);
+    const keys = await resolveCacheKeys({ options: { name: "myFn" }, args: ["my-arg"] });
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toMatch(/^\/cache:functions:myFn:.+\.json$/);
   });
 
   it("uses custom getKey", async () => {
-    const key = await resolveCacheKey({
+    const keys = await resolveCacheKeys({
       options: { name: "myFn", getKey: (id: string) => id },
       args: ["my-key"],
     });
-    expect(key).toBe("/cache:ocache/functions:myFn:my-key.json");
+    expect(keys).toEqual(["/cache:functions:myFn:my-key.json"]);
   });
 
   it("uses custom base, group, and name", async () => {
-    const key = await resolveCacheKey({
+    const keys = await resolveCacheKeys({
       options: { base: "/my-cache", group: "app/handlers", name: "myFn", getKey: (k: string) => k },
       args: ["k"],
     });
-    expect(key).toBe("/my-cache:app/handlers:myFn:k.json");
+    expect(keys).toEqual(["/my-cache:app/handlers:myFn:k.json"]);
   });
 
   it("matches the key used internally by defineCachedFunction", async () => {
@@ -1138,21 +1139,115 @@ describe("resolveCacheKey", () => {
     const fn = defineCachedFunction(() => "value", opts);
     await fn();
 
-    const expectedKey = await resolveCacheKey({ options: opts });
-    expect(setSpy).toHaveBeenCalledWith(expectedKey, expect.any(Object), undefined);
+    const expectedKeys = await resolveCacheKeys({ options: opts });
+    expect(setSpy).toHaveBeenCalledWith(expectedKeys[0], expect.any(Object), undefined);
   });
 
-  it("matches .resolveKey on the cached function", async () => {
+  it("matches .resolveKeys on the cached function", async () => {
     const fn = defineCachedFunction(async (id: string) => id, {
       name: "myFn",
       getKey: (id: string) => id,
     });
-    const key = await fn.resolveKey("test-id");
-    expect(key).toBe("/cache:ocache/functions:myFn:test-id.json");
+    const keys = await fn.resolveKeys("test-id");
+    expect(keys).toEqual(["/cache:functions:myFn:test-id.json"]);
   });
 
   it("returns default key with no args and no getKey", async () => {
-    const key = await resolveCacheKey({});
-    expect(key).toBe("/cache:ocache/functions:_:.json");
+    const keys = await resolveCacheKeys({});
+    expect(keys).toEqual(["/cache:functions:_:.json"]);
+  });
+
+  it("returns all keys when base is an array", async () => {
+    const keys = await resolveCacheKeys({
+      options: { base: ["/tier1", "/tier2"], name: "myFn", getKey: (k: string) => k },
+      args: ["k"],
+    });
+    expect(keys).toEqual(["/tier1:functions:myFn:k.json", "/tier2:functions:myFn:k.json"]);
+  });
+});
+
+describe("multi-tier base", () => {
+  it("reads from second tier when first is empty", async () => {
+    const sharedIntegrity = "shared-integrity";
+
+    // Populate tier2 by writing with base="/tier2" only
+    const fn1 = defineCachedFunction(() => "from-tier2", {
+      maxAge: 10,
+      base: "/tier2",
+      name: "myFn",
+      getKey: () => "k",
+      integrity: sharedIntegrity,
+    });
+    await fn1();
+
+    // Read with multi-tier base — tier1 is empty, should find in tier2
+    let callCount = 0;
+    const fn2 = defineCachedFunction(() => {
+      callCount++;
+      return "fresh";
+    }, {
+      maxAge: 10,
+      base: ["/tier1", "/tier2"],
+      name: "myFn",
+      getKey: () => "k",
+      integrity: sharedIntegrity,
+    });
+
+    const result = await fn2();
+    expect(result).toBe("from-tier2");
+    expect(callCount).toBe(0);
+  });
+
+  it("writes to all tiers", async () => {
+    const setSpy = vi.fn();
+    setStorage({ get: () => null, set: setSpy });
+
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 10,
+      base: ["/tier1", "/tier2"],
+      name: "myFn",
+      getKey: () => "k",
+    });
+
+    await fn();
+    const setKeys = setSpy.mock.calls.map((c: any) => c[0]);
+    expect(setKeys).toContain("/tier1:functions:myFn:k.json");
+    expect(setKeys).toContain("/tier2:functions:myFn:k.json");
+  });
+
+  it("prefers first tier when both have data", async () => {
+    const sharedIntegrity = "shared-integrity";
+
+    // Populate both tiers
+    const fn1 = defineCachedFunction(() => "from-tier1", {
+      maxAge: 10,
+      base: "/tier1",
+      name: "myFn",
+      getKey: () => "k",
+      integrity: sharedIntegrity,
+    });
+    await fn1();
+
+    // Copy tier1 entry to tier2 with different value
+    const storage = useStorage();
+    const tier1Entry = await storage.get("/tier1:functions:myFn:k.json") as any;
+    await storage.set("/tier2:functions:myFn:k.json", { ...tier1Entry, value: "from-tier2" });
+
+    // Read with multi-tier — should prefer tier1
+    let callCount = 0;
+    const fn2 = defineCachedFunction(() => {
+      callCount++;
+      return "fresh";
+    }, {
+      maxAge: 10,
+      base: ["/tier1", "/tier2"],
+      name: "myFn",
+      getKey: () => "k",
+      integrity: sharedIntegrity,
+    });
+
+    const result = await fn2();
+    expect(result).toBe("from-tier1");
+    expect(callCount).toBe(0);
   });
 });

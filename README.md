@@ -39,7 +39,8 @@ const cached = defineCachedFunction(fn, {
   maxAge: 10, // TTL in seconds (default: 1)
   swr: true, // Stale-while-revalidate (default: true)
   staleMaxAge: 60, // Max seconds to serve stale content
-  group: "my-group", // Cache key group (default: "ocache/functions")
+  base: "/cache", // Base prefix for cache keys (string or string[] for multi-tier)
+  group: "my-group", // Cache key group (default: "functions")
   getKey: (...args) => "custom-key", // Custom cache key generator
   shouldBypassCache: (...args) => false, // Skip cache entirely when true
   shouldInvalidateCache: (...args) => false, // Force refresh when true
@@ -87,7 +88,7 @@ const handler = defineCachedHandler(myHandler, {
 
 ### Cache Invalidation
 
-Cached functions have a `.resolveKey()` method that returns the exact storage key for given arguments, making invalidation straightforward:
+Cached functions have a `.resolveKeys()` method that returns all storage keys (one per base prefix) for given arguments, making invalidation straightforward:
 
 ```ts
 import { defineCachedFunction, useStorage } from "ocache";
@@ -101,9 +102,30 @@ const getUser = defineCachedFunction(async (id: string) => db.users.find(id), {
 const user = await getUser("user-123");
 
 // When you need to invalidate:
-const key = await getUser.resolveKey("user-123");
-await useStorage().set(key, null);
+const keys = await getUser.resolveKeys("user-123");
+for (const key of keys) {
+  await useStorage().set(key, null);
+}
 ```
+
+### Multi-tier Caching
+
+Use an array of `base` prefixes to enable multi-tier caching. On read, each prefix is tried in order and the first hit is used. On write, the entry is written to all prefixes:
+
+```ts
+const cachedFetch = defineCachedFunction(
+  async (url: string) => {
+    const res = await fetch(url);
+    return res.json();
+  },
+  {
+    maxAge: 60,
+    base: ["/tmp", "/cache"],
+  },
+);
+```
+
+This is useful for layered cache setups (e.g., fast local cache + shared remote cache) where you want reads to prefer the nearest tier while keeping all tiers populated on writes.
 
 ### Custom Storage
 
@@ -206,14 +228,14 @@ Handler function that receives an [`HTTPEvent`](#httpevent) and returns a respon
 
 ---
 
-### `resolveCacheKey`
+### `resolveCacheKeys`
 
 ```ts
-async function resolveCacheKey<ArgsT extends unknown[] = any[]>(
+async function resolveCacheKeys<ArgsT extends unknown[] = any[]>(
   input:
 ```
 
-Resolves the full cache storage key for given arguments and cache options.
+Resolves all cache storage keys (one per base prefix) for given arguments and cache options.
 
 Uses the same key derivation as `defineCachedFunction` internally:
 
@@ -221,22 +243,24 @@ Uses the same key derivation as `defineCachedFunction` internally:
 - Otherwise, `args` are hashed with `ohash` (same default as `defineCachedFunction`).
 
 Pass the same `getKey`, `name`, `group`, and `base` options you use in
-`defineCachedFunction` / `defineCachedHandler` to get the exact storage key.
+`defineCachedFunction` / `defineCachedHandler` to get the exact storage keys.
 
 **Parameters:**
 
 - **`input`** — Object with `options` (cache options) and optional `args` (function arguments).
 
-**Returns:** — The full storage key string.
+**Returns:** — An array of storage key strings (one per base prefix).
 
 **Example:**
 
 ```ts
-const key = await resolveCacheKey({
+const keys = await resolveCacheKeys({
   options: { name: "fetchUser", getKey: (id: string) => id },
   args: ["user-123"],
 });
-await useStorage().set(key, null); // invalidate
+for (const key of keys) {
+  await useStorage().set(key, null); // invalidate all tiers
+}
 ```
 
 ---

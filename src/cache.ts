@@ -16,8 +16,8 @@ type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T };
 
 export type CachedFunction<T, ArgsT extends unknown[]> = {
   (...args: ArgsT): Promise<T>;
-  /** Resolves the full storage key for the given arguments. */
-  resolveKey: (...args: ArgsT) => Promise<string>;
+  /** Resolves all storage keys (one per base prefix) for the given arguments. */
+  resolveKeys: (...args: ArgsT) => Promise<string[]>;
 };
 
 /**
@@ -36,9 +36,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const pending: { [key: string]: Promise<T> } = {};
 
   // Normalize cache params
-  const group = opts.group || "ocache/functions";
+  const group = opts.group || "functions";
   const name = opts.name || fn.name || "_";
-  const integrity = opts.integrity || hash([fn, opts]);
+  const integrity = opts.integrity || hash([fn, _integrityOpts(opts)]);
   const validate = opts.validate || ((entry) => entry.value !== undefined);
   const _onError = (context: string, error: unknown) => {
     if (opts.onError) {
@@ -55,11 +55,18 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     event?: HTTPEvent,
   ): Promise<ResolvedCacheEntry<T>> {
     // Use extension for key to avoid conflicting with parent namespace (foo/bar and foo/bar/baz)
-    const cacheKey = _buildCacheKey(key, { base: opts.base, group, name });
+    const bases = _normalizeBases(opts.base);
 
     let entry: CacheEntry<T> = {} as CacheEntry<T>;
     try {
-      entry = ((await useStorage().get(cacheKey)) as CacheEntry<T>) || {};
+      // Multi-tier read: try each base prefix in order, use first hit
+      for (const base of bases) {
+        const result = (await useStorage().get(_buildCacheKey(key, { group, name }, base))) as CacheEntry<T> | null;
+        if (result) {
+          entry = result;
+          break;
+        }
+      }
     } catch (error) {
       _onError("[cache] Cache read error.", error);
     }
@@ -144,7 +151,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           }
           const promise = (async () => {
             try {
-              await useStorage().set(cacheKey, entry, setOpts);
+              // Multi-tier write: write to all base prefixes
+              await Promise.all(
+                bases.map((b) => useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts)),
+              );
             } catch (error) {
               _onError("[cache] Cache write error.", error);
             }
@@ -194,7 +204,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     return value;
   };
 
-  cachedFn.resolveKey = (...args: ArgsT) => resolveCacheKey({ options: opts, args });
+  cachedFn.resolveKeys = (...args: ArgsT) => resolveCacheKeys({ options: opts, args });
 
   return cachedFn;
 }
@@ -205,37 +215,39 @@ export const cachedFunction = defineCachedFunction;
 // --- Public helpers ---
 
 /**
- * Resolves the full cache storage key for given arguments and cache options.
+ * Resolves all cache storage keys (one per base prefix) for given arguments and cache options.
  *
  * Uses the same key derivation as `defineCachedFunction` internally:
  * - When `opts.getKey` is provided, it is called with `args` to produce the key segment.
  * - Otherwise, `args` are hashed with `ohash` (same default as `defineCachedFunction`).
  *
  * Pass the same `getKey`, `name`, `group`, and `base` options you use in
- * `defineCachedFunction` / `defineCachedHandler` to get the exact storage key.
+ * `defineCachedFunction` / `defineCachedHandler` to get the exact storage keys.
  *
  * @param input - Object with `options` (cache options) and optional `args` (function arguments).
- * @returns The full storage key string.
+ * @returns An array of storage key strings (one per base prefix).
  *
  * @example
  * ```ts
- * const key = await resolveCacheKey({
+ * const keys = await resolveCacheKeys({
  *   options: { name: "fetchUser", getKey: (id: string) => id },
  *   args: ["user-123"],
  * });
- * await useStorage().set(key, null); // invalidate
+ * for (const key of keys) {
+ *   await useStorage().set(key, null); // invalidate all tiers
+ * }
  * ```
  */
-export async function resolveCacheKey<ArgsT extends unknown[] = any[]>(
+export async function resolveCacheKeys<ArgsT extends unknown[] = any[]>(
   input: {
     options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey">;
     args?: ArgsT;
   } = {},
-): Promise<string> {
+): Promise<string[]> {
   const opts = input.options ?? {};
   const args = input.args ?? ([] as unknown as ArgsT);
   const key = await (opts.getKey || getKey)(...args);
-  return _buildCacheKey(key, opts);
+  return _normalizeBases(opts.base).map((base) => _buildCacheKey(key, opts, base));
 }
 
 // --- Internal helpers ---
@@ -248,9 +260,19 @@ function getKey(...args: unknown[]) {
   return args.length > 0 ? hash(args) : "";
 }
 
-function _buildCacheKey(key: string, opts: Pick<CacheOptions, "base" | "group" | "name">): string {
-  const base = opts.base ?? "/cache";
-  const group = opts.group || "ocache/functions";
+function _buildCacheKey(key: string, opts: Pick<CacheOptions, "group" | "name">, base: string): string {
+  const group = opts.group || "functions";
   const name = opts.name || "_";
   return [base, group, name, key + ".json"].filter(Boolean).join(":").replace(/:\/$/, ":index");
+}
+
+function _normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {
+  if (Array.isArray(base)) return base as [string, ...string[]];
+  return [base ?? "/cache"];
+}
+
+/** Strips storage-location fields from opts so integrity only reflects the cached computation. */
+function _integrityOpts(opts: CacheOptions): Omit<CacheOptions, "base" | "group" | "name"> {
+  const { base: _, group: _g, name: _n, ...rest } = opts;
+  return rest;
 }

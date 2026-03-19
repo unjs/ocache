@@ -64,8 +64,8 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   swr?: boolean;
   /** Maximum number of seconds a stale entry can be served while revalidating. */
   staleMaxAge?: number;
-  /** Base path prefix for cache keys. Defaults to `"/cache"`. */
-  base?: string;
+  /** Base path prefix(es) for cache keys. When an array, reads try each prefix in order (multi-tier) and writes go to all prefixes. Defaults to `"/cache"`. */
+  base?: string | string[];
   /** Optional error handler called for all cache-related errors (read, write, SWR, malformed data). */
   onError?: (error: unknown) => void;
 }

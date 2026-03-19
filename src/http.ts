@@ -96,8 +96,8 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       return true;
     },
-    group: opts.group || "cache/handlers",
-    integrity: opts.integrity || hash([handler, opts]),
+    group: opts.group || "handlers",
+    integrity: opts.integrity || hash([handler, _integrityOpts(opts)]),
   };
 
   const _cachedHandler = cachedFunction<ResponseCacheEntry>(async (event: HTTPEvent) => {
@@ -200,6 +200,12 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
 function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
+}
+
+/** Strips storage-location fields from opts so integrity only reflects the cached computation. */
+function _integrityOpts<E extends HTTPEvent>(opts: CachedEventHandlerOptions<E>): Omit<CachedEventHandlerOptions<E>, "base" | "group" | "name"> {
+  const { base: _, group: _g, name: _n, ...rest } = opts;
+  return rest;
 }
 
 function _defaultHandleCacheHeaders(event: HTTPEvent, conditions: CacheConditions): boolean {
