@@ -1422,7 +1422,7 @@ describe("multi-tier base", () => {
     expect(callCount).toBe(0);
   });
 
-  it("writes to all tiers", async () => {
+  it("writes to all tiers on full miss", async () => {
     const setSpy = vi.fn();
     setStorage({ get: () => null, set: setSpy });
 
@@ -1437,6 +1437,70 @@ describe("multi-tier base", () => {
     const setKeys = setSpy.mock.calls.map((c: any) => c[0]);
     expect(setKeys).toContain("/tier1:functions:myFn:k.json");
     expect(setKeys).toContain("/tier2:functions:myFn:k.json");
+  });
+
+  it("skips writing to lower tiers when a higher tier hits", async () => {
+    const sharedIntegrity = "shared-integrity";
+    const storage = useStorage();
+
+    // Populate both tiers
+    const entry = {
+      value: "cached",
+      mtime: Date.now(),
+      integrity: sharedIntegrity,
+      expires: Date.now() + 10_000,
+    };
+    await storage.set("/tier1:functions:myFn:k.json", entry);
+    await storage.set("/tier2:functions:myFn:k.json", entry);
+
+    const setSpy = vi.spyOn(storage, "set");
+
+    const fn = defineCachedFunction(() => "fresh", {
+      maxAge: 10,
+      base: ["/tier1", "/tier2"],
+      name: "myFn",
+      getKey: () => "k",
+      integrity: sharedIntegrity,
+    });
+
+    const result = await fn();
+    expect(result).toBe("cached");
+    // No writes should occur — tier1 already had the entry
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("only writes to tiers up to the hit on revalidation", async () => {
+    const setSpy = vi.fn();
+    const tier2Entry = {
+      value: "stale",
+      mtime: Date.now() - 20_000,
+      integrity: "int",
+    };
+
+    // Custom storage: tier1 misses, tier2 hits, tier3 is never checked
+    setStorage({
+      get: (key: string): any => {
+        if (key === "/tier2:functions:myFn:k.json") return tier2Entry;
+        return null;
+      },
+      set: setSpy,
+    });
+
+    const fn = defineCachedFunction(() => "fresh", {
+      maxAge: 10,
+      base: ["/tier1", "/tier2", "/tier3"],
+      name: "myFn",
+      getKey: () => "k",
+      integrity: "int",
+    });
+
+    await fn();
+
+    const setKeys = setSpy.mock.calls.map((c: any) => c[0]);
+    // Should write to tier1 (promote) and tier2 (refresh), but NOT tier3
+    expect(setKeys).toContain("/tier1:functions:myFn:k.json");
+    expect(setKeys).toContain("/tier2:functions:myFn:k.json");
+    expect(setKeys).not.toContain("/tier3:functions:myFn:k.json");
   });
 
   it("prefers first tier when both have data", async () => {

@@ -60,14 +60,17 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const bases = _normalizeBases(opts.base);
 
     let entry: CacheEntry<T> = {} as CacheEntry<T>;
+    // Index of the base that had a cache hit (-1 = miss on all tiers)
+    let hitIndex = -1;
     try {
       // Multi-tier read: try each base prefix in order, use first hit
-      for (const base of bases) {
+      for (let i = 0; i < bases.length; i++) {
         const result = (await useStorage().get(
-          _buildCacheKey(key, { group, name }, base),
+          _buildCacheKey(key, { group, name }, bases[i]!),
         )) as CacheEntry<T> | null;
         if (result) {
           entry = result;
+          hitIndex = i;
           break;
         }
       }
@@ -155,11 +158,15 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
               setOpts = { ttl: opts.maxAge };
             }
           }
+          // Multi-tier write: only write to tiers up to the one that matched.
+          // If no tier had a hit (hitIndex === -1), write to all tiers.
+          // If tier N matched, write to tiers 0..N (promote upward + refresh hit tier).
+          const writeBases =
+            hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
           const promise = (async () => {
             try {
-              // Multi-tier write: write to all base prefixes
               await Promise.all(
-                bases.map((b) =>
+                writeBases.map((b) =>
                   useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
                 ),
               );
