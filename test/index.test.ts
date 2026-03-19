@@ -116,6 +116,32 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(1);
   });
 
+  // Regression: issue #3 — swr=false concurrent requests on expired entry should still dedup
+  it("swr=false deduplicates concurrent requests on expired entry", async () => {
+    let resolveCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        resolveCount++;
+        const v = resolveCount;
+        await new Promise((r) => setTimeout(r, 50));
+        return `v${v}`;
+      },
+      { maxAge: 0.001, swr: false },
+    );
+
+    // Prime the cache
+    expect(await fn()).toBe("v1");
+    expect(resolveCount).toBe(1);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Entry is now expired. Two concurrent requests should dedup the resolver
+    const [r1, r2] = await Promise.all([fn(), fn()]);
+    // Both should get the same value from a single resolver call
+    expect(r1).toBe("v2");
+    expect(r2).toBe("v2");
+    expect(resolveCount).toBe(2); // only one additional resolver call, not two
+  });
+
   it("validates cache entries", async () => {
     let callCount = 0;
     const fn = defineCachedFunction(
@@ -996,5 +1022,58 @@ describe("defineCachedHandler", () => {
     };
     await handler(event);
     expect(receivedCustom).toBe("test-value");
+  });
+
+  // Regression: issue #4 — passing partial opts (e.g. only maxAge) should inherit swr default
+  it("inherits swr default when only maxAge is provided", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 30 });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    const cc = res.headers.get("cache-control")!;
+    // swr should default to true, so we get s-maxage (not max-age)
+    expect(cc).toContain("s-maxage=30");
+    expect(cc).toContain("stale-while-revalidate");
+    expect(cc).not.toContain("max-age=30");
+  });
+
+  // Regression: issue #5 — handler returning undefined etag/last-modified should invalidate cache
+  it("invalidates cached entry when etag resolves to string 'undefined'", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        // Return a response where etag header is the literal string "undefined"
+        return new Response("body", {
+          headers: { etag: "undefined" },
+        });
+      },
+      { maxAge: 10, swr: false },
+    );
+
+    // First call caches it, but validate should reject the entry
+    await handler(makeEvent(path));
+    // Second call should re-invoke handler because the entry was invalidated
+    await handler(makeEvent(path));
+    expect(callCount).toBe(2);
+  });
+
+  it("invalidates cached entry when last-modified resolves to string 'undefined'", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("body", {
+          headers: { "last-modified": "undefined" },
+        });
+      },
+      { maxAge: 10, swr: false },
+    );
+
+    await handler(makeEvent(path));
+    await handler(makeEvent(path));
+    expect(callCount).toBe(2);
   });
 });
