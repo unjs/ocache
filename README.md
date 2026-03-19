@@ -185,29 +185,6 @@ await useStorage().set(key, null); // invalidate
 
 ---
 
-### `defineCachedHandler`
-
-```ts
-function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
-  handler: EventHandler<E>,
-  opts: CachedEventHandlerOptions<E> =
-```
-
-Wraps an HTTP event handler with response caching.
-
-Automatically generates cache keys from the URL path and variable headers,
-sets `cache-control`, `etag`, and `last-modified` headers, and handles
-`304 Not Modified` responses via conditional request headers.
-
-**Parameters:**
-
-- **`handler`** — The event handler to cache.
-- **`opts`** — Cache and HTTP-specific configuration options.
-
-**Returns:** — A new event handler that serves cached responses when available.
-
----
-
 ### `createMemoryStorage`
 
 ```ts
@@ -322,6 +299,29 @@ interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omi
 Options for configuring cached HTTP handlers created by `defineCachedHandler`.
 
 Extends [`CacheOptions`](#cacheoptions) (without `transform` and `validate`, which are set internally).
+
+---
+
+### `defineCachedHandler`
+
+```ts
+function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
+  handler: EventHandler<E>,
+  opts: CachedEventHandlerOptions<E> =
+```
+
+Wraps an HTTP event handler with response caching.
+
+Automatically generates cache keys from the URL path and variable headers,
+sets `cache-control`, `etag`, and `last-modified` headers, and handles
+`304 Not Modified` responses via conditional request headers.
+
+**Parameters:**
+
+- **`handler`** — The event handler to cache.
+- **`opts`** — Cache and HTTP-specific configuration options.
+
+**Returns:** — A new event handler that serves cached responses when available.
 
 <!-- /automd-->
 
