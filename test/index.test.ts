@@ -1182,16 +1182,19 @@ describe("multi-tier base", () => {
 
     // Read with multi-tier base — tier1 is empty, should find in tier2
     let callCount = 0;
-    const fn2 = defineCachedFunction(() => {
-      callCount++;
-      return "fresh";
-    }, {
-      maxAge: 10,
-      base: ["/tier1", "/tier2"],
-      name: "myFn",
-      getKey: () => "k",
-      integrity: sharedIntegrity,
-    });
+    const fn2 = defineCachedFunction(
+      () => {
+        callCount++;
+        return "fresh";
+      },
+      {
+        maxAge: 10,
+        base: ["/tier1", "/tier2"],
+        name: "myFn",
+        getKey: () => "k",
+        integrity: sharedIntegrity,
+      },
+    );
 
     const result = await fn2();
     expect(result).toBe("from-tier2");
@@ -1230,21 +1233,24 @@ describe("multi-tier base", () => {
 
     // Copy tier1 entry to tier2 with different value
     const storage = useStorage();
-    const tier1Entry = await storage.get("/tier1:functions:myFn:k.json") as any;
+    const tier1Entry = (await storage.get("/tier1:functions:myFn:k.json")) as any;
     await storage.set("/tier2:functions:myFn:k.json", { ...tier1Entry, value: "from-tier2" });
 
     // Read with multi-tier — should prefer tier1
     let callCount = 0;
-    const fn2 = defineCachedFunction(() => {
-      callCount++;
-      return "fresh";
-    }, {
-      maxAge: 10,
-      base: ["/tier1", "/tier2"],
-      name: "myFn",
-      getKey: () => "k",
-      integrity: sharedIntegrity,
-    });
+    const fn2 = defineCachedFunction(
+      () => {
+        callCount++;
+        return "fresh";
+      },
+      {
+        maxAge: 10,
+        base: ["/tier1", "/tier2"],
+        name: "myFn",
+        getKey: () => "k",
+        integrity: sharedIntegrity,
+      },
+    );
 
     const result = await fn2();
     expect(result).toBe("from-tier1");

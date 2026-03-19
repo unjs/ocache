@@ -61,7 +61,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     try {
       // Multi-tier read: try each base prefix in order, use first hit
       for (const base of bases) {
-        const result = (await useStorage().get(_buildCacheKey(key, { group, name }, base))) as CacheEntry<T> | null;
+        const result = (await useStorage().get(
+          _buildCacheKey(key, { group, name }, base),
+        )) as CacheEntry<T> | null;
         if (result) {
           entry = result;
           break;
@@ -153,7 +155,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             try {
               // Multi-tier write: write to all base prefixes
               await Promise.all(
-                bases.map((b) => useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts)),
+                bases.map((b) =>
+                  useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
+                ),
               );
             } catch (error) {
               _onError("[cache] Cache write error.", error);
@@ -260,7 +264,11 @@ function getKey(...args: unknown[]) {
   return args.length > 0 ? hash(args) : "";
 }
 
-function _buildCacheKey(key: string, opts: Pick<CacheOptions, "group" | "name">, base: string): string {
+function _buildCacheKey(
+  key: string,
+  opts: Pick<CacheOptions, "group" | "name">,
+  base: string,
+): string {
   const group = opts.group || "functions";
   const name = opts.name || "_";
   return [base, group, name, key + ".json"].filter(Boolean).join(":").replace(/:\/$/, ":index");

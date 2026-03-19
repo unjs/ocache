@@ -37,7 +37,9 @@ function createSimulatedStorage(): StorageInterface {
  * Routes get/set to the right simulated storage based on key prefix.
  * Each storage is registered with a prefix and has its own simulated latency.
  */
-function createRoutedStorage(routes: [prefix: string, storage: StorageInterface][]): StorageInterface {
+function createRoutedStorage(
+  routes: [prefix: string, storage: StorageInterface][],
+): StorageInterface {
   const resolve = (key: string) => {
     for (const [prefix, s] of routes) {
       if (key.startsWith(prefix)) return s;
