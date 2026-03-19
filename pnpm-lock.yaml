@@ -28,8 +28,8 @@ importers:
         specifier: ^0.6.2
         version: 0.6.2(magicast@0.5.2)
       docs4ts:
-        specifier: ^0.0.3
-        version: 0.0.3
+        specifier: ^0.0.4
+        version: 0.0.4
       obuild:
         specifier: ^0.4.32
         version: 0.4.32(@typescript/native-preview@7.0.0-dev.20260319.1)(chokidar@5.0.0)(dotenv@17.3.1)(giget@2.0.0)(jiti@2.6.1)(magicast@0.5.2)(picomatch@4.0.3)(rollup@4.59.0)(typescript@5.9.3)
@@ -1196,8 +1196,8 @@ packages:
     resolution: {integrity: sha512-+yW4SNY7W2DOWe2Jx5H4c2qMTFbLGM6wIyoDPkAPy66X+sD1KfYjBPAIWPVsYqMxelflaMQCloZDudELIPhLqA==}
     engines: {node: ^18.12.0 || >=20.9.0}
 
-  docs4ts@0.0.3:
-    resolution: {integrity: sha512-XyJWN0jRkIQXk+kjFl16wkjAs8sBeUTrhOfBTQwMJBfDz13cM3ocNHU16WiG5/i20J8r7o0//pVt1B+v+iDCtw==}
+  docs4ts@0.0.4:
+    resolution: {integrity: sha512-VgvwCaA57PGjCx/Qf3XsOvfeSgE1Hk0hlZG+1F4gzxCgadbwyAc3Zd686eN0D3crgZqZxolFUwuqAbVS0d0KOA==}
     hasBin: true
 
   dotenv@17.3.1:
@@ -2418,7 +2418,7 @@ snapshots:
       fastest-levenshtein: 1.0.16
       lodash.deburr: 4.1.0
 
-  docs4ts@0.0.3:
+  docs4ts@0.0.4:
     dependencies:
       oxc-parser: 0.116.0
 

@@ -92,14 +92,11 @@ Cached functions have a `.resolveKey()` method that returns the exact storage ke
 ```ts
 import { defineCachedFunction, useStorage } from "ocache";
 
-const getUser = defineCachedFunction(
-  async (id: string) => db.users.find(id),
-  {
-    name: "getUser",
-    maxAge: 60,
-    getKey: (id: string) => id,
-  },
-);
+const getUser = defineCachedFunction(async (id: string) => db.users.find(id), {
+  name: "getUser",
+  maxAge: 60,
+  getKey: (id: string) => id,
+});
 
 const user = await getUser("user-123");
 
@@ -132,6 +129,45 @@ setStorage(redisStorage);
 
 <!-- automd:docs4ts -->
 
+### `cachedFunction`
+
+```ts
+const cachedFunction = defineCachedFunction;
+```
+
+Alias for [`defineCachedFunction`](#definecachedfunction).
+
+---
+
+### `createMemoryStorage`
+
+```ts
+function createMemoryStorage(): StorageInterface;
+```
+
+Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
+
+---
+
+### `defineCachedFunction`
+
+```ts
+function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
+  fn: (...args: ArgsT) => T | Promise<T>,
+  opts: CacheOptions<T, ArgsT> =
+```
+
+Wraps a function with caching support including TTL, SWR, integrity checks, and request deduplication.
+
+**Parameters:**
+
+- **`fn`** — The function to cache.
+- **`opts`** — Cache configuration options.
+
+**Returns:** — A cached function with a `.resolveKey(...args)` method for cache key resolution.
+
+---
+
 ### `defineCachedHandler`
 
 ```ts
@@ -155,62 +191,13 @@ sets `cache-control`, `etag`, and `last-modified` headers, and handles
 
 ---
 
-### `createMemoryStorage`
+### `EventHandler`
 
 ```ts
-function createMemoryStorage(): StorageInterface
+type EventHandler<E extends HTTPEvent = HTTPEvent> = (
 ```
 
-Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
-
----
-
-### `useStorage`
-
-```ts
-function useStorage(): StorageInterface
-```
-
-Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
-
----
-
-### `setStorage`
-
-```ts
-function setStorage(storage: StorageInterface): void
-```
-
-Sets a custom storage implementation to be used by all cached functions.
-
----
-
-### `defineCachedFunction`
-
-```ts
-function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
-  fn: (...args: ArgsT) => T | Promise<T>,
-  opts: CacheOptions<T, ArgsT> =
-```
-
-Wraps a function with caching support including TTL, SWR, integrity checks, and request deduplication.
-
-**Parameters:**
-
-- **`fn`** — The function to cache.
-- **`opts`** — Cache configuration options.
-
-**Returns:** — A cached function with a `.resolveKey(...args)` method for cache key resolution.
-
----
-
-### `cachedFunction`
-
-```ts
-const cachedFunction = defineCachedFunction;
-```
-
-Alias for [`defineCachedFunction`](#definecachedfunction).
+Handler function that receives an [`HTTPEvent`](#httpevent) and returns a response value.
 
 ---
 
@@ -224,6 +211,7 @@ async function resolveCacheKey<ArgsT extends unknown[] = any[]>(
 Resolves the full cache storage key for given arguments and cache options.
 
 Uses the same key derivation as `defineCachedFunction` internally:
+
 - When `opts.getKey` is provided, it is called with `args` to produce the key segment.
 - Otherwise, `args` are hashed with `ohash` (same default as `defineCachedFunction`).
 
@@ -235,7 +223,6 @@ Pass the same `getKey`, `name`, `group`, and `base` options you use in
 - **`input`** — Object with `options` (cache options) and optional `args` (function arguments).
 
 **Returns:** — The full storage key string.
-
 
 **Example:**
 
@@ -249,90 +236,23 @@ await useStorage().set(key, null); // invalidate
 
 ---
 
-### `ServerRequest`
+### `setStorage`
 
 ```ts
-interface ServerRequest extends Request
+function setStorage(storage: StorageInterface): void;
 ```
 
-Extended `Request` interface with optional `waitUntil` for background tasks.
-
-Compatible with srvx `ServerRequest`.
+Sets a custom storage implementation to be used by all cached functions.
 
 ---
 
-### `HTTPEvent`
+### `useStorage`
 
 ```ts
-interface HTTPEvent
+function useStorage(): StorageInterface;
 ```
 
-Minimal HTTP event object containing a request and an optional pre-parsed URL.
-
----
-
-### `EventHandler`
-
-```ts
-type EventHandler<E extends HTTPEvent = HTTPEvent> = (
-```
-
-Handler function that receives an [`HTTPEvent`](#httpevent) and returns a response value.
-
----
-
-### `CacheEntry`
-
-```ts
-interface CacheEntry<T = any>
-```
-
-Stored cache entry wrapping a cached value with metadata.
-
----
-
-### `CacheOptions`
-
-```ts
-interface CacheOptions<T = any, ArgsT extends unknown[] = any[]>
-```
-
-Options for configuring cached functions created by `defineCachedFunction`.
-
----
-
-### `ResponseCacheEntry`
-
-```ts
-interface ResponseCacheEntry
-```
-
-Serialized HTTP response stored in the cache by `defineCachedHandler`.
-
----
-
-### `CacheConditions`
-
-```ts
-interface CacheConditions
-```
-
-Conditional cache header options passed to the `handleCacheHeaders` hook.
-
----
-
-### `CachedEventHandlerOptions`
-
-```ts
-interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
-  CacheOptions<ResponseCacheEntry, [E]>,
-  "transform" | "validate"
->
-```
-
-Options for configuring cached HTTP handlers created by `defineCachedHandler`.
-
-Extends [`CacheOptions`](#cacheoptions) (without `transform` and `validate`, which are set internally).
+Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
 
 <!-- /automd-->
 
