@@ -149,11 +149,42 @@ describe("cachedFunction", () => {
     errorSpy.mockRestore();
   });
 
+  it("handles sync cache read errors gracefully", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setStorage({
+      get: () => {
+        throw new Error("sync read error");
+      },
+      set: () => {},
+    });
+
+    const fn = defineCachedFunction(() => "value", { maxAge: 10 });
+    expect(await fn()).toBe("value");
+    expect(errorSpy).toHaveBeenCalledWith("[cache] Cache read error.", expect.any(Error));
+    errorSpy.mockRestore();
+  });
+
   it("handles cache write errors gracefully", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     setStorage({
       get: () => null,
       set: () => Promise.reject(new Error("write error")),
+    });
+
+    const fn = defineCachedFunction(() => "value", { maxAge: 10, swr: false });
+    expect(await fn()).toBe("value");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(errorSpy).toHaveBeenCalledWith("[cache] Cache write error.", expect.any(Error));
+    errorSpy.mockRestore();
+  });
+
+  it("handles sync cache write errors gracefully", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    setStorage({
+      get: () => null,
+      set: () => {
+        throw new Error("sync write error");
+      },
     });
 
     const fn = defineCachedFunction(() => "value", { maxAge: 10, swr: false });

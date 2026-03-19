@@ -54,10 +54,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       .join(":")
       .replace(/:\/$/, ":index");
 
-    let entry: CacheEntry<T> =
-      ((await Promise.resolve(useStorage().get(cacheKey)).catch((error) => {
-        _onError("[cache] Cache read error.", error);
-      })) as CacheEntry<T>) || {};
+    let entry: CacheEntry<T> = {} as CacheEntry<T>;
+    try {
+      entry =
+        ((await useStorage().get(cacheKey)) as CacheEntry<T>) || {};
+    } catch (error) {
+      _onError("[cache] Cache read error.", error);
+    }
 
     // https://github.com/nitrojs/nitro/issues/2160
     if (typeof entry !== "object") {
@@ -137,11 +140,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
               setOpts = { ttl: opts.maxAge };
             }
           }
-          const promise = Promise.resolve(useStorage().set(cacheKey, entry, setOpts)).catch(
-            (error) => {
+          const promise = (async () => {
+            try {
+              await useStorage().set(cacheKey, entry, setOpts);
+            } catch (error) {
               _onError("[cache] Cache write error.", error);
-            },
-          );
+            }
+          })();
           if ((event?.req as any)?.waitUntil) {
             (event!.req as any).waitUntil(promise);
           }

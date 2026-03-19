@@ -2,17 +2,13 @@
 
 ## Bugs
 
-### 1. Shared `_memoryStorage` Map across `createMemoryStorage()` calls
+### ~~1. Shared `_memoryStorage` Map across `createMemoryStorage()` calls~~ (not a bug)
 
-**File:** `src/_storage.ts:10-13`
+Already correct — `Map` is created inside `createMemoryStorage()`, not at module level.
 
-The `Map` is module-level, so every `createMemoryStorage()` call returns a new interface but shares the same backing store. This means `setStorage(createMemoryStorage())` doesn't actually reset the cache — stale entries from previous usage persist.
+### ~~2. Sync storage errors crash instead of being caught~~ (fixed)
 
-### 2. Sync storage errors crash instead of being caught
-
-**File:** `src/cache.ts:48-51`, `src/cache.ts:106-110`
-
-`Promise.resolve(useStorage().get(...)).catch(...)` — if `get()` throws synchronously, the error escapes `Promise.resolve()` in some runtimes. Only rejected promises are caught. Same issue with `set()`.
+Replaced `Promise.resolve(syncCall()).catch(...)` with try/catch + await in `cache.ts` for both `get()` and `set()` calls.
 
 ## Potential Issues
 
