@@ -1,6 +1,18 @@
 # Changelog
 
 
+## v0.1.4
+
+[compare changes](https://github.com/unjs/ocache/compare/v0.1.3...v0.1.4)
+
+### 🔥 Performance
+
+- **cache:** Skip writing to lower tiers on multi-tier cache hit ([4fe0de7](https://github.com/unjs/ocache/commit/4fe0de7))
+
+### ❤️ Contributors
+
+- Pooya Parsa ([@pi0](https://github.com/pi0))
+
 ## v0.1.3
 
 [compare changes](https://github.com/unjs/ocache/compare/v0.1.2...v0.1.3)
