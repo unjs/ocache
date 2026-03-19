@@ -71,12 +71,31 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       entry.expires = Date.now() + ttl;
     }
 
+    const staleTtl =
+      opts.swr && opts.staleMaxAge != null && opts.staleMaxAge >= 0
+        ? opts.staleMaxAge * 1000
+        : undefined;
+
+    // When staleMaxAge is set, an entry is completely dead after maxAge + staleMaxAge
+    const isFullyExpired =
+      staleTtl !== undefined &&
+      ttl > 0 &&
+      Date.now() - (entry.mtime || 0) > ttl + staleTtl;
+
     const expired =
       shouldInvalidateCache ||
       entry.integrity !== integrity ||
       opts.maxAge === 0 ||
       (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
       validate(entry) === false;
+
+    // If fully expired beyond staleMaxAge, clear the stale value so SWR won't serve it
+    if (isFullyExpired) {
+      entry.value = undefined;
+      entry.integrity = undefined;
+      entry.mtime = undefined;
+      entry.expires = undefined;
+    }
 
     const _resolve = async () => {
       const isPending = pending[key];
@@ -109,8 +128,16 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         delete pending[key];
         if (validate(entry) !== false) {
           let setOpts: { ttl?: number } | undefined;
-          if (opts.maxAge != null && opts.maxAge > 0 && !opts.swr /* TODO: respect staleMaxAge */) {
-            setOpts = { ttl: opts.maxAge };
+          if (opts.maxAge != null && opts.maxAge > 0) {
+            if (opts.swr) {
+              // With SWR, storage TTL must cover maxAge + staleMaxAge window
+              if (opts.staleMaxAge != null && opts.staleMaxAge >= 0) {
+                setOpts = { ttl: opts.maxAge + opts.staleMaxAge };
+              }
+              // If staleMaxAge is not set, no storage TTL (entry lives until manually evicted)
+            } else {
+              setOpts = { ttl: opts.maxAge };
+            }
           }
           const promise = Promise.resolve(useStorage().set(cacheKey, entry, setOpts)).catch(
             (error) => {

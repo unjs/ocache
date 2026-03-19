@@ -313,6 +313,107 @@ describe("cachedFunction", () => {
     errorSpy.mockRestore();
   });
 
+  it("SWR with staleMaxAge serves stale within window then expires", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 5));
+        return `v${callCount}`;
+      },
+      { maxAge: 0.01, swr: true, staleMaxAge: 0.02 },
+    );
+
+    // Initial call
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Wait for maxAge to expire but within staleMaxAge window
+    await new Promise((r) => setTimeout(r, 15));
+    // SWR should return stale value while revalidating in background
+    const r2 = await fn();
+    expect(r2).toBe("v1"); // stale value served
+    expect(callCount).toBe(2); // resolver triggered in background
+
+    // Wait for background resolve to finish
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Wait for both maxAge + staleMaxAge to fully expire
+    await new Promise((r) => setTimeout(r, 40));
+    // Now entry is fully expired — SWR should NOT serve stale, must await fresh value
+    const r3 = await fn();
+    expect(r3).toBe("v3");
+    expect(callCount).toBe(3);
+  });
+
+  it("SWR without staleMaxAge serves stale indefinitely", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 5));
+        return `v${callCount}`;
+      },
+      { maxAge: 0.01, swr: true },
+    );
+
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 50));
+    // Even after long time, SWR without staleMaxAge should still serve stale
+    const r2 = await fn();
+    expect(r2).toBe("v1"); // stale value
+    expect(callCount).toBe(2); // revalidating in background
+  });
+
+  it("sets storage TTL to maxAge + staleMaxAge when SWR with staleMaxAge", async () => {
+    const setSpy = vi.fn();
+    setStorage({
+      get: () => null,
+      set: setSpy,
+    });
+
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 60,
+      swr: true,
+      staleMaxAge: 120,
+    });
+    await fn();
+    expect(setSpy).toHaveBeenCalledWith(expect.any(String), expect.any(Object), { ttl: 180 });
+  });
+
+  it("does not set storage TTL when SWR without staleMaxAge", async () => {
+    const setSpy = vi.fn();
+    setStorage({
+      get: () => null,
+      set: setSpy,
+    });
+
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 60,
+      swr: true,
+    });
+    await fn();
+    expect(setSpy).toHaveBeenCalledWith(expect.any(String), expect.any(Object), undefined);
+  });
+
+  it("SWR with staleMaxAge: 0 never serves stale", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        return `v${callCount}`;
+      },
+      { maxAge: 0.01, swr: true, staleMaxAge: 0 },
+    );
+
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 20));
+    // staleMaxAge: 0 means the stale window is zero — entry is fully expired
+    const r2 = await fn();
+    expect(r2).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
   it("waitUntil is used for SWR background revalidation", async () => {
     const waitUntilFn = vi.fn();
     let callCount = 0;
