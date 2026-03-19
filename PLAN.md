@@ -24,13 +24,13 @@ Issues and PRs from [nitrojs/nitro](https://github.com/nitrojs/nitro) that ocach
 - [#2738](https://github.com/nitrojs/nitro/issues/2738) — Clearing cache from handlers doesn't work as intended (browser-side caching — out of scope)
 - [#2611](https://github.com/nitrojs/nitro/pull/2611) — PR: remove cached value when revalidation errors (separate concern)
 
-### SWR (Stale-While-Revalidate) Bugs
+### SWR (Stale-While-Revalidate) Bugs — ✅ Fixed in [#9](https://github.com/unjs/ocache/pull/9)
 
-- [#3110](https://github.com/nitrojs/nitro/issues/3110) — SWR prevents cache expiration (stale entries never expire)
-- [#1992](https://github.com/nitrojs/nitro/issues/1992) — SWR cached routes never update if response is empty or 404
-- [#2606](https://github.com/nitrojs/nitro/pull/2606) — PR: respect `staleMaxAge` option
-- [#3263](https://github.com/nitrojs/nitro/pull/3263) — PR: use `staleMaxAge` to compute cache item TTL
-- [#4060](https://github.com/nitrojs/nitro/pull/4060) — PR: fix SWR cache invalidation
+- [#3110](https://github.com/nitrojs/nitro/issues/3110) — ✅ Storage TTL set to `maxAge + staleMaxAge` when SWR enabled
+- [#1992](https://github.com/nitrojs/nitro/issues/1992) — ✅ Stale entries evicted on failed bg revalidation (throw or invalid result)
+- [#2606](https://github.com/nitrojs/nitro/pull/2606) — ✅ `staleMaxAge` respected at read time (`isFullyExpired` check)
+- [#3263](https://github.com/nitrojs/nitro/pull/3263) — ✅ Storage TTL = `maxAge + staleMaxAge`
+- [#4060](https://github.com/nitrojs/nitro/pull/4060) — ✅ Stale entry evicted from storage on revalidation failure
 
 ### Expired Entries & Memory Leaks
 
