@@ -92,11 +92,14 @@ Cached functions have a `.resolveKey()` method that returns the exact storage ke
 ```ts
 import { defineCachedFunction, useStorage } from "ocache";
 
-const getUser = defineCachedFunction(async (id: string) => db.users.find(id), {
-  name: "getUser",
-  maxAge: 60,
-  getKey: (id: string) => id,
-});
+const getUser = defineCachedFunction(
+  async (id: string) => db.users.find(id),
+  {
+    name: "getUser",
+    maxAge: 60,
+    getKey: (id: string) => id,
+  },
+);
 
 const user = await getUser("user-123");
 
@@ -168,7 +171,6 @@ async function resolveCacheKey<ArgsT extends unknown[] = any[]>(
 Resolves the full cache storage key for given arguments and cache options.
 
 Uses the same key derivation as `defineCachedFunction` internally:
-
 - When `opts.getKey` is provided, it is called with `args` to produce the key segment.
 - Otherwise, `args` are hashed with `ohash` (same default as `defineCachedFunction`).
 
@@ -180,6 +182,7 @@ Pass the same `getKey`, `name`, `group`, and `base` options you use in
 - **`input`** — Object with `options` (cache options) and optional `args` (function arguments).
 
 **Returns:** — The full storage key string.
+
 
 **Example:**
 
@@ -213,6 +216,36 @@ sets `cache-control`, `etag`, and `last-modified` headers, and handles
 - **`opts`** — Cache and HTTP-specific configuration options.
 
 **Returns:** — A new event handler that serves cached responses when available.
+
+---
+
+### `createMemoryStorage`
+
+```ts
+function createMemoryStorage(): StorageInterface
+```
+
+Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
+
+---
+
+### `useStorage`
+
+```ts
+function useStorage(): StorageInterface
+```
+
+Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
+
+---
+
+### `setStorage`
+
+```ts
+function setStorage(storage: StorageInterface): void
+```
+
+Sets a custom storage implementation to be used by all cached functions.
 
 ---
 
@@ -300,36 +333,6 @@ interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omi
 Options for configuring cached HTTP handlers created by `defineCachedHandler`.
 
 Extends [`CacheOptions`](#cacheoptions) (without `transform` and `validate`, which are set internally).
-
----
-
-### `createMemoryStorage`
-
-```ts
-function createMemoryStorage(): StorageInterface;
-```
-
-Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
-
----
-
-### `useStorage`
-
-```ts
-function useStorage(): StorageInterface;
-```
-
-Returns the current storage instance. If none has been set via `setStorage`, lazily initializes an in-memory storage.
-
----
-
-### `setStorage`
-
-```ts
-function setStorage(storage: StorageInterface): void;
-```
-
-Sets a custom storage implementation to be used by all cached functions.
 
 <!-- /automd-->
 
