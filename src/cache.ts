@@ -78,9 +78,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     // When staleMaxAge is set, an entry is completely dead after maxAge + staleMaxAge
     const isFullyExpired =
-      staleTtl !== undefined &&
-      ttl > 0 &&
-      Date.now() - (entry.mtime || 0) > ttl + staleTtl;
+      staleTtl !== undefined && ttl > 0 && Date.now() - (entry.mtime || 0) > ttl + staleTtl;
 
     const expired =
       shouldInvalidateCache ||
