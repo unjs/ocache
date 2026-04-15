@@ -137,9 +137,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           const evictPromise = _evictFromStorage(key, bases, group, name).catch((error) => {
             _onError("[cache] Cache eviction error.", error);
           });
-          if (event?.req?.waitUntil) {
-            event.req.waitUntil(evictPromise);
-          }
+          event?.req.waitUntil?.(evictPromise);
         }
         // Re-throw error to make sure the caller knows the task failed.
         throw error;
@@ -178,17 +176,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
               _onError("[cache] Cache write error.", error);
             }
           })();
-          if (event?.req?.waitUntil) {
-            event.req.waitUntil(promise);
-          }
+          event?.req.waitUntil?.(promise);
         } else {
           // Revalidation produced an invalid result — evict stale entry from storage
           const evictPromise = _evictFromStorage(key, bases, group, name).catch((error) => {
             _onError("[cache] Cache eviction error.", error);
           });
-          if (event?.req?.waitUntil) {
-            event.req.waitUntil(evictPromise);
-          }
+          event?.req.waitUntil?.(evictPromise);
         }
       }
     };
@@ -197,8 +191,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     if (entry.value === undefined) {
       await _resolvePromise;
-    } else if (expired && event?.req?.waitUntil) {
-      event.req.waitUntil(_resolvePromise);
+    } else if (expired) {
+      event?.req.waitUntil?.(_resolvePromise);
     }
 
     if (opts.swr && validate(entry) !== false) {
