@@ -42,7 +42,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const name = opts.name || fn.name || "_";
   const integrity = opts.integrity || hash([fn, _integrityOpts(opts)]);
   const validate = opts.validate || ((entry) => entry.value !== undefined);
-  const storage = opts.storage ?? useStorage();
+  const getStorage = () => opts.storage ?? useStorage();
   const _onError = (context: string, error: unknown) => {
     if (opts.onError) {
       opts.onError(error);
@@ -66,7 +66,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     try {
       // Multi-tier read: try each base prefix in order, use first hit
       for (let i = 0; i < bases.length; i++) {
-        const result = (await storage.get(
+        const result = (await getStorage().get(
           _buildCacheKey(key, { group, name }, bases[i]!),
         )) as CacheEntry<T> | null;
         if (result) {
@@ -135,7 +135,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (!isPending) {
           delete pending[key];
           // Evict stale entry from storage so SWR doesn't keep serving it
-          _evictFromStorage(key, bases, group, name, storage);
+          _evictFromStorage(key, bases, group, name, getStorage());
         }
         // Re-throw error to make sure the caller knows the task failed.
         throw error;
@@ -167,7 +167,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             try {
               await Promise.all(
                 writeBases.map((b) =>
-                  storage.set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
+                  getStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
                 ),
               );
             } catch (error) {
@@ -179,7 +179,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           }
         } else {
           // Revalidation produced an invalid result — evict stale entry from storage
-          _evictFromStorage(key, bases, group, name, storage);
+          _evictFromStorage(key, bases, group, name, getStorage());
         }
       }
     };
