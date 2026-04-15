@@ -1548,8 +1548,18 @@ describe("per-function storage", () => {
     const s1 = createMemoryStorage();
     const s2 = createMemoryStorage();
     let count = 0;
-    const fn1 = defineCachedFunction(() => ++count, { maxAge: 60, name: "iso", getKey: () => "k", storage: s1 });
-    const fn2 = defineCachedFunction(() => ++count, { maxAge: 60, name: "iso", getKey: () => "k", storage: s2 });
+    const fn1 = defineCachedFunction(() => ++count, {
+      maxAge: 60,
+      name: "iso",
+      getKey: () => "k",
+      storage: s1,
+    });
+    const fn2 = defineCachedFunction(() => ++count, {
+      maxAge: 60,
+      name: "iso",
+      getKey: () => "k",
+      storage: s2,
+    });
 
     expect(await fn1()).toBe(1);
     // s2 is empty — does not find s1's cached value
@@ -1577,7 +1587,13 @@ describe("per-function storage", () => {
   it("standalone invalidateCache uses options.storage", async () => {
     const custom = createMemoryStorage();
     let count = 0;
-    const opts = { maxAge: 60, swr: false, name: "inv", getKey: () => "k", storage: custom } as const;
+    const opts = {
+      maxAge: 60,
+      swr: false,
+      name: "inv",
+      getKey: () => "k",
+      storage: custom,
+    } as const;
     const fn = defineCachedFunction(() => ++count, opts);
 
     expect(await fn()).toBe(1);

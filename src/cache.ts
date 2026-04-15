@@ -321,14 +321,22 @@ function _normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {
   return [base ?? "/cache"];
 }
 
-function _evictFromStorage(key: string, bases: string[], group: string, name: string, storage: StorageInterface) {
+function _evictFromStorage(
+  key: string,
+  bases: string[],
+  group: string,
+  name: string,
+  storage: StorageInterface,
+) {
   for (const b of bases) {
     storage.set(_buildCacheKey(key, { group, name }, b), null);
   }
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
-function _integrityOpts(opts: CacheOptions): Omit<CacheOptions, "base" | "group" | "name" | "storage"> {
+function _integrityOpts(
+  opts: CacheOptions,
+): Omit<CacheOptions, "base" | "group" | "name" | "storage"> {
   const { base: _, group: _g, name: _n, storage: _s, ...rest } = opts;
   return rest;
 }
