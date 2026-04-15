@@ -134,7 +134,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (!isPending) {
           delete pending[key];
           // Evict stale entry from storage so SWR doesn't keep serving it
-          _evictFromStorage(key, bases, group, name);
+          const evictPromise = _evictFromStorage(key, bases, group, name).catch((error) => {
+            _onError("[cache] Cache eviction error.", error);
+          });
+          if (event?.req?.waitUntil) {
+            event.req.waitUntil(evictPromise);
+          }
         }
         // Re-throw error to make sure the caller knows the task failed.
         throw error;
@@ -173,12 +178,17 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
               _onError("[cache] Cache write error.", error);
             }
           })();
-          if ((event?.req as any)?.waitUntil) {
-            (event!.req as any).waitUntil(promise);
+          if (event?.req?.waitUntil) {
+            event.req.waitUntil(promise);
           }
         } else {
           // Revalidation produced an invalid result — evict stale entry from storage
-          _evictFromStorage(key, bases, group, name);
+          const evictPromise = _evictFromStorage(key, bases, group, name).catch((error) => {
+            _onError("[cache] Cache eviction error.", error);
+          });
+          if (event?.req?.waitUntil) {
+            event.req.waitUntil(evictPromise);
+          }
         }
       }
     };
@@ -187,8 +197,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     if (entry.value === undefined) {
       await _resolvePromise;
-    } else if (expired && (event?.req as any)?.waitUntil) {
-      (event!.req as any).waitUntil(_resolvePromise);
+    } else if (expired && event?.req?.waitUntil) {
+      event.req.waitUntil(_resolvePromise);
     }
 
     if (opts.swr && validate(entry) !== false) {
@@ -321,9 +331,9 @@ function _normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {
 }
 
 function _evictFromStorage(key: string, bases: string[], group: string, name: string) {
-  for (const b of bases) {
-    useStorage().set(_buildCacheKey(key, { group, name }, b), null);
-  }
+  return Promise.all(
+    bases.map((b) => useStorage().set(_buildCacheKey(key, { group, name }, b), null)),
+  );
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
