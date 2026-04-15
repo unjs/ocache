@@ -205,8 +205,8 @@ function escapeKey(key: string | string[]) {
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
 function _integrityOpts<E extends HTTPEvent>(
   opts: CachedEventHandlerOptions<E>,
-): Omit<CachedEventHandlerOptions<E>, "base" | "group" | "name"> {
-  const { base: _, group: _g, name: _n, ...rest } = opts;
+): Omit<CachedEventHandlerOptions<E>, "base" | "group" | "name" | "storage"> {
+  const { base: _, group: _g, name: _n, storage: _s, ...rest } = opts;
   return rest;
 }
 
