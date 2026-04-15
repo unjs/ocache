@@ -1,5 +1,5 @@
 import { hash } from "ohash";
-import { useStorage } from "./storage.ts";
+import { useStorage, type StorageInterface } from "./storage.ts";
 
 import type { HTTPEvent, CacheEntry, CacheOptions } from "./types.ts";
 
@@ -42,6 +42,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const name = opts.name || fn.name || "_";
   const integrity = opts.integrity || hash([fn, _integrityOpts(opts)]);
   const validate = opts.validate || ((entry) => entry.value !== undefined);
+  const storage = opts.storage ?? useStorage();
   const _onError = (context: string, error: unknown) => {
     if (opts.onError) {
       opts.onError(error);
@@ -65,7 +66,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     try {
       // Multi-tier read: try each base prefix in order, use first hit
       for (let i = 0; i < bases.length; i++) {
-        const result = (await useStorage().get(
+        const result = (await storage.get(
           _buildCacheKey(key, { group, name }, bases[i]!),
         )) as CacheEntry<T> | null;
         if (result) {
@@ -134,7 +135,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (!isPending) {
           delete pending[key];
           // Evict stale entry from storage so SWR doesn't keep serving it
-          _evictFromStorage(key, bases, group, name);
+          _evictFromStorage(key, bases, group, name, storage);
         }
         // Re-throw error to make sure the caller knows the task failed.
         throw error;
@@ -166,7 +167,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             try {
               await Promise.all(
                 writeBases.map((b) =>
-                  useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
+                  storage.set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
                 ),
               );
             } catch (error) {
@@ -178,7 +179,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           }
         } else {
           // Revalidation produced an invalid result — evict stale entry from storage
-          _evictFromStorage(key, bases, group, name);
+          _evictFromStorage(key, bases, group, name, storage);
         }
       }
     };
@@ -286,12 +287,12 @@ export async function resolveCacheKeys<ArgsT extends unknown[] = any[]>(
  */
 export async function invalidateCache<ArgsT extends unknown[] = any[]>(
   input: {
-    options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey">;
+    options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey" | "storage">;
     args?: ArgsT;
   } = {},
 ): Promise<void> {
   const keys = await resolveCacheKeys(input);
-  const storage = useStorage();
+  const storage = input.options?.storage ?? useStorage();
   await Promise.all(keys.map((key) => storage.set(key, null)));
 }
 
@@ -320,14 +321,14 @@ function _normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {
   return [base ?? "/cache"];
 }
 
-function _evictFromStorage(key: string, bases: string[], group: string, name: string) {
+function _evictFromStorage(key: string, bases: string[], group: string, name: string, storage: StorageInterface) {
   for (const b of bases) {
-    useStorage().set(_buildCacheKey(key, { group, name }, b), null);
+    storage.set(_buildCacheKey(key, { group, name }, b), null);
   }
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
-function _integrityOpts(opts: CacheOptions): Omit<CacheOptions, "base" | "group" | "name"> {
-  const { base: _, group: _g, name: _n, ...rest } = opts;
+function _integrityOpts(opts: CacheOptions): Omit<CacheOptions, "base" | "group" | "name" | "storage"> {
+  const { base: _, group: _g, name: _n, storage: _s, ...rest } = opts;
   return rest;
 }

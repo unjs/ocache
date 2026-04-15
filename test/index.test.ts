@@ -1542,3 +1542,85 @@ describe("multi-tier base", () => {
     expect(callCount).toBe(0);
   });
 });
+
+describe("per-function storage", () => {
+  it("isolates two functions with different storage instances", async () => {
+    const s1 = createMemoryStorage();
+    const s2 = createMemoryStorage();
+    let count = 0;
+    const fn1 = defineCachedFunction(() => ++count, { maxAge: 60, name: "iso", getKey: () => "k", storage: s1 });
+    const fn2 = defineCachedFunction(() => ++count, { maxAge: 60, name: "iso", getKey: () => "k", storage: s2 });
+
+    expect(await fn1()).toBe(1);
+    // s2 is empty — does not find s1's cached value
+    expect(await fn2()).toBe(2);
+    // Both should now be cached in their own stores
+    expect(await fn1()).toBe(1);
+    expect(await fn2()).toBe(2);
+  });
+
+  it("fn.invalidate() targets per-function storage", async () => {
+    const custom = createMemoryStorage();
+    let count = 0;
+    const fn = defineCachedFunction(() => ++count, {
+      maxAge: 60,
+      swr: false,
+      getKey: () => "k",
+      storage: custom,
+    });
+
+    expect(await fn()).toBe(1);
+    await fn.invalidate();
+    expect(await fn()).toBe(2);
+  });
+
+  it("standalone invalidateCache uses options.storage", async () => {
+    const custom = createMemoryStorage();
+    let count = 0;
+    const opts = { maxAge: 60, swr: false, name: "inv", getKey: () => "k", storage: custom } as const;
+    const fn = defineCachedFunction(() => ++count, opts);
+
+    expect(await fn()).toBe(1);
+    await invalidateCache({ options: opts });
+    expect(await fn()).toBe(2);
+  });
+
+  it("per-function storage does not write to global storage", async () => {
+    const custom = createMemoryStorage();
+    const globalGet = vi.fn().mockReturnValue(null);
+    const globalSet = vi.fn();
+    setStorage({ get: globalGet, set: globalSet });
+
+    const fn = defineCachedFunction(() => "v", { maxAge: 60, storage: custom });
+    await fn();
+
+    expect(globalGet).not.toHaveBeenCalled();
+    expect(globalSet).not.toHaveBeenCalled();
+  });
+
+  it("defineCachedHandler propagates storage option", async () => {
+    const custom = createMemoryStorage();
+    let callCount = 0;
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 60, storage: custom },
+    );
+
+    const event = { req: new Request("http://localhost/storage-test") };
+    await handler(event);
+    await handler(event);
+
+    expect(callCount).toBe(1);
+
+    // Global storage was not touched
+    const keys = await resolveCacheKeys({
+      options: { name: "_", group: "handlers", base: "/cache" },
+    });
+    for (const key of keys) {
+      expect(await useStorage().get(key)).toBeNull();
+    }
+  });
+});

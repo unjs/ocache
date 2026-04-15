@@ -1,3 +1,5 @@
+import type { StorageInterface } from "./storage.ts";
+
 /**
  * Extended `Request` interface with optional `waitUntil` for background tasks.
  *
@@ -68,6 +70,8 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   base?: string | string[];
   /** Optional error handler called for all cache-related errors (read, write, SWR, malformed data). */
   onError?: (error: unknown) => void;
+  /** Custom storage backend for this cached function. Falls back to the global storage (`useStorage()`) when not provided. */
+  storage?: StorageInterface;
 }
 
 /**
