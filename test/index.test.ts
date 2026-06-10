@@ -222,6 +222,50 @@ describe("cachedFunction", () => {
     errorSpy.mockRestore();
   });
 
+  it("handles cache eviction errors gracefully", async () => {
+    const errors: unknown[] = [];
+    setStorage({
+      get: () => null,
+      set: () => Promise.reject(new Error("evict error")),
+    });
+
+    const fn = defineCachedFunction(
+      async () => {
+        throw new Error("resolver error");
+      },
+      { maxAge: 10, getKey: () => "evict-key", onError: (e) => errors.push(e) },
+    );
+
+    // Original resolver error must propagate, not the eviction error
+    await expect(fn()).rejects.toThrow("resolver error");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("evict error");
+  });
+
+  it("handles sync cache eviction errors gracefully", async () => {
+    const errors: unknown[] = [];
+    setStorage({
+      get: () => null,
+      set: () => {
+        throw new Error("sync evict error");
+      },
+    });
+
+    const fn = defineCachedFunction(
+      async () => {
+        throw new Error("resolver error");
+      },
+      { maxAge: 10, getKey: () => "evict-key", onError: (e) => errors.push(e) },
+    );
+
+    // A sync throw from storage.set must not mask the original resolver error
+    await expect(fn()).rejects.toThrow("resolver error");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(errors).toHaveLength(1);
+    expect((errors[0] as Error).message).toBe("sync evict error");
+  });
+
   it("handles malformed cache data", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     setStorage({
