@@ -24,7 +24,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Returned cached function has `.resolveKeys(...args)` and `.invalidate(...args)` methods
 - `resolveCacheKeys({ options, args })` — standalone helper to resolve storage keys
 - `invalidateCache({ options, args })` — standalone helper to remove cached entries across all base prefixes
-- Uses `StorageInterface` via `useStorage()` for persistence
+- Uses `StorageInterface` via `opts.storage` (per-function) or `useStorage()` (global fallback) for persistence
 - Supports `waitUntil` on `event.req` (srvx/Cloudflare ServerRequest pattern) for background cache writes
 
 ### HTTP handler caching (`http.ts`)
@@ -45,13 +45,14 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Setting a nullish value (`null`/`undefined`) via `set` deletes the entry instead of storing dead weight
 - `createMemoryStorage()` — in-memory Map-based implementation with TTL expiry
 - `useStorage()` / `setStorage()` — global singleton, lazy-inits to memory storage
+- Per-function storage: pass `storage` in `CacheOptions` to override the global singleton for a specific cached function/handler; `opts.storage` takes precedence over `useStorage()`
 
 ### Types (`types.ts`)
 
 - `HTTPEvent` — `{ req: Request; url?: URL }` (url falls back to `new URL(req.url)`)
 - `EventHandler<E>` — `(event: E) => unknown | Promise<unknown>` (generic, defaults to HTTPEvent)
 - `CacheEntry<T>` — stored cache entry with value, expires, mtime, integrity
-- `CacheOptions<T>` — maxAge, swr, staleMaxAge, base (string | string[] for multi-tier), getKey, validate, transform, etc.
+- `CacheOptions<T>` — maxAge, swr, staleMaxAge, base (string | string[] for multi-tier), getKey, validate, transform, storage (per-function StorageInterface), etc.
 - `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
 - `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
 - `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
@@ -74,4 +75,4 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Storage methods are `get`/`set` (not `getItem`/`setItem`)
 - `base` supports `string | string[]` — multi-tier: reads try each prefix in order (first hit wins), writes go to all prefixes
 - Default cache key group is `"functions"` (cache.ts) / `"handlers"` (http.ts) — no `ocache/` prefix
-- Integrity hash excludes `base`, `group`, `name` (storage-location fields) so entries remain valid across different base configurations
+- Integrity hash excludes `base`, `group`, `name`, `storage` (storage-location fields) so entries remain valid across different storage configurations

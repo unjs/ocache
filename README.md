@@ -47,6 +47,7 @@ const cached = defineCachedFunction(fn, {
   validate: (entry) => entry.value !== undefined, // Custom validation
   transform: (entry) => entry.value, // Transform before returning
   onError: (error) => console.error(error), // Error handler
+  storage: myStorage, // Per-function storage (falls back to global setStorage())
 });
 ```
 
@@ -147,10 +148,9 @@ This is useful for layered cache setups (e.g., fast local cache + shared remote 
 
 ### Custom Storage
 
-By default, ocache uses an in-memory `Map`-based storage. You can provide a custom storage implementation:
+By default, ocache uses an in-memory `Map`-based storage. You can provide a custom storage implementation via `StorageInterface`:
 
 ```ts
-import { setStorage } from "ocache";
 import type { StorageInterface } from "ocache";
 
 const redisStorage: StorageInterface = {
@@ -166,9 +166,30 @@ const redisStorage: StorageInterface = {
     await redis.set(key, JSON.stringify(value), opts?.ttl ? { EX: opts.ttl } : undefined);
   },
 };
+```
+
+#### Global storage
+
+Use `setStorage` to set a storage backend for all cached functions at once:
+
+```ts
+import { setStorage } from "ocache";
 
 setStorage(redisStorage);
 ```
+
+#### Per-function storage
+
+Pass a `storage` option directly to `defineCachedFunction` or `defineCachedHandler` to use a different backend for a specific function:
+
+```ts
+const cachedFetch = defineCachedFunction(fetchData, {
+  maxAge: 60,
+  storage: redisStorage,
+});
+```
+
+This takes precedence over the global storage.
 
 ## API
 
