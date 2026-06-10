@@ -69,7 +69,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 ## Design Decisions
 
 - No h3/srvx/unstorage dependency — fully standalone
-- `waitUntil` accessed via `(event.req as any).waitUntil` — runtime-specific (srvx ServerRequest, Cloudflare), not typed on `Request`
+- `waitUntil` is typed as optional on `ServerRequest` (`event.req`) — runtime-specific (srvx ServerRequest, Cloudflare), accessed via `event?.req.waitUntil?.(promise)`
 - `event.url` is optional — `http.ts` falls back to `new URL(event.req.url)`
 - Storage methods are `get`/`set` (not `getItem`/`setItem`)
 - `base` supports `string | string[]` — multi-tier: reads try each prefix in order (first hit wins), writes go to all prefixes

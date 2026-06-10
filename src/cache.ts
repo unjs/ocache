@@ -324,8 +324,8 @@ function _normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {
   return [base ?? "/cache"];
 }
 
-function _evictFromStorage(key: string, bases: string[], group: string, name: string) {
-  return Promise.all(
+async function _evictFromStorage(key: string, bases: string[], group: string, name: string) {
+  await Promise.all(
     bases.map((b) => useStorage().set(_buildCacheKey(key, { group, name }, b), null)),
   );
 }
