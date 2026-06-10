@@ -126,6 +126,26 @@ const keys = await getUser.resolveKeys("user-123");
 // ["/cache:functions:getUser:user-123.json"]
 ```
 
+### Cache Expiration (SWR refresh)
+
+While `.invalidate()` removes an entry entirely (the next call must wait for a fresh value), `.expire()` only marks it as stale. With SWR enabled, stale values keep being served — still bounded by the originally configured `staleMaxAge` window — and the next access triggers a background refresh:
+
+```ts
+// Mark the entry stale: next call serves the stale value and refetches in the background
+await getUser.expire("user-123");
+```
+
+The standalone `expireCache()` works like `invalidateCache()` — pass the same `maxAge` / `swr` / `staleMaxAge` options you cache with so the remaining storage TTL is preserved:
+
+```ts
+import { expireCache } from "ocache";
+
+await expireCache({
+  options: { name: "getUser", getKey: (id: string) => id, maxAge: 60, staleMaxAge: 300 },
+  args: ["user-123"],
+});
+```
+
 ### Multi-tier Caching
 
 Use an array of `base` prefixes to enable multi-tier caching. On read, each prefix is tried in order and the first hit is used. On write, the entry is written to all prefixes:
@@ -243,6 +263,41 @@ type EventHandler<E extends HTTPEvent = HTTPEvent> = (
 ```
 
 Handler function that receives an [`HTTPEvent`](#httpevent) and returns a response value.
+
+---
+
+### `expireCache`
+
+```ts
+async function expireCache<ArgsT extends unknown[] = any[]>(
+  input:
+```
+
+Expires cached entries for given arguments and cache options across all base prefixes,
+without removing them.
+
+Unlike [`invalidateCache`](#invalidatecache) (which removes entries entirely), expired entries keep
+serving the stale value with SWR — still bounded by the originally configured
+`staleMaxAge` window — while the next access triggers a background refresh.
+Without SWR, the next call re-resolves before returning.
+
+Uses the same key derivation as `defineCachedFunction` / `resolveCacheKeys`.
+Pass the same `maxAge` / `swr` / `staleMaxAge` options you cache with so the
+remaining storage TTL is preserved.
+
+**Parameters:**
+
+- **`input`** — Object with `options` (cache options) and optional `args` (function arguments).
+
+**Example:**
+
+```ts
+// Mark a cached entry for background refresh on next access
+await expireCache({
+  options: { name: "fetchUser", getKey: (id: string) => id, maxAge: 60, staleMaxAge: 300 },
+  args: ["user-123"],
+});
+```
 
 ---
 

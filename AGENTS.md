@@ -21,9 +21,10 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 
 - `defineCachedFunction(fn, opts)` — wraps any function with caching (SWR, TTL, integrity checks, deduplication of in-flight requests)
 - `cachedFunction(fn, opts)` — alias for `defineCachedFunction`
-- Returned cached function has `.resolveKeys(...args)` and `.invalidate(...args)` methods
+- Returned cached function has `.resolveKeys(...args)`, `.invalidate(...args)`, and `.expire(...args)` methods
 - `resolveCacheKeys({ options, args })` — standalone helper to resolve storage keys
 - `invalidateCache({ options, args })` — standalone helper to remove cached entries across all base prefixes
+- `expireCache({ options, args })` — standalone helper to mark entries stale (`CacheEntry.stale`) without removing them: SWR keeps serving stale within the original `staleMaxAge` window while the next access triggers a background refresh
 - Uses `StorageInterface` via `useStorage()` for persistence
 - Supports `waitUntil` on `event.req` (srvx/Cloudflare ServerRequest pattern) for background cache writes
 

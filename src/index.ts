@@ -3,6 +3,7 @@ export {
   cachedFunction,
   resolveCacheKeys,
   invalidateCache,
+  expireCache,
   type CachedFunction,
 } from "./cache.ts";
 

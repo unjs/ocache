@@ -5,6 +5,7 @@ import {
   defineCachedHandler,
   resolveCacheKeys,
   invalidateCache,
+  expireCache,
   createMemoryStorage,
   setStorage,
   useStorage,
@@ -1428,6 +1429,146 @@ describe("invalidateCache", () => {
     await invalidateCache({
       options: { name: "nonexistent", getKey: () => "nope" },
     });
+  });
+});
+
+describe("expireCache", () => {
+  it("SWR serves stale value and refetches in background after expire", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 10));
+        return `v${callCount}`;
+      },
+      { maxAge: 60, swr: true, staleMaxAge: 60, name: "myFn", getKey: () => "k" },
+    );
+
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Entry is well within maxAge — expire it immediately
+    await fn.expire();
+
+    // Stale value is still served while the refetch runs in the background
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(callCount).toBe(2);
+
+    // Background refresh completed — fresh value is now cached
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("clears the stale flag after revalidation", async () => {
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 60,
+      name: "myFn",
+      getKey: () => "k",
+    });
+
+    await fn();
+    await fn.expire();
+    await fn(); // triggers revalidation (sync resolver updates the entry)
+
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.stale).toBeUndefined();
+  });
+
+  it("swr=false re-resolves before returning after expire", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return `v${callCount}`;
+      },
+      { maxAge: 60, swr: false, name: "myFn", getKey: () => "k" },
+    );
+
+    expect(await fn()).toBe("v1");
+    await fn.expire();
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("does not extend the original staleMaxAge window", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 5));
+        return `v${callCount}`;
+      },
+      { maxAge: 0.01, swr: true, staleMaxAge: 0.02, name: "myFn", getKey: () => "k" },
+    );
+
+    expect(await fn()).toBe("v1");
+    await fn.expire();
+
+    // Wait beyond maxAge + staleMaxAge — entry is fully expired, stale must NOT be served
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("preserves remaining storage TTL when expiring", async () => {
+    const opts = { maxAge: 60, swr: true, staleMaxAge: 120, name: "myFn", getKey: () => "k" };
+    const fn = defineCachedFunction(() => "value", opts);
+    await fn();
+
+    const storage = useStorage();
+    const setSpy = vi.spyOn(storage, "set");
+
+    await fn.expire();
+    expect(setSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ stale: true, value: "value" }),
+      { ttl: 180 },
+    );
+  });
+
+  it("expires across all base prefixes (multi-tier)", async () => {
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 60,
+      base: ["/tier1", "/tier2"],
+      name: "myFn",
+      getKey: () => "k",
+    });
+
+    await fn();
+    await fn.expire();
+
+    const storage = useStorage();
+    const tier1 = (await storage.get("/tier1:functions:myFn:k.json")) as any;
+    const tier2 = (await storage.get("/tier2:functions:myFn:k.json")) as any;
+    expect(tier1.stale).toBe(true);
+    expect(tier1.value).toBe("value");
+    expect(tier2.stale).toBe(true);
+  });
+
+  it("standalone expireCache works with same options", async () => {
+    let callCount = 0;
+    const opts = { maxAge: 60, name: "myFn", getKey: () => "k", swr: false } as const;
+    const fn = defineCachedFunction(() => {
+      callCount++;
+      return `v${callCount}`;
+    }, opts);
+
+    expect(await fn()).toBe("v1");
+
+    await expireCache({ options: opts });
+
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("expiring non-existent key is a no-op", async () => {
+    // Should not throw and should not create an entry
+    await expireCache({
+      options: { name: "nonexistent", getKey: () => "nope" },
+    });
+    expect(await useStorage().get("/cache:functions:nonexistent:nope.json")).toBeNull();
   });
 });
 
