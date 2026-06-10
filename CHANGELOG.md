@@ -1,6 +1,28 @@
 # Changelog
 
 
+## v0.1.5
+
+[compare changes](https://github.com/unjs/ocache/compare/v0.1.4...v0.1.5)
+
+### 🚀 Enhancements
+
+- **cache:** Add `expireCache` and `.expire()` for SWR-friendly invalidation ([#23](https://github.com/unjs/ocache/pull/23))
+
+### 🩹 Fixes
+
+- **cache:** Handle eviction promise rejections and use waitUntil ([#16](https://github.com/unjs/ocache/pull/16))
+
+### 🏡 Chore
+
+- Update deps ([b9ac4b9](https://github.com/unjs/ocache/commit/b9ac4b9))
+
+### ❤️ Contributors
+
+- Pi0x <x@pi0.io>
+- Balázs Németh ([@zsilbi](https://github.com/zsilbi))
+- Pooya Parsa ([@pi0](https://github.com/pi0))
+
 ## v0.1.4
 
 [compare changes](https://github.com/unjs/ocache/compare/v0.1.3...v0.1.4)
