@@ -36,6 +36,8 @@ export interface CacheEntry<T = any> {
   mtime?: number;
   /** Hash used to detect when the cached function or options have changed. */
   integrity?: string;
+  /** When `true`, the entry is treated as expired on next access (set by `expireCache`). Cleared after a successful revalidation. */
+  stale?: boolean;
 }
 
 /**

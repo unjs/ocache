@@ -20,6 +20,8 @@ export type CachedFunction<T, ArgsT extends unknown[]> = {
   resolveKeys: (...args: ArgsT) => Promise<string[]>;
   /** Invalidates (removes) cached entries for the given arguments across all base prefixes. */
   invalidate: (...args: ArgsT) => Promise<void>;
+  /** Marks cached entries as stale across all base prefixes. With SWR, stale values are still served (within `staleMaxAge`) while the next access triggers a background refresh. */
+  expire: (...args: ArgsT) => Promise<void>;
 };
 
 /**
@@ -101,6 +103,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     const expired =
       shouldInvalidateCache ||
+      entry.stale === true ||
       entry.integrity !== integrity ||
       opts.maxAge === 0 ||
       (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
@@ -147,6 +150,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         // Update mtime, integrity + validate and set the value in cache only the first time the request is made.
         entry.mtime = Date.now();
         entry.integrity = integrity;
+        entry.stale = undefined;
         delete pending[key];
         if (validate(entry) !== false) {
           let setOpts: { ttl?: number } | undefined;
@@ -227,6 +231,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
   cachedFn.resolveKeys = (...args: ArgsT) => resolveCacheKeys({ options: opts, args });
   cachedFn.invalidate = (...args: ArgsT) => invalidateCache({ options: opts, args });
+  cachedFn.expire = (...args: ArgsT) => expireCache({ options: opts, args });
 
   return cachedFn;
 }
@@ -299,6 +304,53 @@ export async function invalidateCache<ArgsT extends unknown[] = any[]>(
   await Promise.all(keys.map((key) => storage.set(key, null)));
 }
 
+/**
+ * Expires cached entries for given arguments and cache options across all base prefixes,
+ * without removing them.
+ *
+ * Unlike {@link invalidateCache} (which removes entries entirely), expired entries keep
+ * serving the stale value with SWR — still bounded by the originally configured
+ * `staleMaxAge` window — while the next access triggers a background refresh.
+ * Without SWR, the next call re-resolves before returning.
+ *
+ * Uses the same key derivation as `defineCachedFunction` / `resolveCacheKeys`.
+ * Pass the same `maxAge` / `swr` / `staleMaxAge` options you cache with so the
+ * remaining storage TTL is preserved.
+ *
+ * @param input - Object with `options` (cache options) and optional `args` (function arguments).
+ *
+ * @example
+ * ```ts
+ * // Mark a cached entry for background refresh on next access
+ * await expireCache({
+ *   options: { name: "fetchUser", getKey: (id: string) => id, maxAge: 60, staleMaxAge: 300 },
+ *   args: ["user-123"],
+ * });
+ * ```
+ */
+export async function expireCache<ArgsT extends unknown[] = any[]>(
+  input: {
+    options?: Pick<
+      CacheOptions<any, ArgsT>,
+      "base" | "group" | "name" | "getKey" | "maxAge" | "swr" | "staleMaxAge"
+    >;
+    args?: ArgsT;
+  } = {},
+): Promise<void> {
+  const opts = input.options ?? {};
+  const keys = await resolveCacheKeys(input);
+  const storage = useStorage();
+  await Promise.all(
+    keys.map(async (key) => {
+      const entry = (await storage.get(key)) as CacheEntry | null;
+      if (!entry || typeof entry !== "object" || entry.value === undefined) {
+        return;
+      }
+      await storage.set(key, { ...entry, stale: true }, _remainingTtl(entry, opts));
+    }),
+  );
+}
+
 // --- Internal helpers ---
 
 function isHTTPEvent(input: unknown): input is HTTPEvent {
@@ -328,6 +380,27 @@ async function _evictFromStorage(key: string, bases: string[], group: string, na
   await Promise.all(
     bases.map((b) => useStorage().set(_buildCacheKey(key, { group, name }, b), null)),
   );
+}
+
+/** Computes remaining storage TTL (seconds) so expiring an entry doesn't extend its original lifetime. */
+function _remainingTtl(
+  entry: CacheEntry,
+  opts: Pick<CacheOptions, "maxAge" | "swr" | "staleMaxAge">,
+): { ttl: number } | undefined {
+  if (!entry.mtime || opts.maxAge == null || opts.maxAge <= 0) {
+    return undefined;
+  }
+  // Mirrors the TTL window used on cache writes (see `get` in defineCachedFunction)
+  const ttlWindow =
+    opts.swr === false
+      ? opts.maxAge
+      : opts.staleMaxAge != null && opts.staleMaxAge >= 0
+        ? opts.maxAge + opts.staleMaxAge
+        : undefined;
+  if (ttlWindow === undefined) {
+    return undefined;
+  }
+  return { ttl: Math.max(Math.ceil((entry.mtime + ttlWindow * 1000 - Date.now()) / 1000), 1) };
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
