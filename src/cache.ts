@@ -1,7 +1,7 @@
 import { hash } from "ohash";
 import { useStorage } from "./storage.ts";
 
-import type { HTTPEvent, CacheEntry, CacheOptions } from "./types.ts";
+import type { HTTPEvent, CacheEntry, CacheEvent, CacheSetReason, CacheOptions } from "./types.ts";
 
 function defaultCacheOptions() {
   return {
@@ -51,6 +51,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       console.error(context, error);
     }
   };
+  const _emit = (event: CacheEvent<T>) => {
+    try {
+      opts.onCacheEvent!(event);
+    } catch (error) {
+      _onError("[cache] onCacheEvent handler error.", error);
+    }
+  };
 
   async function get(
     key: string,
@@ -60,6 +67,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   ): Promise<ResolvedCacheEntry<T>> {
     // Use extension for key to avoid conflicting with parent namespace (foo/bar and foo/bar/baz)
     const bases = _normalizeBases(opts.base);
+
+    const _hasHook = !!opts.onCacheEvent;
+    const displayName = _hasHook ? _eventName(event, name) : "";
 
     let entry: CacheEntry<T> = {} as CacheEntry<T>;
     // Index of the base that had a cache hit (-1 = miss on all tiers)
@@ -101,13 +111,20 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const isFullyExpired =
       staleTtl !== undefined && ttl > 0 && Date.now() - (entry.mtime || 0) > ttl + staleTtl;
 
+    const _stale = entry.stale === true;
+    const _integrityMismatch = entry.integrity !== integrity;
+    const _ttlExpired = ttl > 0 && Date.now() - (entry.mtime || 0) > ttl;
+    // Evaluate validate eagerly only for the hook's reason; without a hook it stays the
+    // short-circuiting final operand of `expired`, keeping the original call pattern intact.
+    const _validateFailed = _hasHook ? validate(entry) === false : false;
+
     const expired =
       shouldInvalidateCache ||
-      entry.stale === true ||
-      entry.integrity !== integrity ||
+      _stale ||
+      _integrityMismatch ||
       opts.maxAge === 0 ||
-      (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
-      validate(entry) === false;
+      _ttlExpired ||
+      (_hasHook ? _validateFailed : validate(entry) === false);
 
     // If fully expired beyond staleMaxAge, clear the stale value so SWR won't serve it
     if (isFullyExpired) {
@@ -115,6 +132,29 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       entry.integrity = undefined;
       entry.mtime = undefined;
       entry.expires = undefined;
+    }
+
+    // Captured after the fully-expired clear so a dead entry reads as a fresh (re)population.
+    const oldValue = entry.value;
+
+    const _setReason = _hasHook
+      ? (): CacheSetReason => {
+          if (oldValue === undefined) return "initial";
+          if (shouldInvalidateCache) return "manual";
+          if (_stale) return "stale";
+          if (_integrityMismatch || _validateFailed) return "invalid";
+          return "maxAge";
+        }
+      : undefined;
+
+    if (_hasHook) {
+      if (entry.value !== undefined && !expired) {
+        _emit({ type: "hit", key, name: displayName, value: entry.value });
+      } else if (entry.value !== undefined && opts.swr && !_validateFailed) {
+        _emit({ type: "stale", key, name: displayName, value: entry.value });
+      } else {
+        _emit({ type: "miss", key, name: displayName });
+      }
     }
 
     const _resolve = async () => {
@@ -141,6 +181,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             _onError("[cache] Cache eviction error.", error);
           });
           event?.req.waitUntil?.(evictPromise);
+          if (_hasHook && oldValue !== undefined) {
+            _emit({ type: "evict", key, name: displayName, oldValue, reason: "error" });
+          }
         }
         // Re-throw error to make sure the caller knows the task failed.
         throw error;
@@ -176,6 +219,16 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
                   useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
                 ),
               );
+              if (_hasHook) {
+                _emit({
+                  type: "set",
+                  key,
+                  name: displayName,
+                  oldValue,
+                  newValue: entry.value as T,
+                  reason: _setReason!(),
+                });
+              }
             } catch (error) {
               _onError("[cache] Cache write error.", error);
             }
@@ -187,6 +240,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             _onError("[cache] Cache eviction error.", error);
           });
           event?.req.waitUntil?.(evictPromise);
+          if (_hasHook && oldValue !== undefined) {
+            _emit({ type: "evict", key, name: displayName, oldValue, reason: "invalid" });
+          }
         }
       }
     };
@@ -295,13 +351,49 @@ export async function resolveCacheKeys<ArgsT extends unknown[] = any[]>(
  */
 export async function invalidateCache<ArgsT extends unknown[] = any[]>(
   input: {
-    options?: Pick<CacheOptions<any, ArgsT>, "base" | "group" | "name" | "getKey">;
+    options?: Pick<
+      CacheOptions<any, ArgsT>,
+      "base" | "group" | "name" | "getKey" | "onCacheEvent" | "onError"
+    >;
     args?: ArgsT;
   } = {},
 ): Promise<void> {
-  const keys = await resolveCacheKeys(input);
+  const opts = input.options ?? {};
+  const args = input.args ?? ([] as unknown as ArgsT);
+  const key = await (opts.getKey || getKey)(...args);
+  const keys = _normalizeBases(opts.base).map((base) => _buildCacheKey(key, opts, base));
   const storage = useStorage();
-  await Promise.all(keys.map((key) => storage.set(key, null)));
+
+  // Read the current value only when a hook needs it (first tier that has one wins).
+  // A failed read must never block the removal below, so errors are swallowed to onError.
+  let oldValue: unknown;
+  if (opts.onCacheEvent) {
+    try {
+      const entries = (await Promise.all(keys.map((k) => storage.get(k)))) as (CacheEntry | null)[];
+      oldValue = entries.find((e) => e && typeof e === "object" && e.value !== undefined)?.value;
+    } catch (error) {
+      if (opts.onError) {
+        opts.onError(error);
+      } else {
+        console.error("[cache] Cache read error.", error);
+      }
+    }
+  }
+
+  await Promise.all(keys.map((k) => storage.set(k, null)));
+
+  // Only emit when an entry was actually removed.
+  if (opts.onCacheEvent && oldValue !== undefined) {
+    try {
+      opts.onCacheEvent({ type: "evict", key, name: opts.name || "_", oldValue, reason: "manual" });
+    } catch (error) {
+      if (opts.onError) {
+        opts.onError(error);
+      } else {
+        console.error("[cache] onCacheEvent handler error.", error);
+      }
+    }
+  }
 }
 
 /**
@@ -361,6 +453,19 @@ function getKey(...args: unknown[]) {
   return args.length > 0 ? hash(args) : "";
 }
 
+/** Readable label for a lifecycle event: the request route for HTTP events, else the given name. */
+function _eventName(event: HTTPEvent | undefined, name: string): string {
+  if (event) {
+    try {
+      const url = event.url ?? new URL(event.req.url);
+      return url.pathname + url.search;
+    } catch {
+      // fall through to name
+    }
+  }
+  return name;
+}
+
 function _buildCacheKey(
   key: string,
   opts: Pick<CacheOptions, "group" | "name">,
@@ -403,8 +508,10 @@ function _remainingTtl(
   return { ttl: Math.max(Math.ceil((entry.mtime + ttlWindow * 1000 - Date.now()) / 1000), 1) };
 }
 
-/** Strips storage-location fields from opts so integrity only reflects the cached computation. */
-function _integrityOpts(opts: CacheOptions): Omit<CacheOptions, "base" | "group" | "name"> {
-  const { base: _, group: _g, name: _n, ...rest } = opts;
+/** Strips storage-location and observability fields from opts so integrity only reflects the cached computation. */
+export function _integrityOpts<O extends CacheOptions>(
+  opts: O,
+): Omit<O, "base" | "group" | "name" | "onCacheEvent"> {
+  const { base: _, group: _g, name: _n, onCacheEvent: _e, ...rest } = opts;
   return rest;
 }

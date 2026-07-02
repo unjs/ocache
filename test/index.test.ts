@@ -9,7 +9,9 @@ import {
   createMemoryStorage,
   setStorage,
   useStorage,
+  CacheEventType,
   type HTTPEvent,
+  type CacheEvent,
 } from "../src/index.ts";
 beforeEach(() => {
   setStorage(createMemoryStorage());
@@ -1725,5 +1727,378 @@ describe("multi-tier base", () => {
     const result = await fn2();
     expect(result).toBe("from-tier1");
     expect(callCount).toBe(0);
+  });
+});
+
+describe("onCacheEvent", () => {
+  it("emits miss then set(initial) on first population and hit afterwards", async () => {
+    const events: CacheEvent[] = [];
+    const fn = defineCachedFunction(() => "v1", {
+      maxAge: 60,
+      getKey: () => "k",
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    await fn();
+    await fn();
+
+    expect(events.map((e) => e.type)).toEqual(["miss", "set", "hit"]);
+    const set = events[1] as Extract<CacheEvent, { type: "set" }>;
+    expect(set).toMatchObject({ key: "k", oldValue: undefined, newValue: "v1", reason: "initial" });
+    expect(events[2]).toMatchObject({ type: "hit", value: "v1" });
+  });
+
+  it("emits stale while serving then set(maxAge) from the background refresh (SWR)", async () => {
+    const events: CacheEvent[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return `v${++n}`;
+      },
+      {
+        maxAge: 0.02,
+        swr: true,
+        staleMaxAge: 10,
+        getKey: () => "k",
+        onCacheEvent: (e) => events.push(e),
+      },
+    );
+
+    await fn();
+    await new Promise((r) => setTimeout(r, 40));
+    const served = await fn();
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(served).toBe("v1");
+    expect(events.some((e) => e.type === "stale")).toBe(true);
+    const set = events.filter((e) => e.type === "set").at(-1) as Extract<
+      CacheEvent,
+      { type: "set" }
+    >;
+    expect(set).toMatchObject({ oldValue: "v1", newValue: "v2", reason: "maxAge" });
+  });
+
+  it("emits set(stale) after expireCache marks the entry stale", async () => {
+    const events: CacheEvent[] = [];
+    let n = 0;
+    const options = {
+      maxAge: 60,
+      swr: false,
+      getKey: () => "k",
+      onCacheEvent: (e: CacheEvent) => events.push(e),
+    };
+    const fn = defineCachedFunction(() => `v${++n}`, options);
+
+    await fn();
+    await expireCache({ options });
+    await fn();
+
+    const set = events.filter((e) => e.type === "set").at(-1) as Extract<
+      CacheEvent,
+      { type: "set" }
+    >;
+    expect(set).toMatchObject({ oldValue: "v1", newValue: "v2", reason: "stale" });
+  });
+
+  it("emits set(invalid) when the previous value's integrity no longer matches", async () => {
+    const events: CacheEvent[] = [];
+    const fn = defineCachedFunction(() => "fresh", {
+      maxAge: 60,
+      swr: false,
+      getKey: () => "k",
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    const [storageKey] = await fn.resolveKeys();
+    await useStorage().set(storageKey!, {
+      value: "stale",
+      integrity: "outdated",
+      mtime: Date.now(),
+    });
+
+    await fn();
+
+    const set = events.filter((e) => e.type === "set").at(-1) as Extract<
+      CacheEvent,
+      { type: "set" }
+    >;
+    expect(set).toMatchObject({ oldValue: "stale", newValue: "fresh", reason: "invalid" });
+  });
+
+  it("emits evict(error) when a background refresh rejects", async () => {
+    const events: CacheEvent[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        if (++n > 1) throw new Error("boom");
+        return "v1";
+      },
+      {
+        maxAge: 0.02,
+        swr: true,
+        staleMaxAge: 10,
+        getKey: () => "k",
+        onCacheEvent: (e) => events.push(e),
+        onError: () => {},
+      },
+    );
+
+    await fn();
+    await new Promise((r) => setTimeout(r, 40));
+    const served = await fn();
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(served).toBe("v1");
+    const evict = events.filter((e) => e.type === "evict").at(-1) as Extract<
+      CacheEvent,
+      { type: "evict" }
+    >;
+    expect(evict).toMatchObject({ oldValue: "v1", reason: "error" });
+  });
+
+  it("emits evict(invalid) when a background refresh produces an invalid value", async () => {
+    const events: CacheEvent[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return n++ === 0 ? "v1" : "v2";
+      },
+      {
+        maxAge: 0.02,
+        swr: true,
+        staleMaxAge: 10,
+        getKey: () => "k",
+        validate: (entry) => entry.value !== "v2",
+        onCacheEvent: (e) => events.push(e),
+      },
+    );
+
+    await fn();
+    await new Promise((r) => setTimeout(r, 40));
+    await fn();
+    await new Promise((r) => setTimeout(r, 40));
+
+    const evict = events.filter((e) => e.type === "evict").at(-1) as Extract<
+      CacheEvent,
+      { type: "evict" }
+    >;
+    expect(evict).toMatchObject({ oldValue: "v1", reason: "invalid" });
+  });
+
+  it("emits evict(manual) with the old value on invalidate", async () => {
+    const events: CacheEvent[] = [];
+    const fn = defineCachedFunction(() => "v1", {
+      maxAge: 60,
+      name: "myFn",
+      getKey: () => "k",
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    await fn();
+    await fn.invalidate();
+
+    const evict = events.filter((e) => e.type === "evict").at(-1) as Extract<
+      CacheEvent,
+      { type: "evict" }
+    >;
+    expect(evict).toMatchObject({ key: "k", name: "myFn", oldValue: "v1", reason: "manual" });
+  });
+
+  it("uses the request route as the event name for HTTP handlers", async () => {
+    const events: CacheEvent[] = [];
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 60,
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    await handler({ req: new Request("http://localhost/products?color=red") });
+
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((e) => e.name === "/products?color=red")).toBe(true);
+  });
+
+  it("routes a throwing hook to onError without breaking caching", async () => {
+    const onError = vi.fn();
+    const fn = defineCachedFunction(() => "v1", {
+      maxAge: 60,
+      getKey: () => "k",
+      onCacheEvent: () => {
+        throw new Error("hook failed");
+      },
+      onError,
+    });
+
+    expect(await fn()).toBe("v1");
+    expect(await fn()).toBe("v1");
+    expect(onError).toHaveBeenCalled();
+  });
+
+  it("exposes CacheEventType constants matching the emitted event types", async () => {
+    expect(CacheEventType).toMatchObject({
+      Hit: "hit",
+      Miss: "miss",
+      Stale: "stale",
+      Set: "set",
+      Evict: "evict",
+    });
+
+    const events: CacheEvent[] = [];
+    const fn = defineCachedFunction(() => "v1", {
+      maxAge: 60,
+      getKey: () => "k",
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    await fn();
+
+    // Constants compare equal to the raw discriminant string.
+    expect(events.some((e) => e.type === CacheEventType.Miss)).toBe(true);
+    expect(events.some((e) => e.type === CacheEventType.Set)).toBe(true);
+  });
+
+  it("does not evaluate validate eagerly on the no-hook path (short-circuit preserved)", async () => {
+    let validateCalls = 0;
+    const fn = defineCachedFunction(() => "v1", {
+      maxAge: 60,
+      swr: false,
+      getKey: () => "k",
+      validate: (entry) => {
+        validateCalls++;
+        return entry.value !== undefined;
+      },
+    });
+
+    await fn();
+
+    // On a miss the `expired` check short-circuits before validate; only the post-resolve
+    // write path validates. Eager evaluation would push this to 2.
+    expect(validateCalls).toBe(1);
+  });
+
+  it("does not emit evict when invalidating a key that was never cached", async () => {
+    const events: CacheEvent[] = [];
+    const fn = defineCachedFunction(() => "v1", {
+      maxAge: 60,
+      getKey: () => "k",
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    await fn.invalidate();
+
+    expect(events.filter((e) => e.type === "evict")).toHaveLength(0);
+  });
+
+  it("reports reason 'initial' (not 'maxAge') when a fully-expired entry is repopulated", async () => {
+    const events: CacheEvent[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(() => `v${++n}`, {
+      maxAge: 0.05,
+      swr: true,
+      staleMaxAge: 0.05,
+      getKey: () => "k",
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    await fn();
+    const [storageKey] = await fn.resolveKeys();
+    const stored = (await useStorage().get(storageKey!)) as object;
+    // Backdate mtime beyond maxAge + staleMaxAge so the entry is fully expired but still present.
+    await useStorage().set(storageKey!, { ...stored, mtime: Date.now() - 10_000 });
+    events.length = 0;
+
+    await fn();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(events[0]).toMatchObject({ type: "miss" });
+    const set = events.filter((e) => e.type === "set").at(-1) as Extract<
+      CacheEvent,
+      { type: "set" }
+    >;
+    expect(set).toMatchObject({ oldValue: undefined, reason: "initial" });
+  });
+
+  it("emits set(manual) when shouldInvalidateCache forces a re-resolve", async () => {
+    const events: CacheEvent[] = [];
+    let n = 0;
+    let invalidate = false;
+    const fn = defineCachedFunction(() => `v${++n}`, {
+      maxAge: 60,
+      swr: false,
+      name: "myFn",
+      getKey: () => "k",
+      shouldInvalidateCache: () => invalidate,
+      onCacheEvent: (e) => events.push(e),
+    });
+
+    await fn();
+    invalidate = true;
+    await fn();
+
+    const set = events.filter((e) => e.type === "set").at(-1) as Extract<
+      CacheEvent,
+      { type: "set" }
+    >;
+    expect(set).toMatchObject({ name: "myFn", oldValue: "v1", newValue: "v2", reason: "manual" });
+  });
+
+  it("routes a throwing hook during invalidate to onError", async () => {
+    const onError = vi.fn();
+    const fn = defineCachedFunction(() => "v1", {
+      maxAge: 60,
+      getKey: () => "k",
+      onCacheEvent: (e) => {
+        if (e.type === "evict") throw new Error("hook failed");
+      },
+      onError,
+    });
+
+    await fn();
+    await fn.invalidate();
+
+    expect(onError).toHaveBeenCalled();
+  });
+
+  it("still removes entries (and routes to onError) when the oldValue read fails on invalidate", async () => {
+    const deleted: string[] = [];
+    const onError = vi.fn();
+    setStorage({
+      get: () => {
+        throw new Error("read boom");
+      },
+      set: (key, value) => {
+        if (value === null || value === undefined) {
+          deleted.push(key);
+        }
+      },
+    });
+
+    await invalidateCache({
+      options: { name: "n", getKey: () => "k", onCacheEvent: () => {}, onError },
+    });
+
+    // Removal must proceed even though the pre-read rejected.
+    expect(deleted.length).toBeGreaterThan(0);
+    expect(onError).toHaveBeenCalled();
+  });
+
+  it("adding onCacheEvent does not change integrity, so existing entries stay valid", async () => {
+    let calls = 0;
+    const impl = () => {
+      calls++;
+      return "value";
+    };
+    const shared = { maxAge: 60, name: "shared", getKey: () => "k" };
+
+    const fnNoHook = defineCachedFunction(impl, shared);
+    await fnNoHook();
+    expect(calls).toBe(1);
+
+    // Same function + options with only onCacheEvent added: must reuse the cached entry.
+    const fnHook = defineCachedFunction(impl, { ...shared, onCacheEvent: () => {} });
+    expect(await fnHook()).toBe("value");
+    expect(calls).toBe(1);
   });
 });

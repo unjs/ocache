@@ -41,6 +41,79 @@ export interface CacheEntry<T = any> {
 }
 
 /**
+ * Reason a cache entry was (re)written, passed on `set` {@link CacheEvent}s.
+ *
+ * - `initial` — first population (no previous value).
+ * - `maxAge` — the previous value's TTL (`maxAge`) had elapsed.
+ * - `stale` — the entry had been marked stale (e.g. by `expireCache`).
+ * - `invalid` — integrity changed or `validate()` rejected the previous value.
+ * - `manual` — re-resolved because `shouldInvalidateCache` returned `true`.
+ */
+export type CacheSetReason = "initial" | "maxAge" | "stale" | "invalid" | "manual";
+
+/**
+ * Reason a cache entry was removed, passed on `evict` {@link CacheEvent}s.
+ *
+ * - `error` — the resolver threw, so the stale entry was dropped.
+ * - `invalid` — revalidation produced a value that failed `validate()`.
+ * - `manual` — removed via `invalidateCache` / `.invalidate()`.
+ */
+export type CacheEvictReason = "error" | "invalid" | "manual";
+
+/**
+ * Cache lifecycle event types (the `type` discriminant of {@link CacheEvent}).
+ *
+ * Importable named constants so consumers can avoid string literals:
+ * `if (event.type === CacheEventType.Hit)`. The values are plain strings, so
+ * `event.type === "hit"` keeps working too.
+ */
+export const CacheEventType = {
+  Hit: "hit",
+  Miss: "miss",
+  Stale: "stale",
+  Set: "set",
+  Evict: "evict",
+} as const;
+
+/** Union of {@link CacheEventType} values (`"hit" | "miss" | "stale" | "set" | "evict"`). */
+export type CacheEventType = (typeof CacheEventType)[keyof typeof CacheEventType];
+
+/**
+ * A cache lifecycle event passed to the {@link CacheOptions.onCacheEvent} hook.
+ *
+ * A discriminated union on `type` ({@link CacheEventType}):
+ * - `hit` — a fresh cached value was served.
+ * - `miss` — nothing servable was cached; the resolver ran to populate it.
+ * - `stale` — a stale value was served while a background refresh runs (SWR).
+ * - `set` — a value was (re)written to storage (carries `oldValue`/`newValue`/`reason`).
+ * - `evict` — an entry was removed from storage (carries `oldValue`/`reason`).
+ *
+ * `key` is the resolved logical cache key; `name` is a human-readable label
+ * (the cached function's `name`, or the request route for HTTP handlers). For HTTP
+ * handlers `name` is the raw route including the query string, so sanitize it before
+ * logging if URLs may carry secrets.
+ */
+export type CacheEvent<T = any> =
+  | { type: typeof CacheEventType.Hit; key: string; name: string; value: T }
+  | { type: typeof CacheEventType.Miss; key: string; name: string }
+  | { type: typeof CacheEventType.Stale; key: string; name: string; value: T }
+  | {
+      type: typeof CacheEventType.Set;
+      key: string;
+      name: string;
+      oldValue?: T;
+      newValue: T;
+      reason: CacheSetReason;
+    }
+  | {
+      type: typeof CacheEventType.Evict;
+      key: string;
+      name: string;
+      oldValue: T;
+      reason: CacheEvictReason;
+    };
+
+/**
  * Options for configuring cached functions created by `defineCachedFunction`.
  */
 export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
@@ -70,6 +143,15 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   base?: string | string[];
   /** Optional error handler called for all cache-related errors (read, write, SWR, malformed data). */
   onError?: (error: unknown) => void;
+  /**
+   * Observability hook called on cache lifecycle events (`hit`, `miss`, `stale`, `set`, `evict`).
+   *
+   * Fires synchronously for the served value and (for background SWR refreshes) when the
+   * refresh writes or evicts. Errors thrown here are caught and routed to `onError` — they
+   * never affect caching. Does not influence integrity, so adding/removing it never
+   * invalidates existing entries.
+   */
+  onCacheEvent?: (event: CacheEvent<T>) => void;
 }
 
 /**
