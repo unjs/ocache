@@ -110,6 +110,13 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   varies?: string[] | readonly string[];
 
   /**
+   * Allowlist of query parameter names that vary the cache key (e.g., `["color"]`).
+   * When set, only these params affect the auto-generated key; all others are
+   * ignored. When unset, the full query string varies the key. Case-sensitive.
+   */
+  variesQuery?: string[] | readonly string[];
+
+  /**
    * Convert handler return value to a Response.
    * Default: `rawValue instanceof Response ? rawValue : new Response(String(rawValue))`.
    */

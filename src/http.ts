@@ -41,6 +41,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     .map((h) => h.toLowerCase())
     .sort();
 
+  const variableQueryNames = opts.variesQuery
+    ? [...new Set(opts.variesQuery.filter(Boolean))]
+    : undefined;
+
   const _toResponse =
     opts.toResponse ||
     ((rawValue: unknown) =>
@@ -64,7 +68,8 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       // Auto-generated key
       const _url = event.url ?? new URL(event.req.url);
-      const _path = _url.pathname + _url.search;
+      const _search = variableQueryNames ? _filterSearch(_url, variableQueryNames) : _url.search;
+      const _path = _url.pathname + _search;
       let _pathname: string;
       try {
         _pathname =
@@ -106,9 +111,19 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       ([key]) => !variableHeaderNames.includes(key.toLowerCase()),
     );
 
+    // Narrow the query the handler sees to the allowlist, so it can't depend on
+    // params outside the cache key (mirrors the header filtering above).
+    let _reqUrl = event.req.url;
+    if (variableQueryNames) {
+      const _url = event.url ?? new URL(event.req.url);
+      const _filteredUrl = new URL(_url);
+      _filteredUrl.search = _filterSearch(_url, variableQueryNames);
+      _reqUrl = _filteredUrl.href;
+    }
+
     try {
       const originalReq = event.req;
-      (event as any).req = new Request(event.req.url, {
+      (event as any).req = new Request(_reqUrl, {
         method: event.req.method,
         headers: filteredHeaders,
       });
@@ -116,8 +131,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       if ((originalReq as any).runtime) {
         (event.req as any).runtime = (originalReq as any).runtime;
       }
+      if (variableQueryNames && event.url) {
+        (event as any).url = new URL(_reqUrl);
+      }
     } catch (error) {
-      console.error("[cache] Failed to filter headers:", error);
+      console.error("[cache] Failed to filter request:", error);
     }
 
     // Call handler
@@ -200,6 +218,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
 function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
+}
+
+/** Rebuilds the query string from only the allowlisted param names, order-independent. */
+function _filterSearch(url: URL, names: string[]): string {
+  const filtered = new URLSearchParams();
+  for (const name of names) {
+    for (const value of url.searchParams.getAll(name).sort()) {
+      filtered.append(name, value);
+    }
+  }
+  const query = filtered.toString();
+  return query ? `?${query}` : "";
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
