@@ -44,6 +44,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const name = opts.name || fn.name || "_";
   const integrity = opts.integrity || hash([fn, _integrityOpts(opts)]);
   const validate = opts.validate || ((entry) => entry.value !== undefined);
+  const _perf: PerfState | undefined = opts.warnWhenSlower
+    ? { hits: [], computes: [], warned: false }
+    : undefined;
   const _onError = (context: string, error: unknown) => {
     if (opts.onError) {
       opts.onError(error);
@@ -67,10 +70,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     try {
       // Multi-tier read: try each base prefix in order, use first hit
       for (let i = 0; i < bases.length; i++) {
+        const _start = _perf ? performance.now() : 0;
         const result = (await useStorage().get(
           _buildCacheKey(key, { group, name }, bases[i]!),
         )) as CacheEntry<T> | null;
         if (result) {
+          if (_perf) _trackEfficiency(_perf, "hits", performance.now() - _start, group, name);
           entry = result;
           hitIndex = i;
           break;
@@ -119,6 +124,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     const _resolve = async () => {
       const isPending = pending[key];
+      let _computeStart = 0;
       if (!isPending) {
         if (entry.value !== undefined && (opts.staleMaxAge || 0) >= 0 && opts.swr === false) {
           // Remove cached entry to prevent using expired cache on concurrent requests
@@ -127,6 +133,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           entry.mtime = undefined;
           entry.expires = undefined;
         }
+        if (_perf) _computeStart = performance.now();
         pending[key] = Promise.resolve(resolver());
       }
 
@@ -147,6 +154,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       }
 
       if (!isPending) {
+        if (_perf) {
+          _trackEfficiency(_perf, "computes", performance.now() - _computeStart, group, name);
+        }
         // Update mtime, integrity + validate and set the value in cache only the first time the request is made.
         entry.mtime = Date.now();
         entry.integrity = integrity;
@@ -407,4 +417,56 @@ function _remainingTtl(
 function _integrityOpts(opts: CacheOptions): Omit<CacheOptions, "base" | "group" | "name"> {
   const { base: _, group: _g, name: _n, ...rest } = opts;
   return rest;
+}
+
+// --- Cache efficiency warning (opt-in via `warnWhenSlower`) ---
+
+const MIN_HITS = 5;
+const SAMPLE_SIZE = 20;
+// Only flag when retrieval is genuinely non-trivial (fast/local storage overhead is negligible and
+// sub-millisecond timings are mostly noise) and clearly dominates recompute.
+const MIN_RETRIEVAL_MS = 1;
+const SLOWER_MARGIN = 2;
+
+interface PerfState {
+  hits: number[];
+  computes: number[];
+  warned: boolean;
+}
+
+/** Records a retrieval/recompute sample and warns once when recompute is the cheaper of the two. */
+function _trackEfficiency(
+  perf: PerfState,
+  kind: "hits" | "computes",
+  ms: number,
+  group: string,
+  name: string,
+): void {
+  if (perf.warned) {
+    return;
+  }
+  const samples = perf[kind];
+  samples.push(ms);
+  if (samples.length > SAMPLE_SIZE) {
+    samples.shift();
+  }
+  if (perf.computes.length === 0 || perf.hits.length < MIN_HITS) {
+    return;
+  }
+  const computeMs = _median(perf.computes);
+  const retrievalMs = _median(perf.hits);
+  if (retrievalMs >= MIN_RETRIEVAL_MS && computeMs * SLOWER_MARGIN <= retrievalMs) {
+    perf.warned = true;
+    console.warn(
+      `[cache] Recomputing "${group}:${name}" (~${computeMs.toFixed(3)}ms) is cheaper than ` +
+        `retrieving it from the cache (~${retrievalMs.toFixed(3)}ms). Caching may be adding ` +
+        `overhead here — consider removing it. (heuristic; production cost may differ)`,
+    );
+  }
+}
+
+function _median(samples: number[]): number {
+  const sorted = [...samples].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
