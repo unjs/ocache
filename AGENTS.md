@@ -35,10 +35,18 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
 - Sets `cache-control`, `etag`, `last-modified` headers
 - Filters non-variable headers before calling the handler (for consistent cache keys)
+- Cacheable methods default to `GET`, `HEAD`, `QUERY` (override via `methods`); everything else bypasses the cache
+- `QUERY` support (RFC 10008 — safe + idempotent, query carried in the request body):
+  - Folds the request **body** + `content-type` + `accept` into the cache key (RFC 10008 §2.7 requires the key to incorporate request content) — see `_getBufferedBody` / `_resolveBodyKey`
+  - Body stream is buffered once per event (`BODY_BUFFERS` WeakMap) and reused both for the key and to rebuild the request so the handler still receives its content
+  - Built-in key normalization: JSON content types are canonicalized via structural hashing; skipped when the request carries `no-transform`. Override with `normalizeQueryKey(input)`
+  - Sets `Vary: content-type, accept` on body-method responses; optional `acceptQuery` sets the `Accept-Query` response header (serialized as a Structured Fields list)
+  - Conditional QUERY requests reuse the same `if-none-match`/`if-modified-since` 304 path as GET
 - Framework integration hooks on `CachedEventHandlerOptions`:
   - `toResponse(value, event)` — convert handler return value to Response (default: plain Response constructor)
   - `createResponse(body, init)` — create the final Response from cached data (default: `new Response()`)
   - `handleCacheHeaders(event, conditions)` — custom 304 conditional check (default: built-in if-none-match/if-modified-since)
+  - `normalizeQueryKey(input)` — normalize a body-bearing request's content before it's hashed into the cache key
 
 ### Storage (`storage.ts`)
 
@@ -53,7 +61,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - `EventHandler<E>` — `(event: E) => unknown | Promise<unknown>` (generic, defaults to HTTPEvent)
 - `CacheEntry<T>` — stored cache entry with value, expires, mtime, integrity
 - `CacheOptions<T>` — maxAge, swr, staleMaxAge, base (string | string[] for multi-tier), getKey, validate, transform, etc.
-- `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
+- `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, methods, acceptQuery, normalizeQueryKey, toResponse, createResponse, handleCacheHeaders
 - `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
 - `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
 

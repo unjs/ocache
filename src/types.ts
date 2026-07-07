@@ -110,6 +110,38 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   varies?: string[] | readonly string[];
 
   /**
+   * HTTP methods whose responses are cacheable. Requests using any other method bypass the cache.
+   *
+   * Defaults to `["GET", "HEAD", "QUERY"]`. `QUERY` (RFC 10008) is safe and idempotent like `GET`,
+   * but carries its input in the request body — so for body-bearing methods the request content and
+   * its `content-type` / `accept` are folded into the cache key (RFC 10008, Section 2.7).
+   */
+  methods?: string[] | readonly string[];
+
+  /**
+   * Media type(s) advertised via the `Accept-Query` response header (RFC 10008, Section 3), signaling
+   * which query formats the resource supports. Serialized as a Structured Fields list. Only set when
+   * the handler has not already provided an `accept-query` header.
+   *
+   * @example ["application/jsonpath", "application/sql;charset=UTF-8"]
+   */
+  acceptQuery?: string | string[] | readonly string[];
+
+  /**
+   * Normalize a body-bearing request's content before it is hashed into the cache key
+   * (RFC 10008, Section 2.7 — "semantically insignificant differences" may be removed).
+   *
+   * Return any value; it is hashed with `ohash`. When omitted, the built-in normalizer canonicalizes
+   * JSON content types (via structural hashing) and hashes other bodies as raw bytes. Skipped entirely
+   * when the request carries the `no-transform` cache directive.
+   */
+  normalizeQueryKey?: (input: {
+    body: ArrayBuffer;
+    contentType: string;
+    event: E;
+  }) => unknown | Promise<unknown>;
+
+  /**
    * Convert handler return value to a Response.
    * Default: `rawValue instanceof Response ? rawValue : new Response(String(rawValue))`.
    */
