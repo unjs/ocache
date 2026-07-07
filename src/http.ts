@@ -108,7 +108,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         return false;
       }
       // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
-      if (_forbidsSharedCaching(entry.value.headers["cache-control"])) {
+      if (_forbidsSharedCaching(entry.value.headers?.["cache-control"])) {
         return false;
       }
       if (entry.value.status >= 400) {
@@ -250,10 +250,10 @@ function _forbidsSharedCaching(cacheControl: unknown): boolean {
   if (typeof cacheControl !== "string" || !cacheControl) {
     return false;
   }
-  return cacheControl
-    .split(",")
-    .map((directive) => directive.trim().split("=")[0]!.toLowerCase())
-    .some((directive) => directive === "no-store" || directive === "private");
+  return cacheControl.split(",").some((directive) => {
+    const name = directive.trim().split("=")[0]!.toLowerCase();
+    return name === "no-store" || name === "private";
+  });
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */

@@ -1235,6 +1235,29 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(2);
   });
 
+  // Regression: a corrupt/partial stored entry whose `value` lacks a `headers`
+  // field must degrade to a cache miss, not throw from validate()'s cache-control
+  // check (which runs before the status/body guards).
+  it("degrades to a miss on a corrupt cache entry with no headers", async () => {
+    let callCount = 0;
+    setStorage({
+      get: () => ({ value: { status: 200 } }),
+      set: () => {},
+    });
+
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const res = (await handler(makeEvent(uniquePath()))) as Response;
+    expect(await res.text()).toBe("ok");
+    expect(callCount).toBe(1);
+  });
+
   it("still caches responses with a cacheable explicit cache-control", async () => {
     let callCount = 0;
     const path = uniquePath();
