@@ -1020,7 +1020,7 @@ describe("defineCachedHandler", () => {
     expect(await r2.text()).toBe("call-1");
   });
 
-  it("variesQuery handles repeated (array) params order-independently", async () => {
+  it("variesQuery preserves the order of a repeated (array) param", async () => {
     let callCount = 0;
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -1033,12 +1033,13 @@ describe("defineCachedHandler", () => {
 
     const r1 = (await handler(makeEvent(`${path}?color=red&color=blue`))) as Response;
     const r2 = (await handler(makeEvent(`${path}?color=blue&color=red`))) as Response;
-    const r3 = (await handler(makeEvent(`${path}?color=red`))) as Response;
+    const r3 = (await handler(makeEvent(`${path}?color=red&color=blue`))) as Response;
 
+    // Reordered repeated values are distinct entries; the exact order hits cache.
     expect(callCount).toBe(2);
     expect(await r1.text()).toBe("call-1");
-    expect(await r2.text()).toBe("call-1");
-    expect(await r3.text()).toBe("call-2");
+    expect(await r2.text()).toBe("call-2");
+    expect(await r3.text()).toBe("call-1");
   });
 
   it("variesQuery strips non-allowlisted params from the URL the handler sees", async () => {
@@ -1053,9 +1054,10 @@ describe("defineCachedHandler", () => {
       { maxAge: 10, variesQuery: ["color"] },
     );
 
-    await handler(makeEvent(`${path}?color=red&lang=de&_=123`));
+    await handler(makeEvent(`${path}?color=blue&lang=de&color=red&_=123`));
 
-    expect(seen).toEqual(["?color=red"]);
+    // Only allowlisted params survive, in their original order.
+    expect(seen).toEqual(["?color=blue&color=red"]);
   });
 
   it("invalidates cache for error responses (4xx/5xx)", async () => {

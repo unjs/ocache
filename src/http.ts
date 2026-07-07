@@ -45,6 +45,19 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     ? [...new Set(opts.variesQuery.filter(Boolean))]
     : undefined;
 
+  // Memoize the filtered query per request so getKey and the handler-facing URL
+  // rewrite don't recompute it. Scoped to this handler instance so a shared
+  // event can't pick up another handler's allowlist.
+  const _searchCache = new WeakMap<HTTPEvent, string>();
+  const _filteredSearch = (event: HTTPEvent, url: URL): string => {
+    let search = _searchCache.get(event);
+    if (search === undefined) {
+      search = _filterSearch(url, variableQueryNames!);
+      _searchCache.set(event, search);
+    }
+    return search;
+  };
+
   const _toResponse =
     opts.toResponse ||
     ((rawValue: unknown) =>
@@ -68,7 +81,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       // Auto-generated key
       const _url = event.url ?? new URL(event.req.url);
-      const _search = variableQueryNames ? _filterSearch(_url, variableQueryNames) : _url.search;
+      const _search = variableQueryNames ? _filteredSearch(event, _url) : _url.search;
       const _path = _url.pathname + _search;
       let _pathname: string;
       try {
@@ -117,7 +130,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     if (variableQueryNames) {
       const _url = event.url ?? new URL(event.req.url);
       const _filteredUrl = new URL(_url);
-      _filteredUrl.search = _filterSearch(_url, variableQueryNames);
+      _filteredUrl.search = _filteredSearch(event, _url);
       _reqUrl = _filteredUrl.href;
     }
 
@@ -220,11 +233,15 @@ function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
 }
 
-/** Rebuilds the query string from only the allowlisted param names, order-independent. */
+/**
+ * Rebuilds the query string from only the allowlisted param names, in a stable
+ * (allowlist) order so param order across different names doesn't affect the
+ * result. The order of a repeated param's own values is preserved.
+ */
 function _filterSearch(url: URL, names: string[]): string {
   const filtered = new URLSearchParams();
   for (const name of names) {
-    for (const value of url.searchParams.getAll(name).sort()) {
+    for (const value of url.searchParams.getAll(name)) {
       filtered.append(name, value);
     }
   }
