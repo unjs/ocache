@@ -182,6 +182,18 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         // `Cache-Control: private` / `no-store` response). Re-resolve independently so one
         // caller's private response never bleeds to another. The result is never stored
         // (only the leader, `!isPending`, writes to the cache).
+        //
+        // Shareability is only knowable from a resolved value, so a coalesced caller must
+        // first await the leader (above) to learn the response is non-shareable before it
+        // can re-resolve. Two consequences, both inherent to that ordering:
+        //  - Latency: a coalesced caller to a non-shareable endpoint waits out the leader
+        //    (~T) and then its own resolution (~T), so it returns in ~2T under a burst.
+        //    Resolving in parallel up front is not an option — it would re-invoke the
+        //    handler for every coalesced caller on the common *shareable* path too,
+        //    defeating deduplication.
+        //  - Errors: if this independent re-resolve throws, the error propagates to the
+        //    caller. We deliberately do NOT fall back to the leader's value — sharing a
+        //    non-shareable (private) response is the exact bleed this branch prevents.
         entry.value = await resolver();
       }
 

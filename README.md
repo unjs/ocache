@@ -105,7 +105,12 @@ const handler = defineCachedHandler(myHandler, {
 
 If a handler sets `Cache-Control: no-store` or `private` on its response, `defineCachedHandler` honors it: the response is returned to the caller but never written to the cache, and it is never shared with other concurrent callers.
 
-To guarantee one caller's private response never bleeds to another, such responses also **opt out of in-flight request coalescing**. This means they also opt out of request deduplication — under a burst of concurrent requests, a `no-store`/`private` endpoint re-invokes the handler once per caller (origin load scales with concurrency) rather than sharing a single resolution. Cacheable responses are still coalesced and deduplicated as usual.
+To guarantee one caller's private response never bleeds to another, such responses also **opt out of in-flight request coalescing**. Because a response's shareability is only known once it has been resolved, a coalesced caller first awaits the shared in-flight request and, on finding it non-shareable, re-resolves its own value. This has two costs under a burst of concurrent requests to a `no-store`/`private` endpoint:
+
+- **No deduplication.** The handler is re-invoked once per caller (origin load scales with concurrency) rather than sharing a single resolution.
+- **~2× latency.** A coalesced caller waits out the shared request and then its own re-resolution. Resolving in parallel from the start isn't possible without also re-invoking the handler for every coalesced caller on the common _cacheable_ path, which would defeat deduplication there.
+
+If a coalesced caller's independent re-resolution fails, the error is returned to that caller — it is never given the shared caller's value as a fallback, since serving one caller's private response to another is exactly what this prevents. Cacheable responses are still coalesced and deduplicated as usual.
 
 ### Cache Invalidation
 
