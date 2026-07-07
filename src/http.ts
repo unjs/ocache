@@ -125,6 +125,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       return true;
     },
+    // A `no-store` / `private` response must not be shared with concurrent callers that were
+    // coalesced onto the same in-flight request — they re-resolve independently instead.
+    isShareable: (entry) => !_forbidsSharedCaching(entry.value?.headers["cache-control"]),
     group: opts.group || "handlers",
     integrity: opts.integrity || hash([handler, _integrityOpts(opts)]),
   };

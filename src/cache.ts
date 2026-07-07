@@ -176,6 +176,15 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         throw error;
       }
 
+      if (isPending && opts.isShareable?.(entry) === false) {
+        // This call was coalesced onto another request's in-flight resolution, but the
+        // resolved value must not be shared with concurrent callers (e.g. a
+        // `Cache-Control: private` / `no-store` response). Re-resolve independently so one
+        // caller's private response never bleeds to another. The result is never stored
+        // (only the leader, `!isPending`, writes to the cache).
+        entry.value = await resolver();
+      }
+
       if (!isPending) {
         // Update mtime, integrity + validate and set the value in cache only the first time the request is made.
         entry.mtime = Date.now();

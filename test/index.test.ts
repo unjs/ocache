@@ -1220,6 +1220,33 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(2);
   });
 
+  it("does not bleed a no-store response between coalesced concurrent requests", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      async () => {
+        const id = ++callCount;
+        // Async work so both requests overlap and coalesce onto one in-flight resolution.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return new Response(`user-${id}`, { headers: { "cache-control": "no-store" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const [r1, r2] = (await Promise.all([
+      handler(makeEvent(path)),
+      handler(makeEvent(path)),
+    ])) as [Response, Response];
+    const [b1, b2] = await Promise.all([r1.text(), r2.text()]);
+
+    // Each caller resolves independently — the private/no-store leader value is never
+    // shared with the coalesced peer.
+    expect(callCount).toBe(2);
+    expect(new Set([b1, b2])).toEqual(new Set(["user-1", "user-2"]));
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("MISS");
+  });
+
   it("still caches responses with a cacheable explicit cache-control", async () => {
     let callCount = 0;
     const path = uniquePath();

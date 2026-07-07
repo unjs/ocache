@@ -80,6 +80,16 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   transform?: (entry: CacheEntry<T>, ...args: ArgsT) => any;
   /** Validate a cache entry. Return `false` to treat the entry as invalid and re-resolve. */
   validate?: (entry: CacheEntry<T>, ...args: ArgsT) => boolean;
+  /**
+   * Guard request deduplication for non-shareable results. Concurrent calls with the same key
+   * are coalesced onto a single in-flight resolution; this predicate runs on the freshly
+   * resolved entry and decides whether that value may be handed to the coalesced peers. Return
+   * `false` to force each coalesced caller to resolve independently instead of sharing the value.
+   *
+   * Used by `defineCachedHandler` to keep a `Cache-Control: private` / `no-store` response from
+   * bleeding to another concurrent request. Defaults to always shareable.
+   */
+  isShareable?: (entry: CacheEntry<T>) => boolean;
   /** When returns `true`, the cache is invalidated and the function is re-invoked. */
   shouldInvalidateCache?: (...args: ArgsT) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is bypassed entirely and the function is called directly. */
@@ -149,11 +159,11 @@ export interface CacheConditions {
 /**
  * Options for configuring cached HTTP handlers created by `defineCachedHandler`.
  *
- * Extends {@link CacheOptions} (without `transform` and `validate`, which are set internally).
+ * Extends {@link CacheOptions} (without `transform`, `validate`, and `isShareable`, which are set internally).
  */
 export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
   CacheOptions<ResponseCacheEntry, [E]>,
-  "transform" | "validate"
+  "transform" | "validate" | "isShareable"
 > {
   /** When `true`, only handles conditional headers (304 responses) without full response caching. */
   headersOnly?: boolean;
