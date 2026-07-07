@@ -101,6 +101,12 @@ const handler = defineCachedHandler(myHandler, {
 });
 ```
 
+#### Private / non-cacheable responses
+
+If a handler sets `Cache-Control: no-store` or `private` on its response, `defineCachedHandler` honors it: the response is returned to the caller but never written to the cache, and it is never shared with other concurrent callers.
+
+To guarantee one caller's private response never bleeds to another, such responses also **opt out of in-flight request coalescing**. This means they also opt out of request deduplication — under a burst of concurrent requests, a `no-store`/`private` endpoint re-invokes the handler once per caller (origin load scales with concurrency) rather than sharing a single resolution. Cacheable responses are still coalesced and deduplicated as usual.
+
 ### Cache Invalidation
 
 Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:

@@ -35,7 +35,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Auto-generates cache keys from URL path + variable headers
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
 - Sets `cache-control`, `etag`, `last-modified` headers — but never clobbers an explicit `cache-control` set by the handler (SWR/`s-maxage`/`max-age` directives are only synthesized when the handler didn't set one)
-- Honors explicit `Cache-Control: no-store` / `private` on the response — those are never cached (via `validate`), though still returned to the caller. They also opt out of in-flight request coalescing (via the `isShareable` hook): concurrent callers coalesced onto the same request re-resolve independently so one caller's private response never bleeds to another
+- Honors explicit `Cache-Control: no-store` / `private` on the response — those are never cached (via `validate`), though still returned to the caller. They also opt out of in-flight request coalescing (via the `isShareable` hook): concurrent callers coalesced onto the same request re-resolve independently so one caller's private response never bleeds to another. Tradeoff: opting out of coalescing also disables request deduplication for those responses — under a concurrency burst a `no-store`/`private` endpoint re-invokes the handler once per coalesced caller (origin load scales with fan-out) instead of sharing a single resolution
 - Filters non-variable headers before calling the handler (for consistent cache keys)
 - Framework integration hooks on `CachedEventHandlerOptions`:
   - `toResponse(value, event)` — convert handler return value to Response (default: plain Response constructor)

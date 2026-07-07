@@ -108,7 +108,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         return false;
       }
       // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
-      if (_forbidsSharedCaching(entry.value.headers["cache-control"])) {
+      if (_entryForbidsSharedCaching(entry.value.headers)) {
         return false;
       }
       if (entry.value.status >= 400) {
@@ -127,7 +127,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     },
     // A `no-store` / `private` response must not be shared with concurrent callers that were
     // coalesced onto the same in-flight request — they re-resolve independently instead.
-    isShareable: (entry) => !_forbidsSharedCaching(entry.value?.headers["cache-control"]),
+    isShareable: (entry) => !_entryForbidsSharedCaching(entry.value?.headers),
     group: opts.group || "handlers",
     integrity: opts.integrity || hash([handler, _integrityOpts(opts)]),
   };
@@ -257,6 +257,24 @@ function _forbidsSharedCaching(cacheControl: unknown): boolean {
     .split(",")
     .map((directive) => directive.trim().split("=")[0]!.toLowerCase())
     .some((directive) => directive === "no-store" || directive === "private");
+}
+
+// Memoize the parse per headers object: `validate` and `isShareable` are both invoked
+// several times per cache read on the hot path, always against the same entry's headers.
+// Keyed on the headers object (WeakMap → auto-GC, no mutation of the stored entry).
+const _sharedCachingForbidden = new WeakMap<object, boolean>();
+function _entryForbidsSharedCaching(
+  headers: ResponseCacheEntry["headers"] | undefined,
+): boolean {
+  if (!headers) {
+    return false;
+  }
+  let forbidden = _sharedCachingForbidden.get(headers);
+  if (forbidden === undefined) {
+    forbidden = _forbidsSharedCaching(headers["cache-control"]);
+    _sharedCachingForbidden.set(headers, forbidden);
+  }
+  return forbidden;
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */

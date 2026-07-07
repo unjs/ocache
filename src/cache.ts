@@ -239,8 +239,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             }
           })();
           event?.req.waitUntil?.(promise);
-        } else {
-          // Revalidation produced an invalid result — evict stale entry from storage
+        } else if (hitIndex >= 0) {
+          // Revalidation produced an invalid result — evict the stale entry from storage.
+          // Only when a tier actually had a stored entry (hitIndex >= 0): a never-cached
+          // result (e.g. a fresh `no-store` response) has nothing to evict, so skip the
+          // wasted per-tier delete round-trip.
           const evictPromise = _evictFromStorage(key, bases, group, name).catch((error) => {
             _onError("[cache] Cache eviction error.", error);
           });
