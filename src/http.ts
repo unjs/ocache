@@ -16,6 +16,7 @@ function defaultCacheOptions() {
     base: "/cache",
     swr: true,
     maxAge: 1,
+    cacheStatusHeader: true,
   } as const;
 }
 
@@ -51,8 +52,32 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const _handleCacheHeaders = opts.handleCacheHeaders || _defaultHandleCacheHeaders;
 
+  // CDN-style cache-status header (X-Cache: HIT | MISS | STALE)
+  const _statusHeader =
+    opts.cacheStatusHeader === true
+      ? "x-cache"
+      : typeof opts.cacheStatusHeader === "string" && opts.cacheStatusHeader
+        ? opts.cacheStatusHeader.toLowerCase()
+        : undefined;
+
   const _opts: CacheOptions<ResponseCacheEntry> = {
     ...opts,
+    // Inject the cache-status header into a cloned entry value (never mutating the
+    // stored entry) so it flows through to the final Response headers.
+    transform: _statusHeader
+      ? (entry) => {
+          if (!entry.value) {
+            return;
+          }
+          return {
+            ...entry.value,
+            headers: {
+              ...entry.value.headers,
+              [_statusHeader]: String(entry.status).toUpperCase(),
+            },
+          };
+        }
+      : undefined,
     shouldBypassCache: (event) => {
       return event.req.method !== "GET" && event.req.method !== "HEAD";
     },
@@ -184,7 +209,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         maxAge: opts.maxAge,
       })
     ) {
-      return _createResponse(null, { status: 304 });
+      const statusValue = _statusHeader
+        ? (response.headers[_statusHeader] as string | undefined)
+        : undefined;
+      return _createResponse(null, {
+        status: 304,
+        headers: statusValue === undefined ? undefined : { [_statusHeader!]: statusValue },
+      });
     }
 
     // Send Response

@@ -1,7 +1,7 @@
 import { hash } from "ohash";
 import { useStorage } from "./storage.ts";
 
-import type { HTTPEvent, CacheEntry, CacheOptions } from "./types.ts";
+import type { HTTPEvent, CacheEntry, CacheOptions, CacheStatus } from "./types.ts";
 
 function defaultCacheOptions() {
   return {
@@ -12,7 +12,7 @@ function defaultCacheOptions() {
   } as const;
 }
 
-type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T };
+type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
 export type CachedFunction<T, ArgsT extends unknown[]> = {
   (...args: ArgsT): Promise<T>;
@@ -85,6 +85,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       entry = {};
       const error = new Error("Malformed data read from cache.");
       _onError("[cache]", error);
+    } else {
+      // Work on a per-call shallow clone: a storage backend may return the entry by
+      // reference (the built-in memory storage does), so all subsequent in-place
+      // mutations below — freshness resets, the `status` attach, the SWR value
+      // refresh — must not corrupt the object still held in storage or let
+      // concurrent same-key calls overwrite each other's per-call fields.
+      entry = { ...entry };
     }
 
     // Per-entry TTL (set by the `getMaxAge` hook on the previous write) takes precedence over static options.
@@ -105,13 +112,17 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const isFullyExpired =
       staleTtl !== undefined && ttl > 0 && Date.now() - (entry.mtime || 0) > ttl + staleTtl;
 
+    // Computed once and reused for both the `expired` check and the `status`
+    // decision below (same entry state, so re-validating would just repeat work).
+    const _isValid = validate(entry) !== false;
+
     const expired =
       shouldInvalidateCache ||
       entry.stale === true ||
       entry.integrity !== integrity ||
       readMaxAge === 0 ||
       (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
-      validate(entry) === false;
+      !_isValid;
 
     // If fully expired beyond staleMaxAge, clear the stale value so SWR won't serve it
     if (isFullyExpired) {
@@ -120,6 +131,21 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       entry.mtime = undefined;
       entry.expires = undefined;
     }
+
+    // Determine how this call will be served (mirrors the serve decision below):
+    // - no usable cached value -> resolved fresh (miss)
+    // - fresh cached value -> hit
+    // - expired but served stale under SWR -> stale
+    // - a prior value existed but was expired/invalid and re-resolved in the
+    //   foreground (no stale served) -> revalidated
+    const status: CacheStatus =
+      entry.value === undefined
+        ? "miss"
+        : !expired
+          ? "hit"
+          : opts.swr && _isValid
+            ? "stale"
+            : "revalidated";
 
     const _resolve = async () => {
       const isPending = pending[key];
@@ -190,11 +216,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           // If no tier had a hit (hitIndex === -1), write to all tiers.
           // If tier N matched, write to tiers 0..N (promote upward + refresh hit tier).
           const writeBases = hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
+          // `status` is a per-call field — never persist it to storage.
+          const { status: _status, ...toStore } = entry;
           const promise = (async () => {
             try {
               await Promise.all(
                 writeBases.map((b) =>
-                  useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
+                  useStorage().set(_buildCacheKey(key, { group, name }, b), toStore, setOpts),
                 ),
               );
             } catch (error) {
@@ -219,6 +247,21 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     } else if (expired) {
       event?.req.waitUntil?.(_resolvePromise);
     }
+
+    // Attach the per-call `status` to `entry`. `entry` is a per-call clone (see the
+    // read path above), never the object a ref-sharing storage backend still holds,
+    // so this can't corrupt shared state or race with concurrent same-key calls. It's
+    // still marked NON-ENUMERABLE as defence-in-depth so it stays out of every
+    // persistence path (object spreads, JSON/structuredClone). Attaching to the live
+    // clone (rather than a fresh return-time copy) means a synchronous SWR
+    // revalidation that updates `entry.value` in a microtask is reflected in the
+    // returned value.
+    Object.defineProperty(entry, "status", {
+      value: status,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
 
     if (opts.swr && validate(entry) !== false) {
       _resolvePromise.catch((error) => {
