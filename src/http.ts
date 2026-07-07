@@ -107,6 +107,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       if (!entry.value) {
         return false;
       }
+      // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
+      if (_forbidsSharedCaching(entry.value.headers["cache-control"])) {
+        return false;
+      }
       if (entry.value.status >= 400) {
         return false;
       }
@@ -161,22 +165,27 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       res.headers.set("last-modified", new Date().toUTCString());
     }
 
-    const cacheControl = [];
-    if (opts.swr) {
-      if (opts.maxAge != null) {
-        cacheControl.push(`s-maxage=${opts.maxAge}`);
+    // Only synthesize a cache-control header when the handler did not set one
+    // explicitly — never clobber an explicit cache-control with our SWR/s-maxage
+    // directives (mirrors the etag / last-modified "preserve if present" behavior above).
+    if (!res.headers.has("cache-control")) {
+      const cacheControl = [];
+      if (opts.swr) {
+        if (opts.maxAge != null) {
+          cacheControl.push(`s-maxage=${opts.maxAge}`);
+        }
+        if (opts.staleMaxAge != null) {
+          cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
+        } else {
+          cacheControl.push("stale-while-revalidate");
+        }
+      } else if (opts.maxAge) {
+        // For non-SWR, set max-age directly
+        cacheControl.push(`max-age=${opts.maxAge}`);
       }
-      if (opts.staleMaxAge != null) {
-        cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
-      } else {
-        cacheControl.push("stale-while-revalidate");
+      if (cacheControl.length > 0) {
+        res.headers.set("cache-control", cacheControl.join(", "));
       }
-    } else if (opts.maxAge) {
-      // For non-SWR, set max-age directly
-      cacheControl.push(`max-age=${opts.maxAge}`);
-    }
-    if (cacheControl.length > 0) {
-      res.headers.set("cache-control", cacheControl.join(", "));
     }
 
     const cacheEntry: ResponseCacheEntry = {
@@ -231,6 +240,20 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
 function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
+}
+
+/**
+ * Whether a `Cache-Control` header value explicitly forbids storing the response in a
+ * shared cache — `no-store` (never store anywhere) or `private` (not in a shared cache).
+ */
+function _forbidsSharedCaching(cacheControl: unknown): boolean {
+  if (typeof cacheControl !== "string" || !cacheControl) {
+    return false;
+  }
+  return cacheControl
+    .split(",")
+    .map((directive) => directive.trim().split("=")[0]!.toLowerCase())
+    .some((directive) => directive === "no-store" || directive === "private");
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
