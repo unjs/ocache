@@ -723,14 +723,14 @@ describe("storage", () => {
 
   it("applies a default maxSize when none is provided", () => {
     const storage = createMemoryStorage();
-    for (let i = 0; i < 1200; i++) {
+    for (let i = 0; i < 12_000; i++) {
       storage.set(`key-${i}`, i);
     }
-    // Oldest entries beyond the default ceiling (1000) are evicted.
+    // Oldest entries beyond the default ceiling (10 000) are evicted.
     expect(storage.get("key-0")).toBeNull();
-    expect(storage.get("key-199")).toBeNull();
-    expect(storage.get("key-200")).toBe(200);
-    expect(storage.get("key-1199")).toBe(1199);
+    expect(storage.get("key-1999")).toBeNull();
+    expect(storage.get("key-2000")).toBe(2000);
+    expect(storage.get("key-11999")).toBe(11_999);
   });
 
   it("grows unbounded when maxSize is Infinity", () => {

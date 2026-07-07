@@ -4,12 +4,12 @@ export interface StorageInterface {
 }
 
 /** Default entry ceiling for the built-in memory storage before LRU eviction kicks in. */
-export const DEFAULT_MEMORY_MAX_SIZE = 1000;
+export const DEFAULT_MEMORY_MAX_SIZE = 10_000;
 
 export interface MemoryStorageOptions {
   /**
    * Maximum number of entries to keep. When exceeded, the least-recently-used
-   * entries are evicted. Defaults to `DEFAULT_MEMORY_MAX_SIZE` (1000). Pass
+   * entries are evicted. Defaults to `DEFAULT_MEMORY_MAX_SIZE` (10 000). Pass
    * `Infinity` (or `0`) to disable the ceiling and grow unbounded.
    */
   maxSize?: number;
