@@ -47,6 +47,7 @@ const cached = defineCachedFunction(fn, {
   validate: (entry) => entry.value !== undefined, // Custom validation
   transform: (entry) => entry.value, // Transform before returning
   onError: (error) => console.error(error), // Error handler
+  onCacheEvent: (event) => {}, // Lifecycle hook: hit/miss/stale/set/evict
 });
 ```
 
@@ -146,6 +147,63 @@ await expireCache({
 });
 ```
 
+### Cache Events
+
+Pass an `onCacheEvent` hook to observe the cache lifecycle — hits, misses, stale serves, writes, and evictions. Use it for metrics, audit logging, cascading invalidations, or debugging. The hook is a superset of an "update/eviction" callback: filter for `set`/`evict` to react to changes, and read `oldValue`/`newValue`/`reason` to compare before/after.
+
+```ts
+const getUser = defineCachedFunction(fetchUser, {
+  maxAge: 60,
+  staleMaxAge: 300,
+  onCacheEvent(event) {
+    switch (event.type) {
+      case "hit": // fresh value served
+      case "miss": // nothing cached, resolver ran
+      case "stale": // stale value served, refreshing in background
+        break;
+      case "set": // written to storage
+        // event.oldValue, event.newValue
+        // event.reason: "initial" | "maxAge" | "stale" | "invalid" | "manual"
+        break;
+      case "evict": // removed from storage
+        // event.oldValue
+        // event.reason: "error" | "invalid" | "manual"
+        break;
+    }
+  },
+});
+```
+
+Every event carries a `key` (the resolved cache key) and a `name` — the cached function's `name`, or the request route for HTTP handlers. The hook fires synchronously for the served value and again from background SWR refreshes. Errors thrown inside it are routed to `onError` and never affect caching; it also has no effect on integrity, so adding or removing it never invalidates existing entries.
+
+Event types are also exported as `CacheEventType` constants, so you can avoid string literals — `event.type === CacheEventType.Hit` (values are plain strings, so `=== "hit"` still works):
+
+```ts
+import { CacheEventType } from "ocache";
+
+onCacheEvent(event) {
+  if (event.type === CacheEventType.Evict) {
+    /* ... */
+  }
+}
+```
+
+`onCacheEvent` works the same on `defineCachedHandler`, where `name` is the request route. A minimal dev logger:
+
+```ts
+const handler = defineCachedHandler(render, {
+  maxAge: 2,
+  swr: true,
+  onCacheEvent(event) {
+    if (event.type === "set" && event.reason === "initial") {
+      console.log(`Added cache entry for '${event.name}', swr enabled`);
+    } else {
+      console.log(`Cache ${event.type} for '${event.name}'`);
+    }
+  },
+});
+```
+
 ### Multi-tier Caching
 
 Use an array of `base` prefixes to enable multi-tier caching. On read, each prefix is tried in order and the first hit is used. On write, the entry is written to all prefixes:
@@ -194,6 +252,18 @@ setStorage(redisStorage);
 
 <!-- automd:docs4ts -->
 
+### `_integrityOpts`
+
+```ts
+function _integrityOpts<O extends CacheOptions>(
+  opts: O,
+): Omit<O, "base" | "group" | "name" | "onCacheEvent">;
+```
+
+Strips storage-location and observability fields from opts so integrity only reflects the cached computation.
+
+---
+
 ### `cachedFunction`
 
 ```ts
@@ -201,6 +271,84 @@ const cachedFunction = defineCachedFunction;
 ```
 
 Alias for [`defineCachedFunction`](#definecachedfunction).
+
+---
+
+### `CacheEvent`
+
+```ts
+type CacheEvent<T = any> =
+  |
+```
+
+A cache lifecycle event passed to the {@link CacheOptions.onCacheEvent} hook.
+
+A discriminated union on `type` ([`CacheEventType`](#cacheeventtype)):
+
+- `hit` — a fresh cached value was served.
+- `miss` — nothing servable was cached; the resolver ran to populate it.
+- `stale` — a stale value was served while a background refresh runs (SWR).
+- `set` — a value was (re)written to storage (carries `oldValue`/`newValue`/`reason`).
+- `evict` — an entry was removed from storage (carries `oldValue`/`reason`).
+
+`key` is the resolved logical cache key; `name` is a human-readable label
+(the cached function's `name`, or the request route for HTTP handlers). For HTTP
+handlers `name` is the raw route including the query string, so sanitize it before
+logging if URLs may carry secrets.
+
+---
+
+### `CacheEventType`
+
+```ts
+const CacheEventType =
+```
+
+Cache lifecycle event types (the `type` discriminant of [`CacheEvent`](#cacheevent)).
+
+Importable named constants so consumers can avoid string literals:
+`if (event.type === CacheEventType.Hit)`. The values are plain strings, so
+`event.type === "hit"` keeps working too.
+
+---
+
+### `CacheEventType`
+
+```ts
+type CacheEventType = (typeof CacheEventType)[keyof typeof CacheEventType];
+```
+
+Union of [`CacheEventType`](#cacheeventtype) values (`"hit" | "miss" | "stale" | "set" | "evict"`).
+
+---
+
+### `CacheEvictReason`
+
+```ts
+type CacheEvictReason = "error" | "invalid" | "manual";
+```
+
+Reason a cache entry was removed, passed on `evict` [`CacheEvent`](#cacheevent)s.
+
+- `error` — the resolver threw, so the stale entry was dropped.
+- `invalid` — revalidation produced a value that failed `validate()`.
+- `manual` — removed via `invalidateCache` / `.invalidate()`.
+
+---
+
+### `CacheSetReason`
+
+```ts
+type CacheSetReason = "initial" | "maxAge" | "stale" | "invalid" | "manual";
+```
+
+Reason a cache entry was (re)written, passed on `set` [`CacheEvent`](#cacheevent)s.
+
+- `initial` — first population (no previous value).
+- `maxAge` — the previous value's TTL (`maxAge`) had elapsed.
+- `stale` — the entry had been marked stale (e.g. by `expireCache`).
+- `invalid` — integrity changed or `validate()` rejected the previous value.
+- `manual` — re-resolved because `shouldInvalidateCache` returned `true`.
 
 ---
 
