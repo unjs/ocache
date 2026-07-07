@@ -721,13 +721,25 @@ describe("storage", () => {
     expect(storage.get("c")).toBe(3);
   });
 
-  it("is unbounded by default (no maxSize)", () => {
+  it("applies a default maxSize when none is provided", () => {
     const storage = createMemoryStorage();
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 1200; i++) {
+      storage.set(`key-${i}`, i);
+    }
+    // Oldest entries beyond the default ceiling (1000) are evicted.
+    expect(storage.get("key-0")).toBeNull();
+    expect(storage.get("key-199")).toBeNull();
+    expect(storage.get("key-200")).toBe(200);
+    expect(storage.get("key-1199")).toBe(1199);
+  });
+
+  it("grows unbounded when maxSize is Infinity", () => {
+    const storage = createMemoryStorage({ maxSize: Number.POSITIVE_INFINITY });
+    for (let i = 0; i < 2000; i++) {
       storage.set(`key-${i}`, i);
     }
     expect(storage.get("key-0")).toBe(0);
-    expect(storage.get("key-999")).toBe(999);
+    expect(storage.get("key-1999")).toBe(1999);
   });
 
   // Regression: nitro#2138 — expired cache entries never get flushed from memory.

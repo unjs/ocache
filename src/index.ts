@@ -12,6 +12,7 @@ export { defineCachedHandler } from "./http.ts";
 export {
   type StorageInterface,
   type MemoryStorageOptions,
+  DEFAULT_MEMORY_MAX_SIZE,
   createMemoryStorage,
   useStorage,
   setStorage,

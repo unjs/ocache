@@ -3,17 +3,23 @@ export interface StorageInterface {
   set<T = unknown>(key: string, value: T, opts?: { ttl?: number }): void | Promise<void>;
 }
 
+/** Default entry ceiling for the built-in memory storage before LRU eviction kicks in. */
+export const DEFAULT_MEMORY_MAX_SIZE = 1000;
+
 export interface MemoryStorageOptions {
   /**
    * Maximum number of entries to keep. When exceeded, the least-recently-used
-   * entries are evicted. Unset (or `0`) means unbounded (the previous default).
+   * entries are evicted. Defaults to `DEFAULT_MEMORY_MAX_SIZE` (1000). Pass
+   * `Infinity` (or `0`) to disable the ceiling and grow unbounded.
    */
   maxSize?: number;
 }
 
-/** Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds) and optional LRU eviction. */
+/** Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds) and LRU eviction. */
 export function createMemoryStorage(opts: MemoryStorageOptions = {}): StorageInterface {
-  const maxSize = opts.maxSize && opts.maxSize > 0 ? opts.maxSize : undefined;
+  const rawMaxSize = opts.maxSize ?? DEFAULT_MEMORY_MAX_SIZE;
+  // A finite positive ceiling enables LRU eviction; Infinity / 0 / negative disable it.
+  const maxSize = Number.isFinite(rawMaxSize) && rawMaxSize > 0 ? rawMaxSize : undefined;
   const map = new Map<string, { value: unknown; expires?: number }>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
