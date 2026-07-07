@@ -1241,7 +1241,7 @@ describe("defineCachedHandler", () => {
   it("degrades to a miss on a corrupt cache entry with no headers", async () => {
     let callCount = 0;
     setStorage({
-      get: () => ({ value: { status: 200 } }),
+      get: () => ({ value: { status: 200 } }) as any,
       set: () => {},
     });
 
