@@ -86,6 +86,44 @@ const handler = defineCachedHandler(myHandler, {
 });
 ```
 
+#### Caching QUERY Requests
+
+The [HTTP `QUERY` method](https://www.rfc-editor.org/rfc/rfc10008) (RFC 10008) is a safe, idempotent alternative to `POST` for queries: the query is carried in the **request body** instead of the URL. Because it is safe and idempotent, its responses are cacheable — and `defineCachedHandler` caches `GET`, `HEAD`, and `QUERY` out of the box.
+
+Unlike `GET` (keyed by URL only), a `QUERY` cache key incorporates the **request body** along with its `content-type` and `accept` (as required by [RFC 10008 §2.7](https://www.rfc-editor.org/rfc/rfc10008#section-2.7)), so two queries to the same URL with different bodies are cached separately:
+
+```ts
+const handler = defineCachedHandler(
+  async (event) => {
+    const query = await event.req.text(); // the body is preserved for the handler
+    const results = await runQuery(query);
+    return Response.json(results);
+  },
+  {
+    maxAge: 300,
+    // Advertise supported query formats via the `Accept-Query` response header
+    acceptQuery: ["application/sql", "application/jsonpath"],
+  },
+);
+```
+
+JSON request bodies are normalized before hashing, so semantically-equal queries that differ only in key order or whitespace share a cache entry (skipped when the request sends `Cache-Control: no-transform`). Provide `normalizeQueryKey` to customize what portion of the body is significant to the key:
+
+```ts
+const handler = defineCachedHandler(runQuery, {
+  maxAge: 300,
+  normalizeQueryKey: ({ body, contentType }) => normalize(new TextDecoder().decode(body)),
+});
+```
+
+Use `methods` to control which methods are cacheable (defaults to `["GET", "HEAD", "QUERY"]`):
+
+```ts
+const handler = defineCachedHandler(myHandler, {
+  methods: ["GET", "HEAD"], // opt out of QUERY caching
+});
+```
+
 ### Cache Invalidation
 
 Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:

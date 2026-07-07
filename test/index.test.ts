@@ -785,6 +785,159 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
   });
 
+  it("caches QUERY responses keyed by request body", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      async (event) => {
+        callCount++;
+        const body = await event.req.text();
+        return new Response(`result:${body}`);
+      },
+      { maxAge: 10 },
+    );
+
+    const qOpts = (body: string) => ({
+      method: "QUERY",
+      body,
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+
+    // Same body -> cache hit (handler called once), and the handler still receives the body.
+    const r1 = (await handler(makeEvent(path, qOpts("q=foo")))) as Response;
+    const r2 = (await handler(makeEvent(path, qOpts("q=foo")))) as Response;
+    expect(await r1.text()).toBe("result:q=foo");
+    expect(await r2.text()).toBe("result:q=foo");
+    expect(callCount).toBe(1);
+
+    // Different body to the same URL -> distinct cache entry (must not collide).
+    const r3 = (await handler(makeEvent(path, qOpts("q=bar")))) as Response;
+    expect(await r3.text()).toBe("result:q=bar");
+    expect(callCount).toBe(2);
+  });
+
+  it("varies QUERY cache key by content-type", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    await handler(
+      makeEvent(path, {
+        method: "QUERY",
+        body: "x",
+        headers: { "content-type": "application/sql" },
+      }),
+    );
+    await handler(
+      makeEvent(path, {
+        method: "QUERY",
+        body: "x",
+        headers: { "content-type": "application/jsonpath" },
+      }),
+    );
+    expect(callCount).toBe(2);
+  });
+
+  it("normalizes JSON QUERY bodies for the cache key", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const jsonOpts = (body: string) => ({
+      method: "QUERY",
+      body,
+      headers: { "content-type": "application/json" },
+    });
+
+    // Same JSON, different key order + whitespace -> same cache entry.
+    await handler(makeEvent(path, jsonOpts('{"a":1,"b":2}')));
+    await handler(makeEvent(path, jsonOpts('{ "b": 2, "a": 1 }')));
+    expect(callCount).toBe(1);
+  });
+
+  it("skips JSON normalization when no-transform is set", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const jsonOpts = (body: string) => ({
+      method: "QUERY",
+      body,
+      headers: { "content-type": "application/json", "cache-control": "no-transform" },
+    });
+
+    await handler(makeEvent(path, jsonOpts('{"a":1,"b":2}')));
+    await handler(makeEvent(path, jsonOpts('{ "b": 2, "a": 1 }')));
+    expect(callCount).toBe(2);
+  });
+
+  it("applies a custom normalizeQueryKey hook", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      {
+        maxAge: 10,
+        // Only the first token of the body is significant.
+        normalizeQueryKey: ({ body }) => new TextDecoder().decode(body).split(" ")[0],
+      },
+    );
+
+    const q = (body: string) => ({
+      method: "QUERY",
+      body,
+      headers: { "content-type": "text/plain" },
+    });
+    await handler(makeEvent(path, q("select a")));
+    await handler(makeEvent(path, q("select b")));
+    expect(callCount).toBe(1);
+  });
+
+  it("sets Vary and Accept-Query headers for QUERY responses", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      acceptQuery: ["application/jsonpath", "application/sql;charset=UTF-8"],
+    });
+
+    const res = (await handler(
+      makeEvent(path, {
+        method: "QUERY",
+        body: "x",
+        headers: { "content-type": "application/sql" },
+      }),
+    )) as Response;
+
+    // Token and String forms are semantically equivalent (RFC 10008 §3); `UTF-8` serializes as a token.
+    expect(res.headers.get("accept-query")).toBe(
+      "application/jsonpath, application/sql;charset=UTF-8",
+    );
+    const vary = res.headers.get("vary") || "";
+    expect(vary).toContain("content-type");
+    expect(vary).toContain("accept");
+  });
+
   it("sets cache-control header with SWR and staleMaxAge", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
