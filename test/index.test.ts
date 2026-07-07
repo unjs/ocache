@@ -1233,10 +1233,10 @@ describe("defineCachedHandler", () => {
       { maxAge: 10 },
     );
 
-    const [r1, r2] = (await Promise.all([
-      handler(makeEvent(path)),
-      handler(makeEvent(path)),
-    ])) as [Response, Response];
+    const [r1, r2] = (await Promise.all([handler(makeEvent(path)), handler(makeEvent(path))])) as [
+      Response,
+      Response,
+    ];
     const [b1, b2] = await Promise.all([r1.text(), r2.text()]);
 
     // Each caller resolves independently — the private/no-store leader value is never
