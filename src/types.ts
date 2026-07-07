@@ -75,7 +75,8 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * the entry is persisted. Return a number (seconds) as shorthand for `maxAge`, or an object to also
    * override `staleMaxAge`. The resolved values override the static options for that entry and drive
    * both the read freshness check and the storage TTL. Return `undefined` (or omit a field) to fall
-   * back to the static option.
+   * back to the static option. A resolved value `<= 0` disables caching for that entry (re-resolves
+   * on every access); negatives are clamped to `0` rather than treated as "cache forever".
    *
    * @example
    * ```ts

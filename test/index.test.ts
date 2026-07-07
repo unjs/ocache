@@ -770,6 +770,31 @@ describe("getMaxAge (dynamic per-entry TTL)", () => {
     expect(errors.length).toBe(1);
   });
 
+  it("clamps a negative maxAge to 0 (re-resolves every access, never cached forever)", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        getKey: () => "negative-key",
+        // A negative TTL (e.g. an already-expired token) must not pin the entry as fresh
+        getMaxAge: () => -5,
+      },
+    );
+
+    expect(await fn()).toBe(1);
+    expect(await fn()).toBe(2);
+    expect(callCount).toBe(2);
+
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.maxAge).toBe(0);
+  });
+
   it("respects per-entry TTL when expiring via expireCache", async () => {
     const options = {
       swr: true,

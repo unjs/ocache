@@ -60,7 +60,7 @@ const getToken = defineCachedFunction(
   () => fetchToken(), // resolves { access_token, expires_in }
   {
     // Cache each token for exactly its own lifetime (minus a small safety margin)
-    getMaxAge: (entry) => (entry.value?.expires_in ?? 60) - 5,
+    getMaxAge: (entry) => Math.max(1, (entry.value?.expires_in ?? 60) - 5),
   },
 );
 ```

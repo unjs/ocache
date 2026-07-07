@@ -162,8 +162,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             const resolved = await opts.getMaxAge(entry);
             // A bare number is shorthand for `{ maxAge }`.
             const dynamic = typeof resolved === "number" ? { maxAge: resolved } : resolved;
-            entry.maxAge = dynamic?.maxAge;
-            entry.staleMaxAge = dynamic?.staleMaxAge;
+            // Clamp to a non-negative TTL: a value <= 0 means "don't cache" (re-resolve every
+            // access), never "cache forever as fresh". Non-finite (NaN) falls back to static options.
+            entry.maxAge = _clampTtl(dynamic?.maxAge);
+            entry.staleMaxAge = _clampTtl(dynamic?.staleMaxAge);
           } catch (error) {
             _onError("[cache] getMaxAge hook error.", error);
           }
@@ -374,6 +376,11 @@ export async function expireCache<ArgsT extends unknown[] = any[]>(
 
 function isHTTPEvent(input: unknown): input is HTTPEvent {
   return (input as any)?.req instanceof Request;
+}
+
+/** Normalizes a dynamic TTL: clamps negatives to 0, treats nullish/non-finite as "unset" (static fallback). */
+function _clampTtl(value: number | undefined): number | undefined {
+  return value == null || !Number.isFinite(value) ? undefined : Math.max(0, value);
 }
 
 function getKey(...args: unknown[]) {
