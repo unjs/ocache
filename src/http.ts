@@ -62,6 +62,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const _opts: CacheOptions<ResponseCacheEntry> = {
     ...opts,
+    // Derive per-entry maxAge/staleMaxAge from the (upstream) response's Cache-Control
+    // header when opted in. An explicit `getMaxAge` always wins.
+    getMaxAge: opts.getMaxAge
+      ? opts.getMaxAge
+      : opts.honorCacheControl
+        ? (entry) => _parseCacheControlTtl(entry.value?.headers?.["cache-control"])
+        : undefined,
     // Inject the cache-status header into a cloned entry value (never mutating the
     // stored entry) so it flows through to the final Response headers.
     transform: _statusHeader
@@ -254,6 +261,57 @@ function _forbidsSharedCaching(cacheControl: unknown): boolean {
     const name = directive.trim().split("=")[0]!.toLowerCase();
     return name === "no-store" || name === "private";
   });
+}
+
+/**
+ * Parses the freshness directives from a response `Cache-Control` header into per-entry
+ * TTL overrides for the `getMaxAge` hook, using shared-cache semantics:
+ * - `s-maxage` takes precedence over `max-age` for `maxAge`
+ * - `stale-while-revalidate` maps to `staleMaxAge`
+ * - `no-cache` forces `maxAge: 0` (revalidate on every access)
+ *
+ * Returns `undefined` when no relevant directive is present, so every field falls back to
+ * the static options. A directive present but non-numeric (e.g. bare `stale-while-revalidate`)
+ * yields `undefined` for that field alone.
+ */
+function _parseCacheControlTtl(
+  cacheControl: unknown,
+): { maxAge?: number; staleMaxAge?: number } | undefined {
+  if (typeof cacheControl !== "string" || !cacheControl) {
+    return undefined;
+  }
+  let maxAge: number | undefined;
+  let sMaxAge: number | undefined;
+  let staleMaxAge: number | undefined;
+  let noCache = false;
+  for (const directive of cacheControl.split(",")) {
+    const [rawName, rawValue] = directive.trim().split("=");
+    const name = rawName!.toLowerCase();
+    if (name === "no-cache") {
+      noCache = true;
+    } else if (name === "s-maxage") {
+      sMaxAge = _parseSeconds(rawValue);
+    } else if (name === "max-age") {
+      maxAge = _parseSeconds(rawValue);
+    } else if (name === "stale-while-revalidate") {
+      staleMaxAge = _parseSeconds(rawValue);
+    }
+  }
+  // Shared cache: s-maxage overrides max-age. no-cache means never serve without revalidating.
+  const resolvedMaxAge = noCache ? 0 : (sMaxAge ?? maxAge);
+  if (resolvedMaxAge === undefined && staleMaxAge === undefined) {
+    return undefined;
+  }
+  return { maxAge: resolvedMaxAge, staleMaxAge };
+}
+
+/** Parses a Cache-Control directive value into non-negative seconds, or `undefined` if absent/invalid. */
+function _parseSeconds(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? seconds : undefined;
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */

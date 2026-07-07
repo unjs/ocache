@@ -36,6 +36,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
 - Sets `cache-control`, `etag`, `last-modified` headers — but never clobbers an explicit `cache-control` set by the handler (SWR/`s-maxage`/`max-age` directives are only synthesized when the handler didn't set one)
 - Honors explicit `Cache-Control: no-store` / `private` on the response — those are never cached (rejected in `validate`), though still returned to the caller. This only governs storage: concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`)
+- `honorCacheControl` option (opt-in, default off) — derive per-entry `maxAge` / `staleMaxAge` from the freshness directives on the handler (upstream) response's `Cache-Control` (`s-maxage` preferred over `max-age` → `maxAge`, `stale-while-revalidate` → `staleMaxAge`, `no-cache` → `maxAge: 0`) instead of the static options. Implemented by wiring an internal `getMaxAge` (from `cache.ts`) that parses `entry.value.headers["cache-control"]`; an explicit user `getMaxAge` takes precedence and disables the flag. Missing directive → falls back to static option. `no-store` / `private` handling is independent (always honored)
 - Filters non-variable headers before calling the handler (for consistent cache keys)
 - Framework integration hooks on `CachedEventHandlerOptions`:
   - `toResponse(value, event)` — convert handler return value to Response (default: plain Response constructor)
@@ -55,7 +56,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - `EventHandler<E>` — `(event: E) => unknown | Promise<unknown>` (generic, defaults to HTTPEvent)
 - `CacheEntry<T>` — stored cache entry with value, expires, mtime, integrity
 - `CacheOptions<T>` — maxAge, swr, staleMaxAge, getMaxAge (dynamic per-entry TTL hook), base (string | string[] for multi-tier), getKey, validate, transform, etc.
-- `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
+- `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, honorCacheControl, toResponse, createResponse, handleCacheHeaders
 - `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
 - `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
 

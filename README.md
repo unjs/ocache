@@ -111,6 +111,28 @@ const handler = defineCachedHandler(myHandler, {
 > [!NOTE]
 > This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
 
+#### Honoring upstream freshness headers
+
+By default the cache lifetime comes from the static `maxAge` / `staleMaxAge` options. Opt in with `honorCacheControl: true` to instead derive the lifetime from the freshness directives on the handler (upstream) response's `Cache-Control` header — useful when proxying an origin that already advertises how long its responses stay fresh:
+
+```ts
+const handler = defineCachedHandler(
+  async (event) => fetch(upstreamURL(event)), // origin sets its own Cache-Control
+  {
+    maxAge: 60, // fallback when the response omits a freshness directive
+    honorCacheControl: true,
+  },
+);
+```
+
+The response's `Cache-Control` is parsed with shared-cache semantics:
+
+- `s-maxage` (preferred) or `max-age` → `maxAge`
+- `stale-while-revalidate` → `staleMaxAge`
+- `no-cache` → `maxAge: 0` (revalidate on every access)
+
+A directive that is absent falls back to the corresponding static option. `no-store` / `private` are always honored regardless of this flag (such responses are never stored). Built on top of [`getMaxAge`](#dynamic-ttl) — an explicit `getMaxAge` takes precedence and disables this flag.
+
 ### Cache Invalidation
 
 Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:

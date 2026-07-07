@@ -1277,6 +1277,116 @@ describe("defineCachedHandler", () => {
     expect(r2.headers.get("x-cache")).toBe("HIT");
   });
 
+  describe("honorCacheControl", () => {
+    it("derives maxAge from the response's s-maxage (freshness honored)", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "public, s-maxage=10" } });
+        },
+        { maxAge: 0, honorCacheControl: true },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // Static maxAge is 0 (would never cache), but the response's s-maxage=10 keeps it fresh.
+      expect(callCount).toBe(1);
+      expect(r1.headers.get("x-cache")).toBe("MISS");
+      expect(r2.headers.get("x-cache")).toBe("HIT");
+    });
+
+    it("prefers s-maxage over max-age (shared-cache semantics)", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () =>
+          new Response("ok", {
+            headers: { "cache-control": "max-age=1, s-maxage=100, stale-while-revalidate=50" },
+          }),
+        { maxAge: 5, swr: true, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // Storage TTL must cover s-maxage (100) + stale-while-revalidate (50), not max-age (1).
+      const setOpts = setSpy.mock.calls.at(-1)?.[2];
+      expect(setOpts).toEqual({ ttl: 150 });
+    });
+
+    it("treats no-cache as maxAge 0 (re-resolves every access)", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "no-cache" } });
+        },
+        { maxAge: 60, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+
+      expect(callCount).toBe(2);
+    });
+
+    it("falls back to static options when the response has no relevant directive", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "public" } });
+        },
+        { maxAge: 60, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+
+      // No max-age/s-maxage on the response → static maxAge: 60 keeps it cached.
+      expect(callCount).toBe(1);
+    });
+
+    it("is off by default (static options win, upstream freshness ignored)", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "s-maxage=0" } });
+        },
+        { maxAge: 60 },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+
+      // Flag not set: the s-maxage=0 on the response is ignored, static maxAge: 60 caches it.
+      expect(callCount).toBe(1);
+    });
+
+    it("lets an explicit getMaxAge take precedence over honorCacheControl", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=10" } }),
+        { swr: false, honorCacheControl: true, getMaxAge: () => 99 },
+      );
+
+      await handler(makeEvent(path));
+
+      // getMaxAge wins: TTL comes from 99, not the response's s-maxage=10.
+      const setOpts = setSpy.mock.calls.at(-1)?.[2];
+      expect(setOpts).toEqual({ ttl: 99 });
+    });
+  });
+
   it("auto-generates etag and last-modified", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("test-body"), { maxAge: 10 });

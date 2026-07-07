@@ -161,6 +161,27 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   varies?: string[] | readonly string[];
 
   /**
+   * Opt in to deriving the per-entry cache lifetime from the freshness directives on the
+   * handler (upstream) response's `Cache-Control` header, instead of the static `maxAge` /
+   * `staleMaxAge` options.
+   *
+   * When enabled, the response's `Cache-Control` is parsed with shared-cache semantics:
+   * - `s-maxage` (preferred) or `max-age` → `maxAge`
+   * - `stale-while-revalidate` → `staleMaxAge`
+   * - `no-cache` → `maxAge: 0` (revalidate on every access)
+   *
+   * A directive that is absent falls back to the corresponding static option. `no-store` /
+   * `private` are always honored independently (such responses are never cached), so this
+   * flag only governs the freshness lifetime of cacheable responses.
+   *
+   * Implemented on top of {@link CacheOptions.getMaxAge}. An explicit `getMaxAge` takes
+   * precedence — when you supply one, this flag is ignored.
+   *
+   * @default false
+   */
+  honorCacheControl?: boolean;
+
+  /**
    * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
    *
    * - `true` (default) — sets the `X-Cache` header.
