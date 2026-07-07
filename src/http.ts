@@ -233,15 +233,11 @@ function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
 }
 
-/**
- * Rebuilds the query string from only the allowlisted param names, in a stable
- * (allowlist) order so param order across different names doesn't affect the
- * result. The order of a repeated param's own values is preserved.
- */
+/** Rebuilds the query string from only the allowlisted param names, order-independent. */
 function _filterSearch(url: URL, names: string[]): string {
   const filtered = new URLSearchParams();
   for (const name of names) {
-    for (const value of url.searchParams.getAll(name)) {
+    for (const value of url.searchParams.getAll(name).sort()) {
       filtered.append(name, value);
     }
   }
