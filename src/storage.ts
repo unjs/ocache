@@ -3,10 +3,25 @@ export interface StorageInterface {
   set<T = unknown>(key: string, value: T, opts?: { ttl?: number }): void | Promise<void>;
 }
 
-/** Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds). */
-export function createMemoryStorage(): StorageInterface {
+export interface MemoryStorageOptions {
+  /**
+   * Maximum number of entries to keep. When exceeded, the least-recently-used
+   * entries are evicted. Unset (or `0`) means unbounded (the previous default).
+   */
+  maxSize?: number;
+}
+
+/** Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds) and optional LRU eviction. */
+export function createMemoryStorage(opts: MemoryStorageOptions = {}): StorageInterface {
+  const maxSize = opts.maxSize && opts.maxSize > 0 ? opts.maxSize : undefined;
   const map = new Map<string, { value: unknown; expires?: number }>();
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function _delete(key: string) {
+    map.delete(key);
+    _clearTimer(timers, key);
+  }
+
   return {
     get(key) {
       const entry = map.get(key);
@@ -14,9 +29,13 @@ export function createMemoryStorage(): StorageInterface {
         return null;
       }
       if (entry.expires && Date.now() > entry.expires) {
-        map.delete(key);
-        _clearTimer(timers, key);
+        _delete(key);
         return null;
+      }
+      // Mark as most-recently-used by reinserting (Map preserves insertion order).
+      if (maxSize) {
+        map.delete(key);
+        map.set(key, entry);
       }
       return entry.value as any;
     },
@@ -26,6 +45,8 @@ export function createMemoryStorage(): StorageInterface {
         map.delete(key);
         return;
       }
+      // Delete first so reinsertion moves the key to the most-recent position.
+      map.delete(key);
       const ttlMs = opts?.ttl ? opts.ttl * 1000 : undefined;
       map.set(key, {
         value,
@@ -41,6 +62,16 @@ export function createMemoryStorage(): StorageInterface {
           timer.unref();
         }
         timers.set(key, timer);
+      }
+      // Evict least-recently-used entries once over the ceiling.
+      if (maxSize) {
+        while (map.size > maxSize) {
+          const oldest = map.keys().next().value;
+          if (oldest === undefined) {
+            break;
+          }
+          _delete(oldest);
+        }
       }
     },
   };

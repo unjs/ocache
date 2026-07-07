@@ -190,6 +190,14 @@ const redisStorage: StorageInterface = {
 setStorage(redisStorage);
 ```
 
+The built-in memory storage is unbounded by default. To cap memory usage, pass `maxSize` to enable LRU eviction (least-recently-used entries are evicted once the entry count exceeds the ceiling):
+
+```ts
+import { createMemoryStorage, setStorage } from "ocache";
+
+setStorage(createMemoryStorage({ maxSize: 10_000 }));
+```
+
 ## API
 
 <!-- automd:docs4ts -->
@@ -207,10 +215,10 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 ### `createMemoryStorage`
 
 ```ts
-function createMemoryStorage(): StorageInterface;
+function createMemoryStorage(opts: MemoryStorageOptions =
 ```
 
-Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
+Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds) and optional LRU eviction.
 
 ---
 
