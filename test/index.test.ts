@@ -1203,6 +1203,21 @@ describe("defineCachedHandler", () => {
     expect(r2.headers.get("x-cache")).toBe("MISS");
   });
 
+  it("does not write to storage (no redundant eviction) on a no-store miss", async () => {
+    const setSpy = vi.fn();
+    setStorage({ get: () => null, set: setSpy });
+
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "cache-control": "no-store" } }),
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(uniquePath()));
+
+    // Nothing was stored (rejected) and nothing was there to evict, so no write at all.
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
   it("does not cache responses with Cache-Control: private", async () => {
     let callCount = 0;
     const path = uniquePath();

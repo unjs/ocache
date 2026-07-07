@@ -230,8 +230,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             }
           })();
           event?.req.waitUntil?.(promise);
-        } else {
-          // Revalidation produced an invalid result — evict stale entry from storage
+        } else if (hitIndex >= 0) {
+          // A prior cached entry existed but revalidation produced an invalid result —
+          // evict it so SWR doesn't keep serving the stale value. When there was no
+          // cache hit (hitIndex === -1) nothing is stored, so skip the redundant delete
+          // (e.g. a handler returning `Cache-Control: no-store`/`private` on every request).
           const evictPromise = _evictFromStorage(key, bases, group, name).catch((error) => {
             _onError("[cache] Cache eviction error.", error);
           });
