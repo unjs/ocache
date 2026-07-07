@@ -225,16 +225,6 @@ Creates an in-memory storage backed by a `Map` with optional TTL support (in sec
 
 ---
 
-### `DEFAULT_MEMORY_MAX_SIZE`
-
-```ts
-const DEFAULT_MEMORY_MAX_SIZE = 10_000;
-```
-
-Default entry ceiling for the built-in memory storage before LRU eviction kicks in.
-
----
-
 ### `defineCachedFunction`
 
 ```ts
