@@ -101,6 +101,16 @@ const handler = defineCachedHandler(myHandler, {
 });
 ```
 
+#### Private / non-cacheable responses
+
+`defineCachedHandler` honors an explicit `Cache-Control` on the response:
+
+- If the handler sets `Cache-Control: no-store` or `private`, the response is returned to the caller but never written to the cache — the handler runs on every request.
+- If the handler sets any other `Cache-Control`, it is preserved verbatim. The synthesized `s-maxage` / `stale-while-revalidate` / `max-age` directives are only added when the handler didn't set a `Cache-Control` of its own.
+
+> [!NOTE]
+> This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
+
 ### Cache Invalidation
 
 Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:

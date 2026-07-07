@@ -1170,6 +1170,113 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("cache-control")).toBe("max-age=60");
   });
 
+  it("does not clobber an explicit cache-control from the handler", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "cache-control": "public, max-age=600" } }),
+      { maxAge: 60, swr: true, staleMaxAge: 120 },
+    );
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-control")).toBe("public, max-age=600");
+  });
+
+  it("does not cache responses with Cache-Control: no-store", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "no-store" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(await r1.text()).toBe("ok");
+    expect(await r2.text()).toBe("ok");
+    expect(r1.headers.get("cache-control")).toBe("no-store");
+    // Never served from cache: the handler runs on every request.
+    expect(callCount).toBe(2);
+    expect(r2.headers.get("x-cache")).toBe("MISS");
+  });
+
+  it("does not write to storage (no redundant eviction) on a no-store miss", async () => {
+    const setSpy = vi.fn();
+    setStorage({ get: () => null, set: setSpy });
+
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "cache-control": "no-store" } }),
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(uniquePath()));
+
+    // Nothing was stored (rejected) and nothing was there to evict, so no write at all.
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not cache responses with Cache-Control: private", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "private, max-age=60" } });
+      },
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path));
+    await handler(makeEvent(path));
+
+    expect(callCount).toBe(2);
+  });
+
+  // Regression: a corrupt/partial stored entry whose `value` lacks a `headers`
+  // field must degrade to a cache miss, not throw from validate()'s cache-control
+  // check (which runs before the status/body guards).
+  it("degrades to a miss on a corrupt cache entry with no headers", async () => {
+    let callCount = 0;
+    setStorage({
+      get: () => ({ value: { status: 200 } }) as any,
+      set: () => {},
+    });
+
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const res = (await handler(makeEvent(uniquePath()))) as Response;
+    expect(await res.text()).toBe("ok");
+    expect(callCount).toBe(1);
+  });
+
+  it("still caches responses with a cacheable explicit cache-control", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "public, max-age=60" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(callCount).toBe(1);
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
   it("auto-generates etag and last-modified", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("test-body"), { maxAge: 10 });
