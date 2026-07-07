@@ -25,6 +25,17 @@ export type EventHandler<E extends HTTPEvent = HTTPEvent> = (
 ) => unknown | Promise<unknown>;
 
 /**
+ * How a cached value was served on a given call.
+ *
+ * - `"hit"` — a fresh cached value was returned without re-resolving.
+ * - `"stale"` — a stale value was served while a background SWR refresh runs.
+ * - `"revalidated"` — a prior value existed but was expired/invalid, so it was
+ *   re-resolved in the foreground (no stale value served) before returning.
+ * - `"miss"` — the value was resolved fresh on this call (nothing was cached).
+ */
+export type CacheStatus = "hit" | "stale" | "revalidated" | "miss";
+
+/**
  * Stored cache entry wrapping a cached value with metadata.
  */
 export interface CacheEntry<T = any> {
@@ -42,6 +53,14 @@ export interface CacheEntry<T = any> {
   maxAge?: number;
   /** Resolved per-entry `staleMaxAge` (seconds) set by the `getMaxAge` hook. Overrides `CacheOptions.staleMaxAge` for this entry. */
   staleMaxAge?: number;
+  /**
+   * How this value was served on the current call (`"hit"` / `"stale"` / `"revalidated"` / `"miss"`).
+   *
+   * Populated per-call on the entry passed to `transform` — it is **not** persisted
+   * to storage. Read it from `transform` for metrics/observability or to drive
+   * conditional logic. See {@link CacheStatus}.
+   */
+  status?: CacheStatus;
 }
 
 /**
@@ -52,7 +71,12 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   name?: string;
   /** Custom cache key generator. Receives the same arguments as the cached function. */
   getKey?: (...args: ArgsT) => string | Promise<string>;
-  /** Transform the cached entry before returning. Return value replaces the cached value. */
+  /**
+   * Transform the cached entry before returning. Return value replaces the cached value.
+   *
+   * The passed entry carries `entry.status` (`"hit"` / `"stale"` / `"revalidated"` / `"miss"`) describing
+   * how the value was served on this call — useful for metrics or conditional logic.
+   */
   transform?: (entry: CacheEntry<T>, ...args: ArgsT) => any;
   /** Validate a cache entry. Return `false` to treat the entry as invalid and re-resolve. */
   validate?: (entry: CacheEntry<T>, ...args: ArgsT) => boolean;
@@ -135,6 +159,17 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   headersOnly?: boolean;
   /** Request header names that should vary the cache key (e.g., `["accept-language"]`). */
   varies?: string[] | readonly string[];
+
+  /**
+   * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
+   *
+   * - `true` (default) — sets the `X-Cache` header.
+   * - a string — sets a custom header name (e.g. `"x-nitro-cache"`).
+   * - `false` — no header is set.
+   *
+   * Has no effect in `headersOnly` mode (no value is cached there).
+   */
+  cacheStatusHeader?: boolean | string;
 
   /**
    * Convert handler return value to a Response.

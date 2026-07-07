@@ -230,6 +230,22 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 
 ---
 
+### `CacheStatus`
+
+```ts
+type CacheStatus = "hit" | "stale" | "revalidated" | "miss";
+```
+
+How a cached value was served on a given call.
+
+- `"hit"` — a fresh cached value was returned without re-resolving.
+- `"stale"` — a stale value was served while a background SWR refresh runs.
+- `"revalidated"` — a prior value existed but was expired/invalid, so it was
+  re-resolved in the foreground (no stale value served) before returning.
+- `"miss"` — the value was resolved fresh on this call (nothing was cached).
+
+---
+
 ### `createMemoryStorage`
 
 ```ts

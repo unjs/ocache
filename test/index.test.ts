@@ -90,6 +90,72 @@ describe("cachedFunction", () => {
     expect(await fn()).toBe("transformed-raw");
   });
 
+  it("exposes cache status (hit/miss/stale) to transform", async () => {
+    const statuses: (string | undefined)[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(() => `v${++n}`, {
+      maxAge: 100,
+      getKey: () => "k",
+      transform: (entry) => {
+        statuses.push(entry.status);
+        return entry.value;
+      },
+    });
+
+    await fn(); // resolved fresh
+    await fn(); // served from cache
+    await fn.expire(); // mark stale for background refresh
+    await fn(); // served stale under SWR
+
+    expect(statuses).toEqual(["miss", "hit", "stale"]);
+  });
+
+  it("reports revalidated when an expired entry is re-resolved in the foreground (swr disabled)", async () => {
+    const statuses: (string | undefined)[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(() => `v${++n}`, {
+      maxAge: 100,
+      swr: false,
+      getKey: () => "k",
+      transform: (entry) => {
+        statuses.push(entry.status);
+        return entry.value;
+      },
+    });
+
+    await fn(); // nothing cached -> miss
+    await fn(); // fresh cached value -> hit
+    await fn.expire(); // mark the existing entry stale
+    await fn(); // no SWR -> prior value re-resolved in foreground -> revalidated
+
+    expect(statuses).toEqual(["miss", "hit", "revalidated"]);
+  });
+
+  it("does not persist per-call status to storage (incl. on a hit)", async () => {
+    const fn = defineCachedFunction(() => "v", { maxAge: 100, getKey: () => "k" });
+    await fn(); // miss (writes entry)
+    await fn(); // hit — must not mutate the stored entry with `status`
+    const [key] = await resolveCacheKeys({ options: { getKey: () => "k" } });
+    const stored = (await useStorage().get(key!)) as Record<string, unknown>;
+    expect(Object.keys(stored)).not.toContain("status");
+  });
+
+  it("does not persist status through expireCache", async () => {
+    const fn = defineCachedFunction(() => "v", {
+      maxAge: 100,
+      staleMaxAge: 100,
+      swr: true,
+      getKey: () => "k",
+    });
+    await fn(); // miss
+    await fn(); // hit (sets per-call status on the returned entry)
+    await fn.expire();
+    const [key] = await resolveCacheKeys({ options: { getKey: () => "k" } });
+    const stored = (await useStorage().get(key!)) as Record<string, unknown>;
+    expect(stored.stale).toBe(true);
+    expect(Object.keys(stored)).not.toContain("status");
+  });
+
   it("handles resolver errors", async () => {
     const fn = defineCachedFunction(
       () => {
@@ -977,6 +1043,70 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
   });
 
+  it("sets X-Cache header (MISS then HIT) when cacheStatusHeader is true", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: true,
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
+  it("supports a custom cacheStatusHeader name", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: "x-nitro-cache",
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(r1.headers.get("x-nitro-cache")).toBe("MISS");
+    expect(r2.headers.get("x-nitro-cache")).toBe("HIT");
+  });
+
+  it("sets the X-Cache header by default", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 100 });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
+  it("disables the cache-status header when cacheStatusHeader is false", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: false,
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("x-cache")).toBeNull();
+  });
+
+  it("propagates cache-status header on 304 responses", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: true,
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const etag = r1.headers.get("etag")!;
+    const r2 = (await handler(makeEvent(path, { headers: { "if-none-match": etag } }))) as Response;
+
+    expect(r2.status).toBe(304);
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
   it("bypasses cache for non-GET methods", async () => {
     let callCount = 0;
     const path = uniquePath();
@@ -1382,7 +1512,10 @@ describe("defineCachedHandler", () => {
       makeEvent(path, { headers: { "if-none-match": '"test-etag"' } }),
     )) as Response;
     expect(res.status).toBe(304);
-    expect(createResponse).toHaveBeenCalledWith(null, { status: 304 });
+    expect(createResponse).toHaveBeenCalledWith(null, {
+      status: 304,
+      headers: { "x-cache": "HIT" },
+    });
   });
 
   it("uses custom handleCacheHeaders hook", async () => {
