@@ -688,6 +688,60 @@ describe("storage", () => {
     expect(storage.get("nonexistent")).toBeNull();
   });
 
+  it("evicts least-recently-used entries when maxSize is exceeded", () => {
+    const storage = createMemoryStorage({ maxSize: 2 });
+    storage.set("a", 1);
+    storage.set("b", 2);
+    storage.set("c", 3); // exceeds maxSize -> evicts "a" (oldest)
+    expect(storage.get("a")).toBeNull();
+    expect(storage.get("b")).toBe(2);
+    expect(storage.get("c")).toBe(3);
+  });
+
+  it("get marks an entry as recently used so it survives eviction", () => {
+    const storage = createMemoryStorage({ maxSize: 2 });
+    storage.set("a", 1);
+    storage.set("b", 2);
+    // Touch "a" so "b" becomes the least-recently-used.
+    expect(storage.get("a")).toBe(1);
+    storage.set("c", 3); // evicts "b"
+    expect(storage.get("a")).toBe(1);
+    expect(storage.get("b")).toBeNull();
+    expect(storage.get("c")).toBe(3);
+  });
+
+  it("re-setting an existing key refreshes its recency and does not grow the map", () => {
+    const storage = createMemoryStorage({ maxSize: 2 });
+    storage.set("a", 1);
+    storage.set("b", 2);
+    storage.set("a", 10); // update "a" -> now most-recent
+    storage.set("c", 3); // evicts "b"
+    expect(storage.get("a")).toBe(10);
+    expect(storage.get("b")).toBeNull();
+    expect(storage.get("c")).toBe(3);
+  });
+
+  it("applies a default maxSize when none is provided", () => {
+    const storage = createMemoryStorage();
+    for (let i = 0; i < 12_000; i++) {
+      storage.set(`key-${i}`, i);
+    }
+    // Oldest entries beyond the default ceiling (10 000) are evicted.
+    expect(storage.get("key-0")).toBeNull();
+    expect(storage.get("key-1999")).toBeNull();
+    expect(storage.get("key-2000")).toBe(2000);
+    expect(storage.get("key-11999")).toBe(11_999);
+  });
+
+  it("grows unbounded when maxSize is Infinity", () => {
+    const storage = createMemoryStorage({ maxSize: Number.POSITIVE_INFINITY });
+    for (let i = 0; i < 2000; i++) {
+      storage.set(`key-${i}`, i);
+    }
+    expect(storage.get("key-0")).toBe(0);
+    expect(storage.get("key-1999")).toBe(1999);
+  });
+
   // Regression: nitro#2138 — expired cache entries never get flushed from memory.
   // When entries expire via TTL, they should eventually be removed from the underlying
   // Map even if nobody reads them again, to prevent unbounded memory growth.

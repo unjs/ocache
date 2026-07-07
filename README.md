@@ -190,6 +190,17 @@ const redisStorage: StorageInterface = {
 setStorage(redisStorage);
 ```
 
+The built-in memory storage keeps at most `10 000` entries by default, evicting the least-recently-used entries once the ceiling is exceeded (LRU). Pass `maxSize` to change the ceiling, or `Infinity` to disable it and grow unbounded:
+
+```ts
+import { createMemoryStorage, setStorage } from "ocache";
+
+setStorage(createMemoryStorage({ maxSize: 10_000 }));
+
+// Opt out of the ceiling entirely (previous unbounded behavior)
+setStorage(createMemoryStorage({ maxSize: Infinity }));
+```
+
 ## API
 
 <!-- automd:docs4ts -->
@@ -207,10 +218,10 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 ### `createMemoryStorage`
 
 ```ts
-function createMemoryStorage(): StorageInterface;
+function createMemoryStorage(opts: MemoryStorageOptions =
 ```
 
-Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
+Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds) and LRU eviction.
 
 ---
 
