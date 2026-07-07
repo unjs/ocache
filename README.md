@@ -39,6 +39,7 @@ const cached = defineCachedFunction(fn, {
   maxAge: 10, // TTL in seconds (default: 1)
   swr: true, // Stale-while-revalidate (default: true)
   staleMaxAge: 60, // Max seconds to serve stale content
+  getMaxAge: (entry) => entry.value?.expires_in, // Per-entry TTL from the resolved value
   base: "/cache", // Base prefix for cache keys (string or string[] for multi-tier)
   group: "my-group", // Cache key group (default: "functions")
   getKey: (...args) => "custom-key", // Custom cache key generator
@@ -48,6 +49,20 @@ const cached = defineCachedFunction(fn, {
   transform: (entry) => entry.value, // Transform before returning
   onError: (error) => console.error(error), // Error handler
 });
+```
+
+#### Dynamic TTL
+
+Some cached values carry their own expiry — an OAuth token with `expires_in`, an upstream response with `Cache-Control: max-age`. Use `getMaxAge` to derive the lifetime from the resolved value instead of a fixed constant. It runs after the resolver and returns either a number (seconds, shorthand for `maxAge`) or `{ maxAge?, staleMaxAge? }` to also override the stale window. The resolved values override the static options for that entry and are used for both the freshness check and the storage TTL. Return `undefined` (or omit a field) to fall back to the static option.
+
+```ts
+const getToken = defineCachedFunction(
+  () => fetchToken(), // resolves { access_token, expires_in }
+  {
+    // Cache each token for exactly its own lifetime (minus a small safety margin)
+    getMaxAge: (entry) => (entry.value?.expires_in ?? 60) - 5,
+  },
+);
 ```
 
 ### Caching HTTP Handlers

@@ -645,6 +645,151 @@ describe("cachedFunction", () => {
   });
 });
 
+describe("getMaxAge (dynamic per-entry TTL)", () => {
+  it("derives maxAge from the resolved value for the freshness check", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        // First resolve is short-lived, later resolves long-lived
+        return { value: `v${callCount}`, expiresIn: callCount === 1 ? 0.01 : 10 };
+      },
+      {
+        swr: false,
+        getKey: () => "dyn-key",
+        // Number shorthand for maxAge
+        getMaxAge: (entry) => entry.value?.expiresIn,
+      },
+    );
+
+    expect((await fn()).value).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Within the per-entry maxAge (0.01s) — served from cache
+    expect((await fn()).value).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Wait past the first entry's short maxAge — re-resolves
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await fn()).value).toBe("v2");
+    expect(callCount).toBe(2);
+
+    // Second entry has a long maxAge — stays cached past the first entry's window
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await fn()).value).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("persists the resolved TTL on the stored entry", async () => {
+    const fn = defineCachedFunction(() => ({ n: 1 }), {
+      maxAge: 5,
+      getKey: () => "persist-key",
+      getMaxAge: () => ({ maxAge: 42, staleMaxAge: 7 }),
+    });
+
+    await fn();
+
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.maxAge).toBe(42);
+    expect(entry.staleMaxAge).toBe(7);
+  });
+
+  it("falls back to static options when getMaxAge returns undefined", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        getKey: () => "fallback-key",
+        getMaxAge: () => undefined,
+      },
+    );
+
+    expect(await fn()).toBe(1);
+    // Static maxAge of 10s still applies — served from cache
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.maxAge).toBeUndefined();
+  });
+
+  it("uses the per-entry stale window for SWR", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 5));
+        return `v${callCount}`;
+      },
+      {
+        swr: true,
+        getKey: () => "swr-dyn-key",
+        getMaxAge: () => ({ maxAge: 0.01, staleMaxAge: 10 }),
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Past per-entry maxAge but within staleMaxAge — serves stale, revalidates in background
+    await new Promise((r) => setTimeout(r, 15));
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(2);
+  });
+
+  it("continues writing the entry when getMaxAge throws (reports via onError)", async () => {
+    const errors: unknown[] = [];
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        getKey: () => "throw-key",
+        getMaxAge: () => {
+          throw new Error("boom");
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    expect(await fn()).toBe(1);
+    // getMaxAge threw, but the entry is still cached using static options
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+    expect(errors.length).toBe(1);
+  });
+
+  it("respects per-entry TTL when expiring via expireCache", async () => {
+    const options = {
+      swr: true,
+      getKey: () => "expire-dyn-key",
+      getMaxAge: () => ({ maxAge: 60, staleMaxAge: 120 }),
+    };
+    const fn = defineCachedFunction(() => "value", options);
+
+    await fn();
+    const keys = await fn.resolveKeys();
+    expect(((await useStorage().get(keys[0]!)) as any).stale).toBeUndefined();
+
+    await expireCache({ options, args: [] });
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.stale).toBe(true);
+    // Entry value is preserved for SWR to keep serving
+    expect(entry.value).toBe("value");
+  });
+});
+
 describe("storage", () => {
   it("createMemoryStorage handles TTL expiry", async () => {
     const storage = createMemoryStorage();

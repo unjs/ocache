@@ -38,6 +38,10 @@ export interface CacheEntry<T = any> {
   integrity?: string;
   /** When `true`, the entry is treated as expired on next access (set by `expireCache`). Cleared after a successful revalidation. */
   stale?: boolean;
+  /** Resolved per-entry `maxAge` (seconds) set by the `getMaxAge` hook. Overrides `CacheOptions.maxAge` for this entry's freshness check and storage TTL. */
+  maxAge?: number;
+  /** Resolved per-entry `staleMaxAge` (seconds) set by the `getMaxAge` hook. Overrides `CacheOptions.staleMaxAge` for this entry. */
+  staleMaxAge?: number;
 }
 
 /**
@@ -66,6 +70,28 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   swr?: boolean;
   /** Maximum number of seconds a stale entry can be served while revalidating. */
   staleMaxAge?: number;
+  /**
+   * Derive the per-entry cache lifetime from the resolved value. Runs after the resolver and before
+   * the entry is persisted. Return a number (seconds) as shorthand for `maxAge`, or an object to also
+   * override `staleMaxAge`. The resolved values override the static options for that entry and drive
+   * both the read freshness check and the storage TTL. Return `undefined` (or omit a field) to fall
+   * back to the static option.
+   *
+   * @example
+   * ```ts
+   * // Cache an OAuth token for exactly its `expires_in`
+   * getMaxAge: (entry) => entry.value?.expires_in,
+   * // Override both the fresh and stale windows
+   * getMaxAge: (entry) => ({ maxAge: 60, staleMaxAge: 300 }),
+   * ```
+   */
+  getMaxAge?: (
+    entry: CacheEntry<T>,
+  ) =>
+    | number
+    | { maxAge?: number; staleMaxAge?: number }
+    | undefined
+    | Promise<number | { maxAge?: number; staleMaxAge?: number } | undefined>;
   /** Base path prefix(es) for cache keys. When an array, reads try each prefix in order (multi-tier) and writes go to all prefixes. Defaults to `"/cache"`. */
   base?: string | string[];
   /** Optional error handler called for all cache-related errors (read, write, SWR, malformed data). */

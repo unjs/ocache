@@ -87,14 +87,18 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       _onError("[cache]", error);
     }
 
-    const ttl = (opts.maxAge ?? 0) * 1000;
+    // Per-entry TTL (set by the `getMaxAge` hook on the previous write) takes precedence over static options.
+    const readMaxAge = entry.maxAge ?? opts.maxAge;
+    const readStaleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
+
+    const ttl = (readMaxAge ?? 0) * 1000;
     if (ttl > 0) {
       entry.expires = Date.now() + ttl;
     }
 
     const staleTtl =
-      opts.swr && opts.staleMaxAge != null && opts.staleMaxAge >= 0
-        ? opts.staleMaxAge * 1000
+      opts.swr && readStaleMaxAge != null && readStaleMaxAge >= 0
+        ? readStaleMaxAge * 1000
         : undefined;
 
     // When staleMaxAge is set, an entry is completely dead after maxAge + staleMaxAge
@@ -105,7 +109,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       shouldInvalidateCache ||
       entry.stale === true ||
       entry.integrity !== integrity ||
-      opts.maxAge === 0 ||
+      readMaxAge === 0 ||
       (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
       validate(entry) === false;
 
@@ -152,17 +156,32 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         entry.integrity = integrity;
         entry.stale = undefined;
         delete pending[key];
+        // Derive per-entry lifetime from the resolved value, overriding static options for this write.
+        if (opts.getMaxAge) {
+          try {
+            const resolved = await opts.getMaxAge(entry);
+            // A bare number is shorthand for `{ maxAge }`.
+            const dynamic = typeof resolved === "number" ? { maxAge: resolved } : resolved;
+            entry.maxAge = dynamic?.maxAge;
+            entry.staleMaxAge = dynamic?.staleMaxAge;
+          } catch (error) {
+            _onError("[cache] getMaxAge hook error.", error);
+          }
+        }
         if (validate(entry) !== false) {
+          // Per-entry TTL (from the `getMaxAge` hook) falls back to static options when not provided.
+          const writeMaxAge = entry.maxAge ?? opts.maxAge;
+          const writeStaleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
           let setOpts: { ttl?: number } | undefined;
-          if (opts.maxAge != null && opts.maxAge > 0) {
+          if (writeMaxAge != null && writeMaxAge > 0) {
             if (opts.swr) {
               // With SWR, storage TTL must cover maxAge + staleMaxAge window
-              if (opts.staleMaxAge != null && opts.staleMaxAge >= 0) {
-                setOpts = { ttl: opts.maxAge + opts.staleMaxAge };
+              if (writeStaleMaxAge != null && writeStaleMaxAge >= 0) {
+                setOpts = { ttl: writeMaxAge + writeStaleMaxAge };
               }
               // If staleMaxAge is not set, no storage TTL (entry lives until manually evicted)
             } else {
-              setOpts = { ttl: opts.maxAge };
+              setOpts = { ttl: writeMaxAge };
             }
           }
           // Multi-tier write: only write to tiers up to the one that matched.
@@ -387,15 +406,18 @@ function _remainingTtl(
   entry: CacheEntry,
   opts: Pick<CacheOptions, "maxAge" | "swr" | "staleMaxAge">,
 ): { ttl: number } | undefined {
-  if (!entry.mtime || opts.maxAge == null || opts.maxAge <= 0) {
+  // Prefer the per-entry TTL persisted by `getMaxAge`, falling back to static options.
+  const maxAge = entry.maxAge ?? opts.maxAge;
+  const staleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
+  if (!entry.mtime || maxAge == null || maxAge <= 0) {
     return undefined;
   }
   // Mirrors the TTL window used on cache writes (see `get` in defineCachedFunction)
   const ttlWindow =
     opts.swr === false
-      ? opts.maxAge
-      : opts.staleMaxAge != null && opts.staleMaxAge >= 0
-        ? opts.maxAge + opts.staleMaxAge
+      ? maxAge
+      : staleMaxAge != null && staleMaxAge >= 0
+        ? maxAge + staleMaxAge
         : undefined;
   if (ttlWindow === undefined) {
     return undefined;
