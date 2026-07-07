@@ -263,9 +263,7 @@ function _forbidsSharedCaching(cacheControl: unknown): boolean {
 // several times per cache read on the hot path, always against the same entry's headers.
 // Keyed on the headers object (WeakMap → auto-GC, no mutation of the stored entry).
 const _sharedCachingForbidden = new WeakMap<object, boolean>();
-function _entryForbidsSharedCaching(
-  headers: ResponseCacheEntry["headers"] | undefined,
-): boolean {
+function _entryForbidsSharedCaching(headers: ResponseCacheEntry["headers"] | undefined): boolean {
   if (!headers) {
     return false;
   }
