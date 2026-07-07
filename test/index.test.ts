@@ -1170,6 +1170,75 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("cache-control")).toBe("max-age=60");
   });
 
+  it("does not clobber an explicit cache-control from the handler", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "cache-control": "public, max-age=600" } }),
+      { maxAge: 60, swr: true, staleMaxAge: 120 },
+    );
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-control")).toBe("public, max-age=600");
+  });
+
+  it("does not cache responses with Cache-Control: no-store", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "no-store" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(await r1.text()).toBe("ok");
+    expect(await r2.text()).toBe("ok");
+    expect(r1.headers.get("cache-control")).toBe("no-store");
+    // Never served from cache: the handler runs on every request.
+    expect(callCount).toBe(2);
+    expect(r2.headers.get("x-cache")).toBe("MISS");
+  });
+
+  it("does not cache responses with Cache-Control: private", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "private, max-age=60" } });
+      },
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path));
+    await handler(makeEvent(path));
+
+    expect(callCount).toBe(2);
+  });
+
+  it("still caches responses with a cacheable explicit cache-control", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "public, max-age=60" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(callCount).toBe(1);
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
   it("auto-generates etag and last-modified", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("test-body"), { maxAge: 10 });

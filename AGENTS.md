@@ -34,7 +34,8 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - `defineCachedHandler<E extends HTTPEvent>(handler, opts)` — wraps an `EventHandler` with response caching (generic over event type)
 - Auto-generates cache keys from URL path + variable headers
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
-- Sets `cache-control`, `etag`, `last-modified` headers
+- Sets `cache-control`, `etag`, `last-modified` headers — but never clobbers an explicit `cache-control` set by the handler (SWR/`s-maxage`/`max-age` directives are only synthesized when the handler didn't set one)
+- Honors explicit `Cache-Control: no-store` / `private` on the response — those are never cached (via `validate`), though still returned to the caller
 - Filters non-variable headers before calling the handler (for consistent cache keys)
 - Framework integration hooks on `CachedEventHandlerOptions`:
   - `toResponse(value, event)` — convert handler return value to Response (default: plain Response constructor)
