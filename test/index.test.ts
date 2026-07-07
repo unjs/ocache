@@ -1278,27 +1278,37 @@ describe("defineCachedHandler", () => {
   });
 
   describe("honorCacheControl", () => {
-    it("derives maxAge from the response's s-maxage (freshness honored)", async () => {
-      let callCount = 0;
+    it("clamps down to the response's shorter s-maxage (upstream shortens)", async () => {
       const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
       const handler = defineCachedHandler(
-        () => {
-          callCount++;
-          return new Response("ok", { headers: { "cache-control": "public, s-maxage=10" } });
-        },
-        { maxAge: 0, honorCacheControl: true },
+        () => new Response("ok", { headers: { "cache-control": "public, s-maxage=10" } }),
+        { maxAge: 1000, swr: false, honorCacheControl: true },
       );
 
-      const r1 = (await handler(makeEvent(path))) as Response;
-      const r2 = (await handler(makeEvent(path))) as Response;
+      await handler(makeEvent(path));
 
-      // Static maxAge is 0 (would never cache), but the response's s-maxage=10 keeps it fresh.
-      expect(callCount).toBe(1);
-      expect(r1.headers.get("x-cache")).toBe("MISS");
-      expect(r2.headers.get("x-cache")).toBe("HIT");
+      // Configured maxAge is 1000, but the response's s-maxage=10 clamps it down.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 10 });
     });
 
-    it("prefers s-maxage over max-age (shared-cache semantics)", async () => {
+    it("never extends past the configured maxAge ceiling (upstream longer)", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=1000" } }),
+        { maxAge: 10, swr: false, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // Response asks for 1000, but the configured maxAge: 10 is a ceiling — result is 10.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 10 });
+    });
+
+    it("prefers s-maxage over max-age below the ceiling (shared-cache semantics)", async () => {
       const path = uniquePath();
       const setSpy = vi.fn();
       setStorage({ get: () => null, set: setSpy });
@@ -1307,14 +1317,14 @@ describe("defineCachedHandler", () => {
           new Response("ok", {
             headers: { "cache-control": "max-age=1, s-maxage=100, stale-while-revalidate=50" },
           }),
-        { maxAge: 5, swr: true, honorCacheControl: true },
+        { maxAge: 1000, swr: true, honorCacheControl: true },
       );
 
       await handler(makeEvent(path));
 
-      // Storage TTL must cover s-maxage (100) + stale-while-revalidate (50), not max-age (1).
-      const setOpts = setSpy.mock.calls.at(-1)?.[2];
-      expect(setOpts).toEqual({ ttl: 150 });
+      // s-maxage=100 (not max-age=1) drives maxAge; stale-while-revalidate=50 → staleMaxAge.
+      // Storage TTL covers maxAge + staleMaxAge (100 + 50), all under the 1000 ceiling.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 150 });
     });
 
     it("treats no-cache as maxAge 0 (re-resolves every access)", async () => {
@@ -1334,7 +1344,7 @@ describe("defineCachedHandler", () => {
       expect(callCount).toBe(2);
     });
 
-    it("falls back to static options when the response has no relevant directive", async () => {
+    it("falls back to the configured maxAge when the response has no freshness directive", async () => {
       let callCount = 0;
       const path = uniquePath();
       const handler = defineCachedHandler(
@@ -1348,11 +1358,11 @@ describe("defineCachedHandler", () => {
       await handler(makeEvent(path));
       await handler(makeEvent(path));
 
-      // No max-age/s-maxage on the response → static maxAge: 60 keeps it cached.
+      // No max-age/s-maxage on the response → configured maxAge: 60 keeps it cached.
       expect(callCount).toBe(1);
     });
 
-    it("is off by default (static options win, upstream freshness ignored)", async () => {
+    it("is off by default (configured options win, upstream freshness ignored)", async () => {
       let callCount = 0;
       const path = uniquePath();
       const handler = defineCachedHandler(
@@ -1366,24 +1376,23 @@ describe("defineCachedHandler", () => {
       await handler(makeEvent(path));
       await handler(makeEvent(path));
 
-      // Flag not set: the s-maxage=0 on the response is ignored, static maxAge: 60 caches it.
+      // Flag not set: the s-maxage=0 on the response is ignored, configured maxAge: 60 caches it.
       expect(callCount).toBe(1);
     });
 
-    it("lets an explicit getMaxAge take precedence over honorCacheControl", async () => {
+    it("uses getMaxAge as the ceiling and clamps upstream down to it", async () => {
       const path = uniquePath();
       const setSpy = vi.fn();
       setStorage({ get: () => null, set: setSpy });
       const handler = defineCachedHandler(
-        () => new Response("ok", { headers: { "cache-control": "s-maxage=10" } }),
-        { swr: false, honorCacheControl: true, getMaxAge: () => 99 },
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=100" } }),
+        { swr: false, honorCacheControl: true, getMaxAge: () => 5 },
       );
 
       await handler(makeEvent(path));
 
-      // getMaxAge wins: TTL comes from 99, not the response's s-maxage=10.
-      const setOpts = setSpy.mock.calls.at(-1)?.[2];
-      expect(setOpts).toEqual({ ttl: 99 });
+      // getMaxAge (5) is the ceiling; the response's s-maxage=100 is clamped down to it.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 5 });
     });
   });
 

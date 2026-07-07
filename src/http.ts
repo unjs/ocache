@@ -4,6 +4,7 @@ import { cachedFunction } from "./cache.ts";
 import type {
   HTTPEvent,
   EventHandler,
+  CacheEntry,
   CacheOptions,
   CachedEventHandlerOptions,
   CacheConditions,
@@ -62,13 +63,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const _opts: CacheOptions<ResponseCacheEntry> = {
     ...opts,
-    // Derive per-entry maxAge/staleMaxAge from the (upstream) response's Cache-Control
-    // header when opted in. An explicit `getMaxAge` always wins.
-    getMaxAge: opts.getMaxAge
-      ? opts.getMaxAge
-      : opts.honorCacheControl
-        ? (entry) => _parseCacheControlTtl(entry.value?.headers?.["cache-control"])
-        : undefined,
+    // When opted in, clamp the per-entry maxAge/staleMaxAge to the lower of the
+    // (upstream) response's Cache-Control freshness and the configured lifetime —
+    // the configured value (`getMaxAge` if provided, else the static options) is a
+    // ceiling, so upstream can shorten but never extend it. Off: pass `getMaxAge` through.
+    getMaxAge: opts.honorCacheControl
+      ? (entry) => _honorCacheControlMaxAge(entry, opts)
+      : opts.getMaxAge,
     // Inject the cache-status header into a cloned entry value (never mutating the
     // stored entry) so it flows through to the final Response headers.
     transform: _statusHeader
@@ -261,6 +262,61 @@ function _forbidsSharedCaching(cacheControl: unknown): boolean {
     const name = directive.trim().split("=")[0]!.toLowerCase();
     return name === "no-store" || name === "private";
   });
+}
+
+/**
+ * `getMaxAge` implementation for `honorCacheControl`: clamps the per-entry lifetime to the
+ * lower of the (upstream) response's `Cache-Control` freshness and the configured lifetime.
+ *
+ * The configured value is a ceiling — `getMaxAge` if the user supplied one, otherwise the
+ * static `maxAge` / `staleMaxAge`. Upstream can only shorten it. When a side is absent, the
+ * other wins (upstream missing → configured; configured missing → upstream).
+ */
+async function _honorCacheControlMaxAge<E extends HTTPEvent>(
+  entry: CacheEntry<ResponseCacheEntry>,
+  opts: CachedEventHandlerOptions<E>,
+): Promise<{ maxAge?: number; staleMaxAge?: number }> {
+  const upstream = _parseCacheControlTtl(entry.value?.headers?.["cache-control"]);
+  const ceiling = await _configuredTtl(entry, opts);
+  return {
+    maxAge: _lowerTtl(upstream?.maxAge, ceiling.maxAge),
+    staleMaxAge: _lowerTtl(upstream?.staleMaxAge, ceiling.staleMaxAge),
+  };
+}
+
+/**
+ * Resolves the configured cache lifetime (the ceiling) from an explicit `getMaxAge` when
+ * present, falling back to the static `maxAge` / `staleMaxAge` per field.
+ */
+async function _configuredTtl<E extends HTTPEvent>(
+  entry: CacheEntry<ResponseCacheEntry>,
+  opts: CachedEventHandlerOptions<E>,
+): Promise<{ maxAge?: number; staleMaxAge?: number }> {
+  let maxAge = opts.maxAge;
+  let staleMaxAge = opts.staleMaxAge;
+  if (opts.getMaxAge) {
+    const resolved = await opts.getMaxAge(entry);
+    // A bare number is shorthand for `{ maxAge }` (mirrors cache.ts).
+    const dynamic = typeof resolved === "number" ? { maxAge: resolved } : resolved;
+    if (dynamic?.maxAge != null) {
+      maxAge = dynamic.maxAge;
+    }
+    if (dynamic?.staleMaxAge != null) {
+      staleMaxAge = dynamic.staleMaxAge;
+    }
+  }
+  return { maxAge, staleMaxAge };
+}
+
+/** Returns the lower (more conservative) of two TTLs; a nullish side yields the other. */
+function _lowerTtl(a: number | undefined, b: number | undefined): number | undefined {
+  if (a == null) {
+    return b;
+  }
+  if (b == null) {
+    return a;
+  }
+  return Math.min(a, b);
 }
 
 /**

@@ -161,21 +161,25 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   varies?: string[] | readonly string[];
 
   /**
-   * Opt in to deriving the per-entry cache lifetime from the freshness directives on the
-   * handler (upstream) response's `Cache-Control` header, instead of the static `maxAge` /
-   * `staleMaxAge` options.
+   * Opt in to honoring the freshness directives on the handler (upstream) response's
+   * `Cache-Control` header when deriving the per-entry cache lifetime.
    *
-   * When enabled, the response's `Cache-Control` is parsed with shared-cache semantics:
+   * The response's `Cache-Control` is parsed with shared-cache semantics:
    * - `s-maxage` (preferred) or `max-age` → `maxAge`
    * - `stale-while-revalidate` → `staleMaxAge`
    * - `no-cache` → `maxAge: 0` (revalidate on every access)
    *
-   * A directive that is absent falls back to the corresponding static option. `no-store` /
-   * `private` are always honored independently (such responses are never cached), so this
-   * flag only governs the freshness lifetime of cacheable responses.
+   * The configured lifetime still applies as a **ceiling**: the effective `maxAge` /
+   * `staleMaxAge` is the *lower* of the upstream value and the configured value, so upstream
+   * can shorten the lifetime but never extend it past your bound. The ceiling is `getMaxAge`
+   * when you supply one, otherwise the static `maxAge` / `staleMaxAge`. A directive that is
+   * absent on the response falls back to the configured value.
    *
-   * Implemented on top of {@link CacheOptions.getMaxAge}. An explicit `getMaxAge` takes
-   * precedence — when you supply one, this flag is ignored.
+   * `no-store` / `private` are always honored independently (such responses are never
+   * cached), so this flag only governs the freshness lifetime of cacheable responses.
+   *
+   * Implemented on top of {@link CacheOptions.getMaxAge} — it composes with an explicit
+   * `getMaxAge` (which becomes the ceiling) rather than replacing it.
    *
    * @default false
    */

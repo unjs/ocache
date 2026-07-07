@@ -113,13 +113,13 @@ const handler = defineCachedHandler(myHandler, {
 
 #### Honoring upstream freshness headers
 
-By default the cache lifetime comes from the static `maxAge` / `staleMaxAge` options. Opt in with `honorCacheControl: true` to instead derive the lifetime from the freshness directives on the handler (upstream) response's `Cache-Control` header — useful when proxying an origin that already advertises how long its responses stay fresh:
+By default the cache lifetime comes from the configured `maxAge` / `staleMaxAge` options. Opt in with `honorCacheControl: true` to also honor the freshness directives on the handler (upstream) response's `Cache-Control` header — useful when proxying an origin that already advertises how long its responses stay fresh:
 
 ```ts
 const handler = defineCachedHandler(
   async (event) => fetch(upstreamURL(event)), // origin sets its own Cache-Control
   {
-    maxAge: 60, // fallback when the response omits a freshness directive
+    maxAge: 60, // ceiling — upstream can request shorter, never longer
     honorCacheControl: true,
   },
 );
@@ -131,7 +131,9 @@ The response's `Cache-Control` is parsed with shared-cache semantics:
 - `stale-while-revalidate` → `staleMaxAge`
 - `no-cache` → `maxAge: 0` (revalidate on every access)
 
-A directive that is absent falls back to the corresponding static option. `no-store` / `private` are always honored regardless of this flag (such responses are never stored). Built on top of [`getMaxAge`](#dynamic-ttl) — an explicit `getMaxAge` takes precedence and disables this flag.
+The configured lifetime stays in force as a **ceiling**: the effective `maxAge` / `staleMaxAge` is the _lower_ of the upstream value and the configured value, so upstream can shorten the lifetime but never extend it past your bound. A directive that is absent on the response falls back to the configured value.
+
+`no-store` / `private` are always honored regardless of this flag (such responses are never stored). Built on top of [`getMaxAge`](#dynamic-ttl) — it composes with an explicit `getMaxAge` (which becomes the ceiling) rather than replacing it.
 
 ### Cache Invalidation
 
