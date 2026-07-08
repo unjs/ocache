@@ -124,7 +124,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   integrity?: any;
   /** Number of seconds to cache the response. Defaults to `1`. */
   maxAge?: number;
-  /** Enable stale-while-revalidate behavior. When `true`, returns stale cache while refreshing in the background. Defaults to `true`. */
+  /** Enable stale-while-revalidate behavior. When `true`, returns stale cache while refreshing in the background. Defaults to `false` (an expired entry is re-resolved in the foreground before returning). */
   swr?: boolean;
   /** Maximum number of seconds a stale entry can be served while revalidating. `0` means stale is never served — once expired, revalidation blocks the request. */
   staleMaxAge?: number;
@@ -193,7 +193,11 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
 > {
   /** When `true`, only handles conditional headers (304 responses) without full response caching. */
   headersOnly?: boolean;
-  /** Request header names that should vary the cache key (e.g., `["accept-language"]`). */
+  /**
+   * Request header names that should vary the cache key (e.g., `["accept-language"]`).
+   * These names are also merged into the response's `Vary` header so downstream
+   * caches/CDNs/browsers store a separate variant per value.
+   */
   varies?: string[] | readonly string[];
 
   /**
@@ -206,6 +210,29 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * URL the handler sees.
    */
   allowQuery?: string[] | readonly string[];
+
+  /**
+   * Allowlist of cookie names that participate in caching.
+   *
+   * **By default no cookies are allowed** (secure default):
+   * - the `Cookie` request header is stripped before the handler runs and never
+   *   varies the cache key, so a handler cannot produce cookie-dependent output
+   *   that leaks across users, and
+   * - any response carrying a `Set-Cookie` header is refused storage — it is still
+   *   returned to the caller that triggered it, but never cached and replayed to
+   *   other requests (which would leak a per-request cookie such as a session id).
+   *
+   * When set, only the listed cookies are kept: their name/value pairs vary the
+   * cache key (sorted, order-independent — like {@link allowQuery}) and survive in
+   * the `Cookie` header the handler sees, and a `Set-Cookie` response is cacheable
+   * only when every cookie it sets is in this list. Case-sensitive.
+   *
+   * Only cacheable requests (`GET`/`HEAD`) are affected: methods that bypass
+   * caching (e.g. `POST`) reach the handler with their request untouched.
+   *
+   * Supersedes `varies: ["cookie"]` (which hashes the entire raw `Cookie` header).
+   */
+  allowCookies?: string[] | readonly string[];
 
   /**
    * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
@@ -236,4 +263,30 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * Default: built-in if-none-match / if-modified-since check.
    */
   handleCacheHeaders?: (event: E, conditions: CacheConditions) => boolean;
+
+  /**
+   * Additional predicate deciding whether a handler response is cacheable.
+   *
+   * Runs *after* — and in addition to — the built-in response validation, which
+   * always applies and cannot be bypassed (it rejects `4xx`/`5xx` statuses,
+   * `Cache-Control: no-store`/`private`, missing bodies, and absent
+   * `etag`/`last-modified`). Return `false` (or a Promise resolving to `false`)
+   * to treat the response as non-cacheable; it is still returned to the caller,
+   * just not stored. Receives the serialized response entry.
+   *
+   * Because it is ANDed with the built-ins, it can only *narrow* what gets
+   * cached — it cannot force-cache a response the built-in checks reject.
+   *
+   * Note it gates both storing a fresh response **and** serving a stored one, so
+   * it also runs on cache reads (including the stale-while-revalidate serve
+   * decision). Keep it fast and pure (decide only from `entry`); a throwing hook
+   * fails closed (treated as non-cacheable) and is reported via `onError`.
+   *
+   * @example
+   * ```ts
+   * // Don't cache redirects (3xx), which the built-in checks would otherwise allow.
+   * shouldCache: (res) => res.status < 300 || res.status >= 400,
+   * ```
+   */
+  shouldCache?: (entry: ResponseCacheEntry) => boolean | Promise<boolean>;
 }

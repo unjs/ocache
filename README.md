@@ -37,7 +37,7 @@ const data = await cachedFetch("https://api.example.com/data");
 const cached = defineCachedFunction(fn, {
   name: "my-fn", // Cache key name (defaults to function name)
   maxAge: 10, // TTL in seconds (default: 1)
-  swr: true, // Stale-while-revalidate (default: true)
+  swr: false, // Stale-while-revalidate (default: false — opt in to serve stale)
   staleMaxAge: 60, // Max seconds to serve stale content
   getMaxAge: (entry) => entry.value?.expires_in, // Per-entry TTL from the resolved value
   base: "/cache", // Base prefix for cache keys (string or string[] for multi-tier)
@@ -102,7 +102,7 @@ const handler = defineCachedHandler(
     maxAge: 300, // Cache for 5 minutes
     swr: true,
     staleMaxAge: 600,
-    varies: ["accept-language"], // Vary cache by these headers
+    varies: ["accept-language"], // Vary cache key by these headers (also emitted as `Vary`)
     allowQuery: ["color"], // Vary cache by these query params only
   },
 );
@@ -118,6 +118,26 @@ const handler = defineCachedHandler(myHandler, {
   allowQuery: ["color"], // ?color=red&lang=en and ?color=red&lang=de share one entry
 });
 ```
+
+#### Cookies
+
+**By default no cookies participate in caching.** This is a secure default: the `Cookie` request header is stripped before the handler runs (so it can never produce cookie-dependent output that gets cached and served to other users), cookies never vary the cache key, and any response carrying a `Set-Cookie` header is refused storage — it is still returned to the caller that triggered it, but never cached and replayed to other requests (which would leak a per-request cookie such as a session id). Stored entries carrying a disallowed `Set-Cookie` (e.g. cached before upgrading to this default) are likewise rejected on read instead of replayed.
+
+This only applies to cacheable requests (`GET`/`HEAD`). Methods that bypass caching entirely (e.g. `POST`) reach the handler with their request untouched — cookies, headers, query, and body included.
+
+Set `allowCookies` to an allowlist of cookie names to opt specific cookies back in. Only the listed cookies survive in the `Cookie` header the handler sees, and their name/value pairs vary the cache key — sorted and order-independent, like `allowQuery`, so only the relevant cookie subset is hashed rather than the entire raw `Cookie` header. A `Set-Cookie` response becomes cacheable only when _every_ cookie it sets is in the list. Cookie names are case-sensitive. `allowCookies` supersedes `varies: ["cookie"]`.
+
+```ts
+const handler = defineCachedHandler(myHandler, {
+  maxAge: 300,
+  allowCookies: ["theme"], // theme=dark and theme=light cache separately; sid is ignored
+});
+```
+
+Two caveats:
+
+- **Custom `getKey`.** As with `allowQuery`, a custom `getKey` controls the cache key entirely, so allowlisted cookies no longer vary it automatically — if your handler's output depends on a cookie, incorporate it into `getKey` yourself (the handler-visible `Cookie` header is still filtered to the allowlist regardless).
+- **Request coalescing.** Concurrent requests that resolve to the same cache key are de-duplicated into a single handler call and share its response. A handler that _mints_ a per-request cookie (e.g. initializing an anonymous session with a fresh `Set-Cookie`) is not isolated by the storage guard in that in-flight window — the guard prevents the response from being stored and replayed later, but coalesced callers still receive the same minted value. Give such handlers a user-specific `getKey`/`varies` (or don't cache them).
 
 #### Headers-only Mode
 
@@ -139,6 +159,20 @@ const handler = defineCachedHandler(myHandler, {
 
 > [!NOTE]
 > This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
+
+#### Custom cache eligibility (`shouldCache`)
+
+The built-in response validation already rejects `4xx`/`5xx` statuses, `Cache-Control: no-store`/`private`, empty bodies, and responses missing `etag`/`last-modified`. Use `shouldCache` to add your own rejection rule on top — for example to keep `3xx` redirects out of the cache:
+
+```ts
+const handler = defineCachedHandler(myHandler, {
+  maxAge: 60,
+  // Return false to skip caching this response (it is still returned to the caller).
+  shouldCache: (res) => res.status < 300 || res.status >= 400,
+});
+```
+
+`shouldCache` receives the serialized response entry, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject. It gates both storing a fresh response and serving a stored one, and a throwing hook fails closed (treated as non-cacheable) and is reported via `onError`.
 
 ### Cache Invalidation
 

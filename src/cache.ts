@@ -7,7 +7,7 @@ function defaultCacheOptions() {
   return {
     name: "_",
     base: "/cache",
-    swr: true,
+    swr: false,
     maxAge: 1,
   } as const;
 }
@@ -507,13 +507,14 @@ function _remainingTtl(
   if (!entry.mtime || maxAge == null || maxAge <= 0) {
     return undefined;
   }
-  // Mirrors the TTL window used on cache writes (see `get` in defineCachedFunction)
-  const ttlWindow =
-    opts.swr === false
-      ? maxAge
-      : staleMaxAge != null && staleMaxAge >= 0
-        ? maxAge + staleMaxAge
-        : undefined;
+  // Mirrors the TTL window used on cache writes (see `get` in defineCachedFunction).
+  // `!opts.swr` (rather than `=== false`) so an unset `swr` aligns with the SWR-off
+  // default on the standalone `expireCache` path, which doesn't merge defaultCacheOptions.
+  const ttlWindow = !opts.swr
+    ? maxAge
+    : staleMaxAge != null && staleMaxAge >= 0
+      ? maxAge + staleMaxAge
+      : undefined;
   if (ttlWindow === undefined) {
     return undefined;
   }

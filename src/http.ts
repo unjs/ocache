@@ -14,7 +14,7 @@ function defaultCacheOptions() {
   return {
     name: "_",
     base: "/cache",
-    swr: true,
+    swr: false,
     maxAge: 1,
     cacheStatusHeader: true,
   } as const;
@@ -37,14 +37,33 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 ): EventHandler<E> {
   opts = { ...defaultCacheOptions(), ...opts };
 
+  // Allowlist of cookie names that may participate in caching. `undefined` means
+  // "no cookies allowed": the Cookie request header is stripped before the handler
+  // runs, cookies never vary the key, and Set-Cookie responses are refused storage.
+  // Names are trimmed/deduped; an empty (or whitespace-only) list normalizes to the
+  // "no cookies allowed" default.
+  const _cookieNames = [
+    ...new Set((opts.allowCookies ?? []).map((c) => c?.trim()).filter(Boolean)),
+  ];
+  const allowedCookieNames = _cookieNames.length > 0 ? _cookieNames : undefined;
+
   const variableHeaderNames = (opts.varies || [])
     .filter(Boolean)
     .map((h) => h.toLowerCase())
+    // `allowCookies` supersedes `varies: ["cookie"]`: when set, cookie key-scoping and
+    // handler-visibility are driven by the allowlist, so drop the coarse full-header vary.
+    .filter((h) => !(allowedCookieNames && h === "cookie"))
     .sort();
 
   const allowedQueryNames = opts.allowQuery
     ? [...new Set(opts.allowQuery.filter(Boolean))]
     : undefined;
+
+  // Non-GET/HEAD requests skip the cache entirely. Shared between the
+  // `shouldBypassCache` option and the resolver so the request-narrowing
+  // step below can't disagree with the bypass decision.
+  const _shouldBypassCache = (event: HTTPEvent) =>
+    event.req.method !== "GET" && event.req.method !== "HEAD";
 
   // Memoize the filtered query per request so getKey and the handler-facing URL
   // rewrite don't recompute it. Scoped to this handler instance so a shared
@@ -95,14 +114,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
           };
         }
       : undefined,
-    shouldBypassCache: (event) => {
-      return event.req.method !== "GET" && event.req.method !== "HEAD";
-    },
+    shouldBypassCache: _shouldBypassCache,
     getKey: async (event: HTTPEvent) => {
       // Custom user-defined key
       const customKey = await opts.getKey?.(event as E);
       if (customKey) {
-        return escapeKey(customKey);
+        const _key = escapeKey(customKey);
+        // If escaping was a no-op the key is already storage-safe and can't collide,
+        // so keep it as-is. Otherwise escaping is lossy (distinct keys can collapse to
+        // the same segment), so append a hash of the raw key to keep them distinct.
+        // The `.` separator only appears in the hashed form, so an escaped-clean key
+        // (pure `\w`, never contains `.`) and a hashed key can never overlap.
+        return _key === customKey ? _key : `${_key.slice(0, 64)}.${hash(customKey)}`;
       }
       // Auto-generated key
       const _url = event.url ?? new URL(event.req.url);
@@ -119,14 +142,37 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       const _headers = variableHeaderNames
         .map((header) => [header, event.req.headers.get(header)])
         .map(([name, value]) => `${escapeKey(name as string)}.${hash(value)}`);
-      return [_hashedPath, ..._headers].join(":");
+      // Vary the key by the allowlisted cookie subset only (sorted, order-independent),
+      // never the full raw Cookie header. Omitted entirely when no cookies are allowed.
+      const _cookies = allowedCookieNames
+        ? [`cookie.${hash(_filterCookie(event.req.headers.get("cookie"), allowedCookieNames))}`]
+        : [];
+      return [_hashedPath, ..._headers, ..._cookies].join(":");
     },
-    validate: (entry) => {
+    validate: async (entry) => {
       if (!entry.value) {
         return false;
       }
       // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
       if (_forbidsSharedCaching(entry.value.headers?.["cache-control"])) {
+        return false;
+      }
+      // Refuse to store (and later replay to other requests) a response that sets a
+      // cookie outside the allowlist — otherwise a per-request `Set-Cookie` (e.g. a
+      // session id) leaks to every cache-hit request. The decision is made in the
+      // resolver via `getSetCookie()` (lossless, unlike the collapsed serialized
+      // header) and flagged non-enumerably; the flag is absent on storage-read entries.
+      if ((entry.value as { _blockSetCookie?: boolean })._blockSetCookie) {
+        return false;
+      }
+      // Defense-in-depth for entries this version didn't write (e.g. cached before
+      // upgrading to the allowCookies default, or by another writer sharing the
+      // storage): reject a stored Set-Cookie outside the allowlist instead of
+      // replaying it until expiry. Serialized headers collapse multiple Set-Cookie
+      // values to the last, so this check is partial — the lossless guard is the
+      // resolver-side flag above.
+      const _setCookie = entry.value.headers?.["set-cookie"];
+      if (_setCookie && !allowedCookieNames?.includes(_cookieName(_setCookie))) {
         return false;
       }
       if (entry.value.status >= 400) {
@@ -141,6 +187,25 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       ) {
         return false;
       }
+      // Additive user hook: ANDed with the built-in checks above so callers can
+      // reject responses (e.g. redirects) without reimplementing load-bearing
+      // safety checks. Cannot be used to force-cache a response the built-ins reject.
+      // A throwing hook fails closed (treat as not cacheable) rather than breaking
+      // the request — the response is still served, just not stored/served-from-cache.
+      if (opts.shouldCache) {
+        try {
+          if ((await opts.shouldCache(entry.value)) === false) {
+            return false;
+          }
+        } catch (error) {
+          if (opts.onError) {
+            opts.onError(error);
+          } else {
+            console.error("[cache] shouldCache hook error.", error);
+          }
+          return false;
+        }
+      }
       return true;
     },
     group: opts.group || "handlers",
@@ -148,36 +213,49 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   };
 
   const _cachedHandler = cachedFunction<ResponseCacheEntry>(async (event: HTTPEvent) => {
-    // Filter non variable headers
-    const filteredHeaders = [...event.req.headers.entries()].filter(
-      ([key]) => !variableHeaderNames.includes(key.toLowerCase()),
-    );
+    // Narrow the request for cache-key consistency — cacheable calls only. Bypassed
+    // methods (POST etc.) are never stored or key-derived, so their request must reach
+    // the handler untouched (cookies, varied headers, full query, body — the rewritten
+    // Request below carries no body).
+    if (!_shouldBypassCache(event)) {
+      // Filter non variable headers, and narrow the Cookie header to the allowlist so
+      // the handler can't depend on cookies outside the cache key (mirrors allowQuery).
+      const filteredHeaders = [...event.req.headers.entries()]
+        .filter(([key]) => !variableHeaderNames.includes(key.toLowerCase()))
+        .flatMap(([key, value]) => {
+          if (key.toLowerCase() !== "cookie") {
+            return [[key, value] as [string, string]];
+          }
+          const cookie = allowedCookieNames ? _filterCookie(value, allowedCookieNames) : "";
+          return cookie ? [["cookie", cookie] as [string, string]] : [];
+        });
 
-    // Narrow the query the handler sees to the allowlist, so it can't depend on
-    // params outside the cache key (mirrors the header filtering above).
-    let _reqUrl = event.req.url;
-    if (allowedQueryNames) {
-      const _url = event.url ?? new URL(event.req.url);
-      const _filteredUrl = new URL(_url);
-      _filteredUrl.search = _filteredSearch(event, _url);
-      _reqUrl = _filteredUrl.href;
-    }
+      // Narrow the query the handler sees to the allowlist, so it can't depend on
+      // params outside the cache key (mirrors the header filtering above).
+      let _reqUrl = event.req.url;
+      if (allowedQueryNames) {
+        const _url = event.url ?? new URL(event.req.url);
+        const _filteredUrl = new URL(_url);
+        _filteredUrl.search = _filteredSearch(event, _url);
+        _reqUrl = _filteredUrl.href;
+      }
 
-    try {
-      const originalReq = event.req;
-      (event as any).req = new Request(_reqUrl, {
-        method: event.req.method,
-        headers: filteredHeaders,
-      });
-      // Inherit runtime context
-      if ((originalReq as any).runtime) {
-        (event.req as any).runtime = (originalReq as any).runtime;
+      try {
+        const originalReq = event.req;
+        (event as any).req = new Request(_reqUrl, {
+          method: event.req.method,
+          headers: filteredHeaders,
+        });
+        // Inherit runtime context
+        if ((originalReq as any).runtime) {
+          (event.req as any).runtime = (originalReq as any).runtime;
+        }
+        if (allowedQueryNames && event.url) {
+          (event as any).url = new URL(_reqUrl);
+        }
+      } catch (error) {
+        console.error("[cache] Failed to filter request:", error);
       }
-      if (allowedQueryNames && event.url) {
-        (event as any).url = new URL(_reqUrl);
-      }
-    } catch (error) {
-      console.error("[cache] Failed to filter request:", error);
     }
 
     // Call handler
@@ -219,12 +297,36 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
     }
 
+    // Advertise the request headers this response varies on so downstream
+    // caches/CDNs/browsers store a separate variant per value — merging with any
+    // `Vary` the handler already set rather than clobbering it (mirrors the
+    // "preserve if present" behavior of the etag / last-modified / cache-control
+    // synthesis above).
+    if (variableHeaderNames.length > 0) {
+      _appendVary(res.headers, variableHeaderNames);
+    }
+
     const cacheEntry: ResponseCacheEntry = {
       status: res.status,
       statusText: res.statusText,
       headers: Object.fromEntries(res.headers.entries()),
       body,
     };
+
+    // Flag the entry non-storable when it sets a cookie outside the allowlist, read
+    // back in `validate`. Prefer `getSetCookie()` so every Set-Cookie is inspected —
+    // `Object.fromEntries(headers.entries())` above collapses them to just the last.
+    // On runtimes without `getSetCookie` we can't enumerate individual cookies, so
+    // fall back to header presence and block conservatively rather than fail open
+    // (a fail-open default here would silently leak Set-Cookie across cache hits).
+    const setCookies =
+      typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : undefined;
+    const blockSetCookie = setCookies
+      ? setCookies.some((c) => !allowedCookieNames?.includes(_cookieName(c)))
+      : res.headers.has("set-cookie");
+    if (blockSetCookie) {
+      Object.defineProperty(cacheEntry, "_blockSetCookie", { value: true, enumerable: false });
+    }
 
     return cacheEntry;
   }, _opts);
@@ -249,12 +351,23 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         maxAge: opts.maxAge,
       })
     ) {
+      // A 304 must echo the `Vary` (and cache-status) that would have accompanied
+      // the full response, so a shared cache doesn't lose the variant dimension
+      // (RFC 7232 §4.1).
+      const notModifiedHeaders: Record<string, string> = {};
       const statusValue = _statusHeader
         ? (response.headers[_statusHeader] as string | undefined)
         : undefined;
+      if (statusValue !== undefined) {
+        notModifiedHeaders[_statusHeader!] = statusValue;
+      }
+      const varyValue = response.headers.vary as string | undefined;
+      if (varyValue !== undefined) {
+        notModifiedHeaders.vary = varyValue;
+      }
       return _createResponse(null, {
         status: 304,
-        headers: statusValue === undefined ? undefined : { [_statusHeader!]: statusValue },
+        headers: Object.keys(notModifiedHeaders).length > 0 ? notModifiedHeaders : undefined,
       });
     }
 
@@ -283,6 +396,64 @@ function _filterSearch(url: URL, names: string[]): string {
   }
   const query = filtered.toString();
   return query ? `?${query}` : "";
+}
+
+/** Rebuilds the `Cookie` header from only the allowlisted cookie names, sorted (order-independent). */
+function _filterCookie(header: string | null | undefined, names: string[]): string {
+  if (!header) {
+    return "";
+  }
+  const kept: Array<[string, string]> = [];
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    const name = (eq < 0 ? part : part.slice(0, eq)).trim();
+    if (name && names.includes(name)) {
+      kept.push([name, eq < 0 ? "" : part.slice(eq + 1).trim()]);
+    }
+  }
+  kept.sort((a, b) =>
+    a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : a[0] < b[0] ? -1 : 1,
+  );
+  return kept.map(([n, v]) => `${n}=${v}`).join("; ");
+}
+
+/** Extracts the cookie name from a `Set-Cookie` header value (the token before the first `=`). */
+function _cookieName(setCookie: string): string {
+  const eq = setCookie.indexOf("=");
+  return (eq < 0 ? setCookie.split(";")[0]! : setCookie.slice(0, eq)).trim();
+}
+
+/**
+ * Merges `names` into the response's `Vary` header, preserving any header names the
+ * handler already declared and deduplicating case-insensitively. A wildcard
+ * (`Vary: *`) is left untouched since it already varies on everything.
+ */
+function _appendVary(headers: Headers, names: string[]): void {
+  const existing = headers.get("vary");
+  // A `*` token means the response varies on everything — nothing to add.
+  if (existing && existing.split(",").some((part) => part.trim() === "*")) {
+    return;
+  }
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  const add = (raw: string) => {
+    const name = raw.trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(name);
+  };
+  if (existing) {
+    for (const part of existing.split(",")) {
+      add(part);
+    }
+  }
+  for (const name of names) {
+    add(name);
+  }
+  headers.set("vary", merged.join(", "));
 }
 
 /**
