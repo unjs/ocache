@@ -79,6 +79,27 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    */
   transform?: (entry: CacheEntry<T>, ...args: ArgsT) => any;
   /**
+   * Prepare the resolved value for storage — the write-side counterpart of `transform`.
+   *
+   * Runs once, right after the resolver (and after `getMaxAge`, so that hook still sees the
+   * raw value) and before the entry is persisted. Return the value to store; `transform`
+   * then reconstructs the usable value when the entry is read back.
+   *
+   * Use this when the resolver returns something a storage backend can't persist as-is
+   * (e.g. a `ReadableStream` or a class instance): `serialize` converts it to a storable
+   * form on write, `transform` restores it on read. Because it runs exactly once per
+   * resolution — even under concurrent, deduplicated calls, where every caller observes
+   * the serialized value — it is safe to consume a one-shot source such as a stream here.
+   *
+   * @example
+   * ```ts
+   * // Persist a ReadableStream body as a string, restore it on read.
+   * serialize: async (entry) => ({ ...entry.value, body: await streamToString(entry.value.body) }),
+   * transform: (entry) => ({ ...entry.value, body: stringToStream(entry.value.body) }),
+   * ```
+   */
+  serialize?: (entry: CacheEntry<T>, ...args: ArgsT) => T | Promise<T>;
+  /**
    * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
    * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
    * that need to check the cached value against an external source (e.g. fetching a

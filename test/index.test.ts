@@ -1011,6 +1011,145 @@ describe("getMaxAge (dynamic per-entry TTL)", () => {
   });
 });
 
+describe("serialize (write-time hook)", () => {
+  it("stores the serialized value; transform restores it on read", async () => {
+    const fn = defineCachedFunction(() => ({ n: 1 }), {
+      maxAge: 100,
+      getKey: () => "k",
+      // Persist a compact string form...
+      serialize: (entry) => JSON.stringify(entry.value) as any,
+      // ...and reconstruct the object on the way out.
+      transform: (entry) => JSON.parse(entry.value as any),
+    });
+
+    // Miss: resolved, serialized, then transformed back.
+    expect(await fn()).toEqual({ n: 1 });
+    // Hit: read serialized form from storage, transformed back.
+    expect(await fn()).toEqual({ n: 1 });
+
+    // Storage holds the serialized (string) form, not the raw object.
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.value).toBe('{"n":1}');
+  });
+
+  it("runs exactly once for concurrent deduplicated calls and shares the serialized value", async () => {
+    let serializeCalls = 0;
+    let resolverCalls = 0;
+    const fn = defineCachedFunction(
+      () => {
+        resolverCalls++;
+        return "raw";
+      },
+      {
+        maxAge: 100,
+        getKey: () => "k",
+        serialize: (entry) => {
+          serializeCalls++;
+          return `serialized-${entry.value}` as any;
+        },
+        transform: (entry) => `out-${entry.value}`,
+      },
+    );
+
+    // Fire concurrent calls that all dedupe onto the same resolution.
+    const results = await Promise.all([fn(), fn(), fn()]);
+
+    expect(resolverCalls).toBe(1);
+    expect(serializeCalls).toBe(1);
+    // Every caller (leader + followers) sees the serialized value, so transform is consistent.
+    expect(results).toEqual(["out-serialized-raw", "out-serialized-raw", "out-serialized-raw"]);
+  });
+
+  it("consumes a one-shot ReadableStream body under concurrent calls", async () => {
+    const streamToString = async (stream: ReadableStream) => {
+      const reader = stream.pipeThrough(new TextDecoderStream()).getReader();
+      let out = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        out += value;
+      }
+      return out;
+    };
+
+    const fn = defineCachedFunction(
+      () => ({ body: new Response("hello stream").body as ReadableStream }),
+      {
+        maxAge: 100,
+        getKey: () => "k",
+        serialize: async (entry) =>
+          ({ body: await streamToString((entry.value as any).body) }) as any,
+        transform: (entry) => (entry.value as any).body,
+      },
+    );
+
+    // A stream can only be read once; running serialize once (shared across dedupe) must not throw.
+    const results = await Promise.all([fn(), fn()]);
+    expect(results).toEqual(["hello stream", "hello stream"]);
+  });
+
+  it("runs after getMaxAge, so getMaxAge still sees the raw resolved value", async () => {
+    let seenByGetMaxAge: unknown;
+    const fn = defineCachedFunction(() => ({ expiresIn: 42 }), {
+      swr: true,
+      getKey: () => "k",
+      getMaxAge: (entry) => {
+        seenByGetMaxAge = entry.value;
+        return entry.value?.expiresIn;
+      },
+      serialize: (entry) => JSON.stringify(entry.value) as any,
+      transform: (entry) => JSON.parse(entry.value as any),
+    });
+
+    expect(await fn()).toEqual({ expiresIn: 42 });
+    // getMaxAge inspected the raw object, not the serialized string.
+    expect(seenByGetMaxAge).toEqual({ expiresIn: 42 });
+
+    // The per-entry maxAge derived from the raw value is persisted alongside the serialized value.
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.maxAge).toBe(42);
+    expect(entry.value).toBe('{"expiresIn":42}');
+  });
+
+  it("receives the call arguments after the entry", async () => {
+    const fn = defineCachedFunction((a: number, b: number) => a + b, {
+      maxAge: 100,
+      getKey: (a, b) => `${a}-${b}`,
+      serialize: (entry, a, b) => `${entry.value}:${a}:${b}` as any,
+      transform: (entry) => entry.value,
+    });
+
+    expect(await fn(2, 3)).toBe("5:2:3");
+  });
+
+  it("propagates serialize errors and does not cache the entry", async () => {
+    let resolverCalls = 0;
+    const fn = defineCachedFunction(
+      () => {
+        resolverCalls++;
+        return "value";
+      },
+      {
+        maxAge: 100,
+        getKey: () => "k",
+        serialize: () => {
+          throw new Error("cannot serialize");
+        },
+      },
+    );
+
+    await expect(fn()).rejects.toThrow("cannot serialize");
+
+    // Nothing was persisted, so a second call re-resolves.
+    const keys = await fn.resolveKeys();
+    expect(await useStorage().get(keys[0]!)).toBeNull();
+    await expect(fn()).rejects.toThrow("cannot serialize");
+    expect(resolverCalls).toBe(2);
+  });
+});
+
 describe("storage", () => {
   it("createMemoryStorage handles TTL expiry", async () => {
     const storage = createMemoryStorage();

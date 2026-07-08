@@ -21,6 +21,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 
 - `defineCachedFunction(fn, opts)` — wraps any function with caching (SWR, TTL, integrity checks, deduplication of in-flight requests)
 - `getMaxAge(entry)` option — dynamic per-entry TTL: runs after the resolver, returns a number (seconds, shorthand for `maxAge`) or `{ maxAge?, staleMaxAge? }` that override the static options for that entry. Resolved values are persisted on the entry (`CacheEntry.maxAge` / `CacheEntry.staleMaxAge`) and drive both the read freshness check and the storage TTL. Absent field / `undefined` → falls back to static options. Flows through to `defineCachedHandler` (entry value is the `ResponseCacheEntry`)
+- `serialize(entry, ...args)` option — write-side counterpart of `transform`: runs once right after the resolver (and after `getMaxAge`, so that hook still sees the raw value) and returns the value to persist. `transform` deserializes it back on read. Use for resolver outputs a storage backend can't persist as-is (raw `ReadableStream`, class instances). It runs **exactly once per resolution** — shared across concurrent, deduplicated calls (every caller observes the serialized value), so consuming a one-shot source like a stream is safe. A throwing `serialize` fails the call and evicts, like a rejected resolver. Both `getMaxAge` and `serialize` are folded into the shared in-flight (`pending`) promise so they never run more than once
 - `cachedFunction(fn, opts)` — alias for `defineCachedFunction`
 - Returned cached function has `.resolveKeys(...args)`, `.invalidate(...args)`, and `.expire(...args)` methods
 - `resolveCacheKeys({ options, args })` — standalone helper to resolve storage keys
@@ -54,7 +55,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - `HTTPEvent` — `{ req: Request; url?: URL }` (url falls back to `new URL(req.url)`)
 - `EventHandler<E>` — `(event: E) => unknown | Promise<unknown>` (generic, defaults to HTTPEvent)
 - `CacheEntry<T>` — stored cache entry with value, expires, mtime, integrity
-- `CacheOptions<T>` — maxAge, swr, staleMaxAge, getMaxAge (dynamic per-entry TTL hook), base (string | string[] for multi-tier), getKey, validate, transform, etc.
+- `CacheOptions<T>` — maxAge, swr, staleMaxAge, getMaxAge (dynamic per-entry TTL hook), serialize (write-time hook, mirrors `transform`), base (string | string[] for multi-tier), getKey, validate, transform, etc.
 - `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
 - `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
 - `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
