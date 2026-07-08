@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "undocs build",
+    "dev": "undocs dev"
+  },
+  "devDependencies": {
+    "docs4ts": "^0.0.4",
+    "undocs": "^0.4.16"
+  },
+  "packageManager": "pnpm@11.10.0"
+}

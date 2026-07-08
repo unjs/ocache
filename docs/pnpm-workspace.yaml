@@ -1,0 +1,5 @@
+packages: []
+shamefullyHoist: true
+onlyBuiltDependencies:
+  - esbuild
+  - "@parcel/watcher"

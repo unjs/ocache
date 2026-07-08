@@ -1,0 +1,59 @@
+name: docs
+
+on:
+  push:
+    # `docs` is temporary — lets us preview the site on GitHub Pages while the
+    # docs PR is open. Remove it once merged so only `main` publishes.
+    branches: [main, docs]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "src/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+# Allow the GITHUB_TOKEN to deploy to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow one concurrent deployment, cancelling in-progress runs
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - run: npm i -fg corepack && corepack enable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: "pnpm"
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - name: Install dependencies
+        working-directory: docs
+        run: pnpm install
+      - name: Build docs
+        working-directory: docs
+        # Project pages serve under /ocache/ — set the base path so assets resolve.
+        env:
+          NUXT_APP_BASE_URL: /ocache/
+        run: pnpm build
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.docs/.output/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
