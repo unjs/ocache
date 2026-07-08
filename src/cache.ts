@@ -200,7 +200,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           }
           // Prepare the value for storage (write-side counterpart of `transform`).
           // Runs after `getMaxAge` so that hook still sees the raw resolved value.
-          const stored = opts.serialize ? await opts.serialize(resolvedEntry, ...args) : value;
+          const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
           return { value: stored, maxAge, staleMaxAge };
         })();
       }

@@ -91,6 +91,9 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * resolution — even under concurrent, deduplicated calls, where every caller observes
    * the serialized value — it is safe to consume a one-shot source such as a stream here.
    *
+   * The second argument carries the `args` the cached function was called with (same
+   * shape as `validate`), so serialization can depend on the current call.
+   *
    * @example
    * ```ts
    * // Persist a ReadableStream body as a string, restore it on read.
@@ -98,7 +101,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * transform: (entry) => ({ ...entry.value, body: stringToStream(entry.value.body) }),
    * ```
    */
-  serialize?: (entry: CacheEntry<T>, ...args: ArgsT) => T | Promise<T>;
+  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => T | Promise<T>;
   /**
    * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
    * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
@@ -179,11 +182,13 @@ export interface CacheConditions {
 /**
  * Options for configuring cached HTTP handlers created by `defineCachedHandler`.
  *
- * Extends {@link CacheOptions} (without `transform` and `validate`, which are set internally).
+ * Extends {@link CacheOptions} (without `transform` and `validate`, which are set internally,
+ * and without `serialize`: the handler already stringifies the response into a fully
+ * serializable `ResponseCacheEntry`, so there is nothing left to prepare for storage).
  */
 export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
   CacheOptions<ResponseCacheEntry, [E]>,
-  "transform" | "validate"
+  "transform" | "validate" | "serialize"
 > {
   /** When `true`, only handles conditional headers (304 responses) without full response caching. */
   headersOnly?: boolean;

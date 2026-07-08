@@ -1121,11 +1121,11 @@ describe("serialize (write-time hook)", () => {
     expect(entry.value).toBe('{"expiresIn":42}');
   });
 
-  it("receives the call arguments after the entry", async () => {
+  it("receives the call arguments via the ctx object", async () => {
     const fn = defineCachedFunction((a: number, b: number) => a + b, {
       maxAge: 100,
       getKey: (a, b) => `${a}-${b}`,
-      serialize: (entry, a, b) => `${entry.value}:${a}:${b}` as any,
+      serialize: (entry, { args }) => `${entry.value}:${args[0]}:${args[1]}` as any,
       transform: (entry) => entry.value,
     });
 
