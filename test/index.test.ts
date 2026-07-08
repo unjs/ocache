@@ -95,6 +95,7 @@ describe("cachedFunction", () => {
     let n = 0;
     const fn = defineCachedFunction(() => `v${++n}`, {
       maxAge: 100,
+      swr: true, // opt in — SWR is off by default
       getKey: () => "k",
       transform: (entry) => {
         statuses.push(entry.status);
@@ -1874,8 +1875,9 @@ describe("defineCachedHandler", () => {
 
     const res = (await handler(makeEvent(path))) as Response;
     const cc = res.headers.get("cache-control")!;
-    expect(cc).toContain("s-maxage=60");
-    expect(cc).toContain("stale-while-revalidate");
+    // swr is off by default, so a plain max-age is synthesized (no SWR directives)
+    expect(cc).toContain("max-age=60");
+    expect(cc).not.toContain("stale-while-revalidate");
   });
 
   it("works with generic event type", async () => {
@@ -1900,17 +1902,17 @@ describe("defineCachedHandler", () => {
     expect(receivedCustom).toBe("test-value");
   });
 
-  // Regression: issue #4 — passing partial opts (e.g. only maxAge) should inherit swr default
+  // Regression: issue #4 — passing partial opts (e.g. only maxAge) should still merge defaults
   it("inherits swr default when only maxAge is provided", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 30 });
 
     const res = (await handler(makeEvent(path))) as Response;
     const cc = res.headers.get("cache-control")!;
-    // swr should default to true, so we get s-maxage (not max-age)
-    expect(cc).toContain("s-maxage=30");
-    expect(cc).toContain("stale-while-revalidate");
-    expect(cc).not.toContain("max-age=30");
+    // swr defaults to false, so we get a plain max-age (no SWR directives)
+    expect(cc).toContain("max-age=30");
+    expect(cc).not.toContain("s-maxage=30");
+    expect(cc).not.toContain("stale-while-revalidate");
   });
 
   // Regression: issue #5 — handler returning undefined etag/last-modified should invalidate cache
@@ -1993,7 +1995,7 @@ describe("resolveCacheKeys", () => {
     await fn();
 
     const expectedKeys = await resolveCacheKeys({ options: opts });
-    expect(setSpy).toHaveBeenCalledWith(expectedKeys[0], expect.any(Object), undefined);
+    expect(setSpy).toHaveBeenCalledWith(expectedKeys[0], expect.any(Object), { ttl: 10 });
   });
 
   it("matches .resolveKeys on the cached function", async () => {

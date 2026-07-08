@@ -37,7 +37,7 @@ const data = await cachedFetch("https://api.example.com/data");
 const cached = defineCachedFunction(fn, {
   name: "my-fn", // Cache key name (defaults to function name)
   maxAge: 10, // TTL in seconds (default: 1)
-  swr: true, // Stale-while-revalidate (default: true)
+  swr: false, // Stale-while-revalidate (default: false — opt in to serve stale)
   staleMaxAge: 60, // Max seconds to serve stale content
   getMaxAge: (entry) => entry.value?.expires_in, // Per-entry TTL from the resolved value
   base: "/cache", // Base prefix for cache keys (string or string[] for multi-tier)
