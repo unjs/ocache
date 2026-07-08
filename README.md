@@ -46,6 +46,7 @@ const cached = defineCachedFunction(fn, {
   shouldBypassCache: (...args) => false, // Skip cache entirely when true
   shouldInvalidateCache: (...args) => false, // Force refresh when true
   validate: (entry) => entry.value !== undefined, // Custom validation
+  serialize: (entry) => entry.value, // Prepare value for storage (transform restores it on read)
   transform: (entry) => entry.value, // Transform before returning
   onError: (error) => console.error(error), // Error handler
 });
@@ -61,6 +62,22 @@ const getToken = defineCachedFunction(
   {
     // Cache each token for exactly its own lifetime (minus a small safety margin)
     getMaxAge: (entry) => Math.max(1, (entry.value?.expires_in ?? 60) - 5),
+  },
+);
+```
+
+#### Custom Serialization
+
+Some resolver outputs can't be persisted as-is — a `ReadableStream`, a class instance. Use `serialize` to convert the value to a storable form on write, and `transform` to reconstruct the usable value on read. `serialize` runs exactly once per resolution, right after the resolver (and after `getMaxAge`, so that hook still sees the raw value) — shared across concurrent deduplicated calls, so consuming a one-shot source like a stream is safe.
+
+```ts
+const getReport = defineCachedFunction(
+  () => generateReportStream(), // resolves a one-shot ReadableStream
+  {
+    // Persist the stream as a string...
+    serialize: (entry) => streamToString(entry.value),
+    // ...and recreate a fresh stream on every read.
+    transform: (entry) => stringToStream(entry.value),
   },
 );
 ```

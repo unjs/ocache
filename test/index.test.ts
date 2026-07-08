@@ -1017,7 +1017,7 @@ describe("serialize (write-time hook)", () => {
       maxAge: 100,
       getKey: () => "k",
       // Persist a compact string form...
-      serialize: (entry) => JSON.stringify(entry.value) as any,
+      serialize: (entry) => JSON.stringify(entry.value),
       // ...and reconstruct the object on the way out.
       transform: (entry) => JSON.parse(entry.value as any),
     });
@@ -1046,7 +1046,7 @@ describe("serialize (write-time hook)", () => {
         getKey: () => "k",
         serialize: (entry) => {
           serializeCalls++;
-          return `serialized-${entry.value}` as any;
+          return `serialized-${entry.value}`;
         },
         transform: (entry) => `out-${entry.value}`,
       },
@@ -1086,8 +1086,7 @@ describe("serialize (write-time hook)", () => {
       {
         maxAge: 100,
         getKey: () => "k",
-        serialize: async (entry) =>
-          ({ body: await streamToString((entry.value as any).body) }) as any,
+        serialize: async (entry) => ({ body: await streamToString(entry.value!.body) }),
         transform: (entry) => (entry.value as any).body,
       },
     );
@@ -1106,7 +1105,7 @@ describe("serialize (write-time hook)", () => {
         seenByGetMaxAge = entry.value;
         return entry.value?.expiresIn;
       },
-      serialize: (entry) => JSON.stringify(entry.value) as any,
+      serialize: (entry) => JSON.stringify(entry.value),
       transform: (entry) => JSON.parse(entry.value as any),
     });
 
@@ -1125,7 +1124,7 @@ describe("serialize (write-time hook)", () => {
     const fn = defineCachedFunction((a: number, b: number) => a + b, {
       maxAge: 100,
       getKey: (a, b) => `${a}-${b}`,
-      serialize: (entry, { args }) => `${entry.value}:${args[0]}:${args[1]}` as any,
+      serialize: (entry, { args }) => `${entry.value}:${args[0]}:${args[1]}`,
       transform: (entry) => entry.value,
     });
 

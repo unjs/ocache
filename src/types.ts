@@ -82,7 +82,8 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * Prepare the resolved value for storage — the write-side counterpart of `transform`.
    *
    * Runs once, right after the resolver (and after `getMaxAge`, so that hook still sees the
-   * raw value) and before the entry is persisted. Return the value to store; `transform`
+   * raw value) and before the entry is persisted. Return the value to store (the storable
+   * shape usually differs from `T`, so the return is untyped like `transform`); `transform`
    * then reconstructs the usable value when the entry is read back.
    *
    * Use this when the resolver returns something a storage backend can't persist as-is
@@ -101,7 +102,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * transform: (entry) => ({ ...entry.value, body: stringToStream(entry.value.body) }),
    * ```
    */
-  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => T | Promise<T>;
+  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => any;
   /**
    * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
    * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
