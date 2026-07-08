@@ -2361,7 +2361,7 @@ describe("defineCachedHandler", () => {
     expect(seen).toEqual(["theme=dark"]);
   });
 
-  it("by default refuses to cache a response that sets a cookie (still returned to the caller)", async () => {
+  it("by default strips a Set-Cookie from the response and caches the rest", async () => {
     let callCount = 0;
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -2377,15 +2377,41 @@ describe("defineCachedHandler", () => {
     const r1 = (await handler(makeEvent(path))) as Response;
     const r2 = (await handler(makeEvent(path))) as Response;
 
-    // The Set-Cookie response is never stored, so each request re-resolves ...
-    expect(callCount).toBe(2);
-    // ... and the first caller still receives its own Set-Cookie.
-    expect(r1.headers.get("set-cookie")).toBe("sid=1; HttpOnly");
+    // The per-request cookie is stripped, so nothing per-client remains and the
+    // response is cacheable — the second request is a hit.
+    expect(callCount).toBe(1);
+    // No caller receives a Set-Cookie (a shared cache must not carry per-client cookies).
+    expect(r1.headers.get("set-cookie")).toBeNull();
+    expect(r2.headers.get("set-cookie")).toBeNull();
     expect(await r1.text()).toBe("call-1");
-    expect(await r2.text()).toBe("call-2");
+    expect(await r2.text()).toBe("call-1");
   });
 
-  it("caches a Set-Cookie response only when every cookie it sets is allowlisted", async () => {
+  it("does not share a per-request Set-Cookie across concurrent (coalesced) callers (issue #61)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", {
+          headers: { "set-cookie": `sid=coalesced-${callCount}` },
+        });
+      },
+      { maxAge: 10 },
+    );
+
+    // Two concurrent requests collapse onto one resolution. Neither must receive the
+    // leader's minted session cookie.
+    const [a, b] = (await Promise.all([handler(makeEvent(path)), handler(makeEvent(path))])) as [
+      Response,
+      Response,
+    ];
+
+    expect(a.headers.get("set-cookie")).toBeNull();
+    expect(b.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("keeps allowlisted Set-Cookies and strips the rest, caching the result", async () => {
     let allowedCalls = 0;
     const allowedPath = uniquePath();
     const allowedHandler = defineCachedHandler(
@@ -2398,10 +2424,11 @@ describe("defineCachedHandler", () => {
       { maxAge: 10, allowCookies: ["theme"] },
     );
 
+    const a1 = (await allowedHandler(makeEvent(allowedPath))) as Response;
     await allowedHandler(makeEvent(allowedPath));
-    await allowedHandler(makeEvent(allowedPath));
-    // Allowlisted cookie -> cached, second request is a hit.
+    // Allowlisted cookie -> kept and cached, second request is a hit.
     expect(allowedCalls).toBe(1);
+    expect(a1.headers.get("set-cookie")).toBe("theme=dark; Path=/");
 
     let mixedCalls = 0;
     const mixedPath = uniquePath();
@@ -2416,15 +2443,18 @@ describe("defineCachedHandler", () => {
       { maxAge: 10, swr: false, allowCookies: ["theme"] },
     );
 
+    const m1 = (await mixedHandler(makeEvent(mixedPath))) as Response;
     await mixedHandler(makeEvent(mixedPath));
-    await mixedHandler(makeEvent(mixedPath));
-    // A non-allowlisted `sid` alongside the allowed `theme` disqualifies caching.
-    expect(mixedCalls).toBe(2);
+    // The non-allowlisted `sid` is stripped; the allowed `theme` remains, so the
+    // response is cached and the second request is a hit.
+    expect(mixedCalls).toBe(1);
+    expect(m1.headers.getSetCookie()).toEqual(["theme=dark"]);
   });
 
-  it("blocks Set-Cookie conservatively on runtimes without getSetCookie", async () => {
+  it("strips Set-Cookie conservatively on runtimes without getSetCookie", async () => {
     // Simulate an environment whose Headers lacks getSetCookie (older Node / polyfills):
-    // the guard must fall back to header presence and refuse storage, not fail open.
+    // the guard can't enumerate individual cookies, so it must strip every Set-Cookie
+    // (fail safe) rather than risk replaying one.
     const original = Object.getOwnPropertyDescriptor(Headers.prototype, "getSetCookie");
     // @ts-expect-error - deliberately removing the method for this test
     delete Headers.prototype.getSetCookie;
@@ -2441,10 +2471,13 @@ describe("defineCachedHandler", () => {
         { maxAge: 10, swr: false },
       );
 
-      await handler(makeEvent(path));
-      await handler(makeEvent(path));
-      // Never cached despite getSetCookie being unavailable.
-      expect(callCount).toBe(2);
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+      // Cookie stripped -> response cacheable, second request is a hit.
+      expect(callCount).toBe(1);
+      // And no Set-Cookie survives to any caller.
+      expect(r1.headers.get("set-cookie")).toBeNull();
+      expect(r2.headers.get("set-cookie")).toBeNull();
     } finally {
       if (original) {
         Object.defineProperty(Headers.prototype, "getSetCookie", original);
@@ -2545,9 +2578,9 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
     expect(written.length).toBeGreaterThan(0);
 
-    // Simulate an entry written by a pre-`allowCookies` version: identical shape and
-    // integrity, but with a Set-Cookie collapsed into its serialized headers. The
-    // resolver-side `_blockSetCookie` flag never existed on such entries, so only the
+    // Simulate an entry written by a version before Set-Cookie stripping existed:
+    // identical shape and integrity, but with a disallowed Set-Cookie collapsed into its
+    // serialized headers. Such entries were never stripped on write, so only the
     // read-side validate check stands between it and a replay.
     const entry = (await memory.get(written[0]!)) as any;
     entry.value.headers["set-cookie"] = "sid=old-secret";

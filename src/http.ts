@@ -186,6 +186,30 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         _appendVary(res.headers, variableHeaderNames);
       }
 
+      // Strip every Set-Cookie the allowlist doesn't cover BEFORE the headers are
+      // serialized, so a per-request cookie (e.g. a session id) can never reach a caller
+      // other than the one it was minted for — neither a future cache hit nor a
+      // concurrent, coalesced peer that shares this single resolution (issue #61). By
+      // default (no `allowCookies`) that drops every Set-Cookie: a shared cache must not
+      // carry per-client cookies, mirroring both the Cookie-request-header stripping on
+      // the way in and how CDNs / Varnish treat cacheable responses. The rest of the
+      // response is still cached. Prefer `getSetCookie()` so each cookie is inspected
+      // individually — `Object.fromEntries(headers.entries())` below collapses multiples
+      // to one. On runtimes without it we can't tell which cookies are present, so strip
+      // all of them (fail safe) rather than risk replaying one.
+      if (typeof res.headers.getSetCookie === "function") {
+        const setCookies = res.headers.getSetCookie();
+        const kept = setCookies.filter((c) => allowedCookieNames?.includes(_cookieName(c)));
+        if (kept.length !== setCookies.length) {
+          res.headers.delete("set-cookie");
+          for (const c of kept) {
+            res.headers.append("set-cookie", c);
+          }
+        }
+      } else if (res.headers.has("set-cookie")) {
+        res.headers.delete("set-cookie");
+      }
+
       const cacheEntry: ResponseCacheEntry = {
         status: res.status,
         statusText: res.statusText,
@@ -195,21 +219,6 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         // pre-binary-support entries), so `transform`'s `{ ...value }` spread carries it through.
         ...(base64 && { base64: true }),
       };
-
-      // Flag the entry non-storable when it sets a cookie outside the allowlist, read
-      // back in `validate`. Prefer `getSetCookie()` so every Set-Cookie is inspected —
-      // `Object.fromEntries(headers.entries())` above collapses them to just the last.
-      // On runtimes without `getSetCookie` we can't enumerate individual cookies, so
-      // fall back to header presence and block conservatively rather than fail open
-      // (a fail-open default here would silently leak Set-Cookie across cache hits).
-      const setCookies =
-        typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : undefined;
-      const blockSetCookie = setCookies
-        ? setCookies.some((c) => !allowedCookieNames?.includes(_cookieName(c)))
-        : res.headers.has("set-cookie");
-      if (blockSetCookie) {
-        Object.defineProperty(cacheEntry, "_blockSetCookie", { value: true, enumerable: false });
-      }
 
       return cacheEntry;
     },
@@ -269,20 +278,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       if (_forbidsSharedCaching(value.headers?.["cache-control"])) {
         return false;
       }
-      // Refuse to store (and later replay to other requests) a response that sets a
-      // cookie outside the allowlist — otherwise a per-request `Set-Cookie` (e.g. a
-      // session id) leaks to every cache-hit request. The decision is made in
-      // `serialize` via `getSetCookie()` (lossless, unlike the collapsed serialized
-      // header) and flagged non-enumerably; the flag is absent on storage-read entries.
-      if ((value as { _blockSetCookie?: boolean })._blockSetCookie) {
-        return false;
-      }
-      // Defense-in-depth for entries this version didn't write (e.g. cached before
-      // upgrading to the allowCookies default, or by another writer sharing the
-      // storage): reject a stored Set-Cookie outside the allowlist instead of
-      // replaying it until expiry. Serialized headers collapse multiple Set-Cookie
-      // values to the last, so this check is partial — the lossless guard is the
-      // `serialize`-side flag above.
+      // Defense-in-depth for entries this version didn't write (e.g. cached before the
+      // Set-Cookie stripping in `serialize` existed, or by another writer sharing the
+      // storage): reject a stored Set-Cookie outside the allowlist instead of replaying
+      // it until expiry. Entries written by this version never carry a disallowed
+      // Set-Cookie — `serialize` strips them before storage — so this only guards
+      // pre-existing/foreign entries. Serialized headers collapse multiple Set-Cookie
+      // values to the last, so the check is partial; the lossless guard is the strip.
       const _setCookie = value.headers?.["set-cookie"];
       if (_setCookie && !allowedCookieNames?.includes(_cookieName(_setCookie))) {
         return false;
