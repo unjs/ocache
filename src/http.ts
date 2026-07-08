@@ -98,24 +98,105 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         ? opts.cacheStatusHeader.toLowerCase()
         : undefined;
 
-  const _opts: CacheOptions<ResponseCacheEntry> = {
+  // The cached function resolves to a live `Response`; `serialize` turns it into the
+  // stored `ResponseCacheEntry`, and `transform` reads that entry back on serve. So `T`
+  // is the resolver's `Response`, while `entry.value` holds the serialized entry once
+  // stored — the same documented looseness `transform` already relies on.
+  const _opts: CacheOptions<Response> = {
     ...opts,
     // Inject the cache-status header into a cloned entry value (never mutating the
     // stored entry) so it flows through to the final Response headers.
     transform: _statusHeader
       ? (entry) => {
-          if (!entry.value) {
+          const value = entry.value as unknown as ResponseCacheEntry | undefined;
+          if (!value) {
             return;
           }
           return {
-            ...entry.value,
+            ...value,
             headers: {
-              ...entry.value.headers,
+              ...value.headers,
               [_statusHeader]: String(entry.status).toUpperCase(),
             },
           };
         }
       : undefined,
+    // Write-side seam: consume the resolved `Response` body, synthesize the cache
+    // headers, and build the storable `ResponseCacheEntry`. Runs exactly once per
+    // resolution (shared across deduplicated callers), so `res.text()`'s one-shot
+    // consumption is safe. Kept out of the resolver so bypassed requests — which never
+    // reach `serialize` — get their live `Response` back untouched.
+    serialize: async (entry) => {
+      const res = entry.value as unknown as Response;
+
+      // Stringified body
+      // TODO: support binary responses
+      const body = await res.text();
+
+      if (!res.headers.has("etag")) {
+        res.headers.set("etag", `W/"${hash(body)}"`);
+      }
+
+      if (!res.headers.has("last-modified")) {
+        res.headers.set("last-modified", new Date().toUTCString());
+      }
+
+      // Only synthesize a cache-control header when the handler did not set one
+      // explicitly — never clobber an explicit cache-control with our SWR/s-maxage
+      // directives (mirrors the etag / last-modified "preserve if present" behavior above).
+      if (!res.headers.has("cache-control")) {
+        const cacheControl = [];
+        if (opts.swr) {
+          if (opts.maxAge != null) {
+            cacheControl.push(`s-maxage=${opts.maxAge}`);
+          }
+          if (opts.staleMaxAge != null) {
+            cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
+          } else {
+            cacheControl.push("stale-while-revalidate");
+          }
+        } else if (opts.maxAge) {
+          // For non-SWR, set max-age directly
+          cacheControl.push(`max-age=${opts.maxAge}`);
+        }
+        if (cacheControl.length > 0) {
+          res.headers.set("cache-control", cacheControl.join(", "));
+        }
+      }
+
+      // Advertise the request headers this response varies on so downstream
+      // caches/CDNs/browsers store a separate variant per value — merging with any
+      // `Vary` the handler already set rather than clobbering it (mirrors the
+      // "preserve if present" behavior of the etag / last-modified / cache-control
+      // synthesis above).
+      if (variableHeaderNames.length > 0) {
+        _appendVary(res.headers, variableHeaderNames);
+      }
+
+      const cacheEntry: ResponseCacheEntry = {
+        status: res.status,
+        statusText: res.statusText,
+        headers: Object.fromEntries(res.headers.entries()),
+        body,
+      };
+
+      // Flag the entry non-storable when it sets a cookie outside the allowlist, read
+      // back in `validate`. Prefer `getSetCookie()` so every Set-Cookie is inspected —
+      // `Object.fromEntries(headers.entries())` above collapses them to just the last.
+      // On runtimes without `getSetCookie` we can't enumerate individual cookies, so
+      // fall back to header presence and block conservatively rather than fail open
+      // (a fail-open default here would silently leak Set-Cookie across cache hits).
+      const setCookies =
+        typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : undefined;
+      const blockSetCookie = setCookies
+        ? setCookies.some((c) => !allowedCookieNames?.includes(_cookieName(c)))
+        : res.headers.has("set-cookie");
+      if (blockSetCookie) {
+        Object.defineProperty(cacheEntry, "_blockSetCookie", { value: true, enumerable: false });
+      }
+
+      return cacheEntry;
+    },
     // Compose the built-in non-GET/HEAD bypass with the caller's opt-in check
     // instead of clobbering it: bypass when either says so. A bare `...opts`
     // spread already carried `opts.shouldBypassCache`, but assigning the
@@ -161,19 +242,23 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       return [_hashedPath, ..._headers, ..._cookies].join(":");
     },
     validate: async (entry) => {
-      if (!entry.value) {
+      // `validate` always inspects the serialized shape: on write it runs right after
+      // `serialize` (entry.value is the freshly built `ResponseCacheEntry`), on read it
+      // sees the entry as persisted.
+      const value = entry.value as unknown as ResponseCacheEntry | undefined;
+      if (!value) {
         return false;
       }
       // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
-      if (_forbidsSharedCaching(entry.value.headers?.["cache-control"])) {
+      if (_forbidsSharedCaching(value.headers?.["cache-control"])) {
         return false;
       }
       // Refuse to store (and later replay to other requests) a response that sets a
       // cookie outside the allowlist — otherwise a per-request `Set-Cookie` (e.g. a
-      // session id) leaks to every cache-hit request. The decision is made in the
-      // resolver via `getSetCookie()` (lossless, unlike the collapsed serialized
+      // session id) leaks to every cache-hit request. The decision is made in
+      // `serialize` via `getSetCookie()` (lossless, unlike the collapsed serialized
       // header) and flagged non-enumerably; the flag is absent on storage-read entries.
-      if ((entry.value as { _blockSetCookie?: boolean })._blockSetCookie) {
+      if ((value as { _blockSetCookie?: boolean })._blockSetCookie) {
         return false;
       }
       // Defense-in-depth for entries this version didn't write (e.g. cached before
@@ -181,21 +266,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // storage): reject a stored Set-Cookie outside the allowlist instead of
       // replaying it until expiry. Serialized headers collapse multiple Set-Cookie
       // values to the last, so this check is partial — the lossless guard is the
-      // resolver-side flag above.
-      const _setCookie = entry.value.headers?.["set-cookie"];
+      // `serialize`-side flag above.
+      const _setCookie = value.headers?.["set-cookie"];
       if (_setCookie && !allowedCookieNames?.includes(_cookieName(_setCookie))) {
         return false;
       }
-      if (entry.value.status >= 400) {
+      if (value.status >= 400) {
         return false;
       }
-      if (entry.value.body === undefined) {
+      if (value.body === undefined) {
         return false;
       }
-      if (
-        entry.value.headers.etag === "undefined" ||
-        entry.value.headers["last-modified"] === "undefined"
-      ) {
+      if (value.headers.etag === "undefined" || value.headers["last-modified"] === "undefined") {
         return false;
       }
       // Additive user hook: ANDed with the built-in checks above so callers can
@@ -205,7 +287,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // the request — the response is still served, just not stored/served-from-cache.
       if (opts.shouldCache) {
         try {
-          if ((await opts.shouldCache(entry.value)) === false) {
+          if ((await opts.shouldCache(value)) === false) {
             return false;
           }
         } catch (error) {
@@ -223,7 +305,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     integrity: opts.integrity || hash([handler, _integrityOpts(opts)]),
   };
 
-  const _cachedHandler = cachedFunction<ResponseCacheEntry>(async (event: HTTPEvent) => {
+  // Resolver: narrow the request (cacheable calls only), run the handler, and return
+  // the *live* `Response`. Serialization into a `ResponseCacheEntry` happens in the
+  // `serialize` hook above, so a bypassed request — which `cachedFunction` returns raw,
+  // skipping `serialize`/`transform` — flows back out as an untouched `Response`.
+  const _cachedHandler = cachedFunction<Response>(async (event: HTTPEvent) => {
     // Narrow the request for cache-key consistency — cacheable calls only. Bypassed
     // methods (POST etc.) are never stored or key-derived, so their request must reach
     // the handler untouched (cookies, varied headers, full query, body — the rewritten
@@ -271,75 +357,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
     // Call handler
     const rawValue = await handler(event as E);
-    const res = await _toResponse(rawValue, event as E);
-
-    // Stringified body
-    // TODO: support binary responses
-    const body = await res.text();
-
-    if (!res.headers.has("etag")) {
-      res.headers.set("etag", `W/"${hash(body)}"`);
-    }
-
-    if (!res.headers.has("last-modified")) {
-      res.headers.set("last-modified", new Date().toUTCString());
-    }
-
-    // Only synthesize a cache-control header when the handler did not set one
-    // explicitly — never clobber an explicit cache-control with our SWR/s-maxage
-    // directives (mirrors the etag / last-modified "preserve if present" behavior above).
-    if (!res.headers.has("cache-control")) {
-      const cacheControl = [];
-      if (opts.swr) {
-        if (opts.maxAge != null) {
-          cacheControl.push(`s-maxage=${opts.maxAge}`);
-        }
-        if (opts.staleMaxAge != null) {
-          cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
-        } else {
-          cacheControl.push("stale-while-revalidate");
-        }
-      } else if (opts.maxAge) {
-        // For non-SWR, set max-age directly
-        cacheControl.push(`max-age=${opts.maxAge}`);
-      }
-      if (cacheControl.length > 0) {
-        res.headers.set("cache-control", cacheControl.join(", "));
-      }
-    }
-
-    // Advertise the request headers this response varies on so downstream
-    // caches/CDNs/browsers store a separate variant per value — merging with any
-    // `Vary` the handler already set rather than clobbering it (mirrors the
-    // "preserve if present" behavior of the etag / last-modified / cache-control
-    // synthesis above).
-    if (variableHeaderNames.length > 0) {
-      _appendVary(res.headers, variableHeaderNames);
-    }
-
-    const cacheEntry: ResponseCacheEntry = {
-      status: res.status,
-      statusText: res.statusText,
-      headers: Object.fromEntries(res.headers.entries()),
-      body,
-    };
-
-    // Flag the entry non-storable when it sets a cookie outside the allowlist, read
-    // back in `validate`. Prefer `getSetCookie()` so every Set-Cookie is inspected —
-    // `Object.fromEntries(headers.entries())` above collapses them to just the last.
-    // On runtimes without `getSetCookie` we can't enumerate individual cookies, so
-    // fall back to header presence and block conservatively rather than fail open
-    // (a fail-open default here would silently leak Set-Cookie across cache hits).
-    const setCookies =
-      typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : undefined;
-    const blockSetCookie = setCookies
-      ? setCookies.some((c) => !allowedCookieNames?.includes(_cookieName(c)))
-      : res.headers.has("set-cookie");
-    if (blockSetCookie) {
-      Object.defineProperty(cacheEntry, "_blockSetCookie", { value: true, enumerable: false });
-    }
-
-    return cacheEntry;
+    return _toResponse(rawValue, event as E);
   }, _opts);
 
   return async (event) => {
@@ -352,7 +370,17 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     }
 
     // Call with cache
-    const response = (await _cachedHandler(event))!;
+    const cached = (await _cachedHandler(event))! as Response | ResponseCacheEntry;
+
+    // Bypassed requests (non-GET/HEAD, or a caller `shouldBypassCache`) resolve to the
+    // handler's live `Response`: `cachedFunction` returns the resolver output raw on the
+    // bypass path (no `serialize`/`transform`). Pass it straight through — no body
+    // buffering (streaming and binary bodies survive), no synthesized cache headers, and
+    // no bogus 304 for a method that was never cacheable.
+    if (cached instanceof Response) {
+      return cached;
+    }
+    const response = cached;
 
     // Check for cache headers
     if (

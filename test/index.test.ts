@@ -1555,6 +1555,74 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(3);
   });
 
+  it("passes a bypassed (POST) response through untouched — no buffering or synthesized headers", async () => {
+    const path = uniquePath();
+    const original = new Response("post-body", { status: 201, statusText: "Created" });
+    const handler = defineCachedHandler(() => original, { maxAge: 10 });
+
+    const res = (await handler(makeEvent(path, { method: "POST" }))) as Response;
+
+    // The exact live Response instance flows back out — not a rebuilt copy.
+    expect(res).toBe(original);
+    expect(res.status).toBe(201);
+    expect(res.statusText).toBe("Created");
+    // No serialize step ran, so no cache headers were synthesized onto it.
+    expect(res.headers.has("etag")).toBe(false);
+    expect(res.headers.has("last-modified")).toBe(false);
+    expect(res.headers.has("cache-control")).toBe(false);
+    expect(res.headers.has("x-cache")).toBe(false);
+    // Body is still readable (never consumed by res.text()).
+    expect(await res.text()).toBe("post-body");
+  });
+
+  it("never answers a bypassed (POST) request with 304", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+    // A GET first, to obtain an etag we can echo back as a conditional validator.
+    const getRes = (await handler(makeEvent(path))) as Response;
+    const etag = getRes.headers.get("etag")!;
+    expect(etag).toBeTruthy();
+
+    // A POST carrying the matching validator must still reach the handler and get 200,
+    // never a bogus 304 (which isn't valid semantics for a non-cacheable method).
+    const postRes = (await handler(
+      makeEvent(path, { method: "POST", headers: { "if-none-match": etag } }),
+    )) as Response;
+    expect(postRes.status).toBe(200);
+    expect(await postRes.text()).toBe("ok");
+  });
+
+  it("preserves a binary bypassed response body (no res.text() corruption)", async () => {
+    const path = uniquePath();
+    const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe, 0x01]);
+    const handler = defineCachedHandler(
+      () => new Response(bytes, { headers: { "content-type": "application/octet-stream" } }),
+      { maxAge: 10 },
+    );
+
+    const res = (await handler(makeEvent(path, { method: "POST" }))) as Response;
+    const out = new Uint8Array(await res.arrayBuffer());
+    expect([...out]).toEqual([...bytes]);
+  });
+
+  it("reaches the handler with the bypassed request body intact", async () => {
+    const path = uniquePath();
+    let received: string | undefined;
+    const handler = defineCachedHandler(
+      async (event) => {
+        received = await event.req.text();
+        return new Response("ack");
+      },
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path, { method: "POST", body: "payload" }));
+    // The narrowed Request rebuilt for cacheable calls drops the body; a bypassed
+    // request must reach the handler untouched, body included.
+    expect(received).toBe("payload");
+  });
+
   it("sets cache-control header with SWR and staleMaxAge", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
