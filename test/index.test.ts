@@ -751,6 +751,31 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(2);
   });
 
+  it("SWR with maxAge: 0 and staleMaxAge: 0 blocks revalidation instead of serving stale", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction<string, [any]>(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 20));
+        return `v${callCount}`;
+      },
+      { maxAge: 0, swr: true, staleMaxAge: 0, getKey: () => "k" },
+    );
+    // Event with waitUntil so the first entry is actually persisted before the 2nd read.
+    const makeEv = () => ({
+      req: Object.assign(new Request("http://localhost/"), { waitUntil: () => {} }),
+    });
+
+    expect(await fn(makeEv())).toBe("v1");
+    await new Promise((r) => setTimeout(r, 5));
+    // A zero stale window must revalidate in the foreground, never serve the stale value —
+    // previously the fully-expired check skipped maxAge: 0 (ttl === 0), so this returned the
+    // stale "v1" (with x-cache "STALE") instead of blocking for the fresh "v2".
+    const r2 = await fn(makeEv());
+    expect(r2).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
   it("waitUntil is used for SWR background revalidation", async () => {
     const waitUntilFn = vi.fn();
     let callCount = 0;
