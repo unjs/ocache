@@ -1416,6 +1416,58 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
   });
 
+  it("honors a user-supplied shouldBypassCache (issue #50)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      {
+        maxAge: 10,
+        // Bypass whenever the request carries a `?bypass` query param.
+        shouldBypassCache: (event) => new URL(event.req.url).searchParams.has("bypass"),
+      },
+    );
+
+    // GET without the flag caches as usual.
+    await handler(makeEvent(path));
+    await handler(makeEvent(path));
+    expect(callCount).toBe(1);
+
+    // GET with the flag must bypass the cache and reach the handler every time.
+    await handler(makeEvent(`${path}?bypass`));
+    await handler(makeEvent(`${path}?bypass`));
+    expect(callCount).toBe(3);
+  });
+
+  it("composes the built-in method bypass with a user shouldBypassCache", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      {
+        maxAge: 10,
+        // User check only bypasses on a header; non-GET/HEAD must still bypass
+        // via the built-in method check even though this returns false for them.
+        shouldBypassCache: (event) => event.req.headers.get("x-bypass") === "1",
+      },
+    );
+
+    // POST still bypasses (built-in method check), user check returns false.
+    await handler(makeEvent(path, { method: "POST" }));
+    await handler(makeEvent(path, { method: "POST" }));
+    expect(callCount).toBe(2);
+
+    // GET with the user flag bypasses too.
+    await handler(makeEvent(path, { headers: { "x-bypass": "1" } }));
+    expect(callCount).toBe(3);
+  });
+
   it("sets cache-control header with SWR and staleMaxAge", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
