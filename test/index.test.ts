@@ -231,6 +231,45 @@ describe("cachedFunction", () => {
     expect(r2).toBe(2);
   });
 
+  it("passes call args to validate", async () => {
+    // Regression for nitrojs/nitro#3525: validate must receive the args the cached
+    // function was called with, so an entry can be validated against the current call
+    // (e.g. comparing a request parameter against `entry.mtime`).
+    let callCount = 0;
+    const seenArgs: Array<unknown[]> = [];
+    const fn = defineCachedFunction(
+      (_id: string, lastUpdated: number) => {
+        callCount++;
+        return { callCount, lastUpdated };
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        getKey: (id) => id,
+        validate: (entry, { args }) => {
+          seenArgs.push(args);
+          const [, lastUpdated] = args;
+          // Invalidate the cached entry when the caller reports newer data.
+          return (entry.value?.lastUpdated ?? 0) >= lastUpdated;
+        },
+      },
+    );
+
+    // First call resolves fresh (miss) — validate still runs on the empty read entry.
+    expect(await fn("a", 100)).toEqual({ callCount: 1, lastUpdated: 100 });
+    // Same args -> cached value passes validation.
+    expect(await fn("a", 100)).toEqual({ callCount: 1, lastUpdated: 100 });
+    expect(callCount).toBe(1);
+
+    // A newer `lastUpdated` makes validate return false -> re-resolve.
+    expect(await fn("a", 200)).toEqual({ callCount: 2, lastUpdated: 200 });
+    expect(callCount).toBe(2);
+
+    // validate always saw the args from the current call.
+    expect(seenArgs.every((args) => args.length === 2)).toBe(true);
+    expect(seenArgs.at(-1)).toEqual(["a", 200]);
+  });
+
   it("supports asynchronous validate", async () => {
     // Mirrors issue #32: validate needs to check the cached value against an
     // external source (e.g. fetching a signed URL to confirm it is still valid).
