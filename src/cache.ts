@@ -76,6 +76,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     event?: HTTPEvent,
   ): Promise<ResolvedCacheEntry<T>> {
     const validateCtx = { args };
+    // Set once the serve decision below picks the SWR background-refresh branch: the
+    // caller was handed the stale value and is NOT blocked on this resolution. Passed to
+    // `serialize` so it can tell a background refresh from a foreground miss (the HTTP
+    // layer uses it to avoid streaming a refresh nobody is waiting on).
+    let servedFromStale = false;
     // Use extension for key to avoid conflicting with parent namespace (foo/bar and foo/bar/baz)
     const bases = _normalizeBases(opts.base);
 
@@ -211,7 +216,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           }
           // Prepare the value for storage (write-side counterpart of `transform`).
           // Runs after `getMaxAge` so that hook still sees the raw resolved value.
-          const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
+          // `servedFromStale` is set by the serve decision below (which runs before this
+          // await settles), so it reflects whether the caller is blocked on this write.
+          const stored = opts.serialize
+            ? await opts.serialize(resolvedEntry, { args, background: servedFromStale })
+            : value;
           return { value: stored, maxAge, staleMaxAge };
         })();
       }
@@ -300,6 +309,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     if (entry.value === undefined) {
       await _resolvePromise;
     } else if (expired) {
+      // SWR: serve the stale value now, refresh in the background (caller not blocked).
+      servedFromStale = true;
       event?.req.waitUntil?.(_resolvePromise);
     }
 

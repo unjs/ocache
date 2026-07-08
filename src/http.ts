@@ -208,29 +208,30 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
 
       // Streaming: hand a live branch of the body to the waiting client before buffering
-      // the other branch for storage, so the client isn't blocked on the full read. Only
-      // when `stream` is enabled, the body is present, and a client is still waiting (an
-      // unsettled deferred — a background SWR refresh finds it settled and just buffers).
-      // The check-and-settle is synchronous (no `await` between them), so exactly one
-      // resolution per event tees, shared across all coalesced callers.
+      // the other branch for storage, so the client isn't blocked on the full read. Gated
+      // on a foreground miss the client is actually waiting for (`!ctx.background`): a
+      // stale-while-revalidate refresh already served the caller its stale copy, so it
+      // must not hijack the response into a foreground stream (and mislabel it `MISS`).
+      // Also requires `stream`, a body, and this event's still-unsettled deferred. The
+      // check-and-settle is synchronous (no `await` between them), so exactly one tee
+      // happens per resolution, shared across all coalesced callers.
       let bodySource: Response = res;
-      const _event = ctx.args[0] as HTTPEvent | undefined;
-      const _deferred = _event && _streamDeferreds.get(_event);
-      if (opts.stream && res.body && _deferred && !_deferred.settled) {
-        _deferred.settled = true;
-        const [cacheBranch, clientBranch] = res.body.tee();
-        // Buffer the cache branch below; the client reads its own branch concurrently.
-        bodySource = new Response(cacheBranch, {
-          status: res.status,
-          statusText: res.statusText,
-        });
-        _deferred.resolve({
-          body: clientBranch,
-          status: res.status,
-          statusText: res.statusText,
-          // Headers captured post-synthesis / post-cookie-strip but pre-etag.
-          headers: Object.fromEntries(res.headers.entries()),
-        });
+      if (opts.stream && res.body && !ctx.background) {
+        const _event = ctx.args[0] as HTTPEvent | undefined;
+        const _deferred = _event && _streamDeferreds.get(_event);
+        if (_deferred && !_deferred.settled) {
+          _deferred.settled = true;
+          const [cacheBranch, clientBranch] = res.body.tee();
+          // Buffer the cache branch below; the client reads its own branch concurrently.
+          bodySource = new Response(cacheBranch);
+          _deferred.resolve({
+            body: clientBranch,
+            status: res.status,
+            statusText: res.statusText,
+            // Headers captured post-synthesis / post-cookie-strip but pre-etag.
+            headers: Object.fromEntries(res.headers.entries()),
+          });
+        }
       }
 
       // Read the body once as raw bytes (from the cache branch when streaming). A
@@ -479,11 +480,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     }
 
     // Streaming mode: race the cached resolution against the streaming handshake. On a
-    // MISS `serialize` tees the body and resolves the deferred (with the client branch)
-    // *before* it buffers the storage branch, so the deferred wins and we answer with a
-    // live stream while the store completes in the background. On a HIT `serialize` never
-    // runs, so `_cachedHandler` (the buffered entry) wins and we serve it normally. A
-    // bypassed method resolves `_cachedHandler` to the live `Response`, which also wins.
+    // foreground MISS `serialize` tees the body and resolves the deferred (with the client
+    // branch) *before* it buffers the storage branch, so the deferred wins and we answer
+    // with a live stream while the store completes in the background. On a HIT `serialize`
+    // never runs, and on an SWR stale hit its background refresh doesn't tee (it's flagged
+    // `background`), so `_cachedHandler` (the buffered/stale entry) wins and we serve it
+    // normally. A bypassed method resolves `_cachedHandler` to the live `Response`, which
+    // also wins.
     if (opts.stream) {
       const deferred = _createDeferred();
       _streamDeferreds.set(event, deferred);
@@ -496,11 +499,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
       if (outcome.streamed) {
         const s = outcome.streamed;
-        // Let the background write finish; `waitUntil` keeps it alive on serverless, and
-        // the `catch` (with or without `waitUntil`) prevents an unhandled rejection if the
-        // stream/store errors after the client response was already handed off.
-        event.req.waitUntil?.(cachedP.catch(() => {}));
-        cachedP.catch(() => {});
+        // Let the background buffer-and-store finish; `waitUntil` keeps it alive on
+        // serverless. The shared `catch` prevents an unhandled rejection if the stream or
+        // store errors after the client response was already handed off — and must be
+        // attached unconditionally, since `waitUntil?.(cachedP.catch(...))` would skip
+        // evaluating the argument (and thus the catch) whenever `waitUntil` is absent.
+        const bg = cachedP.catch(() => {});
+        event.req.waitUntil?.(bg);
         const headers = { ...s.headers };
         if (_statusHeader) {
           headers[_statusHeader] = "MISS";
@@ -512,13 +517,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         });
       }
 
-      // Served from cache (or bypassed). Mark the deferred settled so a later background
-      // SWR refresh doesn't tee a stream nobody reads; cancel one already in flight.
-      deferred.settled = true;
-      deferred.promise.then(
-        (s) => s.body.cancel().catch(() => {}),
-        () => {},
-      );
+      // Served from cache, a stale SWR copy, or bypassed. `serialize` only tees for a
+      // foreground miss (never a background refresh — see `!ctx.background` there), and
+      // such a resolution always settles the deferred before `cachedP` — so reaching this
+      // branch means the deferred never fired and needs no cleanup.
       const cached = outcome.cached!;
       if (cached instanceof Response) {
         return cached;

@@ -93,7 +93,9 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * the serialized value — it is safe to consume a one-shot source such as a stream here.
    *
    * The second argument carries the `args` the cached function was called with (same
-   * shape as `validate`), so serialization can depend on the current call.
+   * shape as `validate`), plus `background`: `true` when this resolution is a
+   * stale-while-revalidate refresh the caller was **not** blocked on (it was already
+   * served the stale value), `false`/absent for a foreground miss the caller is waiting on.
    *
    * Note: `validate` always inspects the serialized (stored) shape — on write it runs
    * right after this hook, and on read it sees the entry as persisted.
@@ -105,7 +107,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * transform: (entry) => ({ ...entry.value, body: stringToStream(entry.value.body) }),
    * ```
    */
-  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => any;
+  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT; background?: boolean }) => any;
   /**
    * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
    * the entry as invalid and re-resolve. Asynchronous validation is supported for cases

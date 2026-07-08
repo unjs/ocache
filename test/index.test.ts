@@ -3157,6 +3157,42 @@ describe("defineCachedHandler streaming", () => {
     const r3 = (await handler(makeEvent(path, { headers: { "if-none-match": etag } }))) as Response;
     expect(r3.status).toBe(304);
   });
+
+  it("serves the stale copy on an SWR stale hit instead of a foreground stream", async () => {
+    const path = uniquePath();
+    let calls = 0;
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return new Response(streamFrom(["v" + calls]));
+      },
+      { maxAge: 1, swr: true, staleMaxAge: 100, stream: true },
+    );
+
+    // Prime the cache (streamed cold MISS).
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(dec.decode(await readAll(r1))).toBe("v1");
+    await settle();
+
+    // Let the entry go stale (maxAge is whole-second granular).
+    await new Promise((r) => setTimeout(r, 1100));
+
+    // A stale hit must serve the buffered stale copy instantly (STALE / v1) and refresh in
+    // the background — the SWR refresh's `serialize` must NOT hijack the response into a
+    // foreground streamed MISS of the fresh value (a timing-dependent regression before
+    // the `background` gate: the refresh could tee and win the wrapper's race).
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(r2.headers.get("x-cache")).toBe("STALE");
+    expect(dec.decode(await readAll(r2))).toBe("v1");
+
+    // The background refresh lands the fresh value for the next request.
+    await settle();
+    const r3 = (await handler(makeEvent(path))) as Response;
+    expect(r3.headers.get("x-cache")).toBe("HIT");
+    expect(await r3.text()).toBe("v2");
+    expect(calls).toBe(2);
+  });
 });
 
 describe("resolveCacheKeys", () => {
