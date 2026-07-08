@@ -3113,6 +3113,32 @@ describe("defineCachedHandler streaming", () => {
     expect(calls).toBe(1);
   });
 
+  it("forwards waitUntil across request narrowing to keep the background write alive", async () => {
+    const path = uniquePath();
+    const pending: Promise<unknown>[] = [];
+    const req = new Request(`http://localhost${path}`);
+    // A srvx/Cloudflare-style ServerRequest hook that collects background work.
+    (req as unknown as { waitUntil: (p: Promise<unknown>) => void }).waitUntil = (p) => {
+      pending.push(p);
+    };
+    const handler = defineCachedHandler(() => new Response(streamFrom(["persisted"])), {
+      maxAge: 10,
+      stream: true,
+    });
+
+    const r1 = (await handler({ req })) as Response;
+    expect(dec.decode(await readAll(r1))).toBe("persisted");
+    await settle();
+    // The background buffer-and-store was handed to waitUntil (dropped before this fix,
+    // since narrowing rebuilds event.req) — so serverless can keep the instance alive.
+    expect(pending.length).toBeGreaterThan(0);
+    await Promise.all(pending);
+
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(await r2.text()).toBe("persisted");
+  });
+
   it("still returns a 304 for a conditional request against a cached streamed entry", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response(streamFrom(["body"])), {

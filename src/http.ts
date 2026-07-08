@@ -404,6 +404,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         if ((originalReq as any).runtime) {
           (event.req as any).runtime = (originalReq as any).runtime;
         }
+        // Carry `waitUntil` across the narrowing rebuild — without this the background
+        // cache write (and, in `stream` mode, the entire buffer-and-store) would lose the
+        // runtime hook that keeps it alive on serverless, so the entry might never persist.
+        // Bound to the original request in case the runtime's implementation relies on it.
+        if (typeof (originalReq as any).waitUntil === "function") {
+          (event.req as any).waitUntil = (originalReq as any).waitUntil.bind(originalReq);
+        }
         if (allowedQueryNames && event.url) {
           (event as any).url = new URL(_reqUrl);
         }

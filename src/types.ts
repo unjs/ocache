@@ -308,10 +308,16 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * Trade-offs of the streamed MISS response (the very first, uncached response):
    * - it carries **no body-hash `etag`** (an etag can't be computed without buffering the
    *   body first) — subsequent cache HITs, served from the stored entry, do carry one;
-   * - its cache-status header always reports `MISS`;
+   * - it is sent chunked, with no `Content-Length`, and its cache-status header reports `MISS`;
    * - concurrent MISSes are **not** coalesced onto a single stream (a `ReadableStream` has
-   *   a single consumer), so each cold caller resolves and streams independently until the
-   *   background write lands, after which requests hit the buffered entry.
+   *   a single consumer), so the coalesced peers are served the buffered copy once the
+   *   background write lands;
+   * - a mid-stream failure can't be un-sent: the `200` and headers are already flushed, so
+   *   an upstream error partway through reaches the client as a truncated `200` (the
+   *   buffered path can still surface it as a `5xx`), and nothing is cached;
+   * - the cache is written entirely after the response is flushed, so on serverless the
+   *   runtime's `waitUntil` must reach `event.req` (forwarded through request narrowing) or
+   *   the instance may suspend before the entry is persisted.
    *
    * Only affects cacheable (`GET`/`HEAD`) responses that actually have a body; bypassed
    * methods (e.g. `POST`) already stream their live response through untouched.

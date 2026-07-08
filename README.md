@@ -201,11 +201,20 @@ const handler = defineCachedHandler(() => new Response(readableStreamFromUpstrea
 });
 ```
 
-Useful for proxying or generating large binary/JSON payloads where you don't want to hold the whole body in memory before responding. Things to know about the streamed MISS response (only the very first, uncached one):
+Useful for proxying or generating large binary/JSON payloads where you don't want to hold the whole body in memory before responding. It is opt-in rather than the default because the streamed MISS trades away several guarantees the buffered path gives you — decide per route.
+
+Response shape of the streamed MISS (only the very first, uncached response):
 
 - it carries **no body-hash `etag`** — an etag can't be computed without buffering the body first, so it is added only to the stored entry and therefore to subsequent cache HITs (`cache-control`, `last-modified`, `Vary`, and `Set-Cookie` stripping all still apply to the streamed response);
+- it is sent **chunked, with no `Content-Length`**, even for a fixed-size body;
 - its cache-status header always reports `MISS`;
 - concurrent cold MISSes are **not** streamed in parallel — a `ReadableStream` has a single consumer, so the coalesced peers are served the buffered copy once the background write lands.
+
+Operational tradeoffs to weigh:
+
+- **A mid-stream failure can't be un-sent.** The `200` status and headers are flushed before the body starts, so if the upstream stream errors partway through, the client receives a truncated `200` and nothing is cached. The buffered path reads the whole body first, so the same failure can still surface as a `5xx`. Prefer buffering for bodies whose production can fail.
+- **The cache is written entirely after the response is flushed.** On serverless, make sure the runtime's `waitUntil` reaches `event.req` (srvx/Cloudflare `ServerRequest`) — ocache forwards it through request narrowing, but if it is absent the instance may suspend before the background buffer-and-store completes and the entry is never persisted. On a long-running server this is a non-issue.
+- **Transient memory under a slow client.** The cache branch is drained at full speed regardless of how fast the client reads, so a slow client makes the yet-unread bytes queue in memory on top of what is being buffered for storage.
 
 Only cacheable (`GET`/`HEAD`) responses with a body are affected; bypassed methods (e.g. `POST`) already stream their live response through untouched.
 
