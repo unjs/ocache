@@ -2025,6 +2025,86 @@ describe("defineCachedHandler", () => {
     expect(seen).toEqual(["theme=dark"]);
   });
 
+  it("does not narrow requests that bypass caching (non-GET/HEAD)", async () => {
+    const seen: Array<{ cookie: string | null; varied: string | null; url: string; body: string }> =
+      [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      async (event) => {
+        seen.push({
+          cookie: event.req.headers.get("cookie"),
+          varied: event.req.headers.get("x-var"),
+          url: event.req.url,
+          body: await event.req.text(),
+        });
+        return new Response("ok");
+      },
+      { maxAge: 10, allowCookies: ["theme"], allowQuery: ["q"], varies: ["x-var"] },
+    );
+
+    // A POST bypasses the cache entirely (never stored or key-derived), so the
+    // request must reach the handler untouched: cookies not narrowed to the
+    // allowlist, varied headers not filtered, query not narrowed, body preserved.
+    await handler(
+      makeEvent(`${path}?q=1&extra=2`, {
+        method: "POST",
+        headers: { cookie: "sid=secret; theme=dark", "x-var": "v" },
+        body: "payload",
+        duplex: "half",
+      } as RequestInit & { headers: Record<string, string> }),
+    );
+
+    expect(seen).toEqual([
+      {
+        cookie: "sid=secret; theme=dark",
+        varied: "v",
+        url: `http://localhost${path}?q=1&extra=2`,
+        body: "payload",
+      },
+    ]);
+  });
+
+  it("rejects stored entries carrying a non-allowlisted Set-Cookie (pre-upgrade entries)", async () => {
+    const written: string[] = [];
+    const memory = createMemoryStorage();
+    setStorage({
+      get: (key) => memory.get(key),
+      set: (key, value, opts) => {
+        written.push(key);
+        return memory.set(key, value, opts);
+      },
+    });
+
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path));
+    expect(callCount).toBe(1);
+    expect(written.length).toBeGreaterThan(0);
+
+    // Simulate an entry written by a pre-`allowCookies` version: identical shape and
+    // integrity, but with a Set-Cookie collapsed into its serialized headers. The
+    // resolver-side `_blockSetCookie` flag never existed on such entries, so only the
+    // read-side validate check stands between it and a replay.
+    const entry = (await memory.get(written[0]!)) as any;
+    entry.value.headers["set-cookie"] = "sid=old-secret";
+    await memory.set(written[0]!, entry);
+
+    const res = (await handler(makeEvent(path))) as Response;
+
+    // The poisoned entry is rejected and re-resolved instead of replayed.
+    expect(callCount).toBe(2);
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(await res.text()).toBe("call-2");
+  });
+
   it("invalidates cache for error responses (4xx/5xx)", async () => {
     let callCount = 0;
     const path = uniquePath();

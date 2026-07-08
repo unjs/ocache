@@ -200,6 +200,9 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * the `Cookie` header the handler sees, and a `Set-Cookie` response is cacheable
    * only when every cookie it sets is in this list. Case-sensitive.
    *
+   * Only cacheable requests (`GET`/`HEAD`) are affected: methods that bypass
+   * caching (e.g. `POST`) reach the handler with their request untouched.
+   *
    * Supersedes `varies: ["cookie"]` (which hashes the entire raw `Cookie` header).
    */
   allowCookies?: string[] | readonly string[];

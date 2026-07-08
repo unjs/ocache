@@ -104,7 +104,9 @@ const handler = defineCachedHandler(myHandler, {
 
 #### Cookies
 
-**By default no cookies participate in caching.** This is a secure default: the `Cookie` request header is stripped before the handler runs (so it can never produce cookie-dependent output that gets cached and served to other users), cookies never vary the cache key, and any response carrying a `Set-Cookie` header is refused storage — it is still returned to the caller that triggered it, but never cached and replayed to other requests (which would leak a per-request cookie such as a session id).
+**By default no cookies participate in caching.** This is a secure default: the `Cookie` request header is stripped before the handler runs (so it can never produce cookie-dependent output that gets cached and served to other users), cookies never vary the cache key, and any response carrying a `Set-Cookie` header is refused storage — it is still returned to the caller that triggered it, but never cached and replayed to other requests (which would leak a per-request cookie such as a session id). Stored entries carrying a disallowed `Set-Cookie` (e.g. cached before upgrading to this default) are likewise rejected on read instead of replayed.
+
+This only applies to cacheable requests (`GET`/`HEAD`). Methods that bypass caching entirely (e.g. `POST`) reach the handler with their request untouched — cookies, headers, query, and body included.
 
 Set `allowCookies` to an allowlist of cookie names to opt specific cookies back in. Only the listed cookies survive in the `Cookie` header the handler sees, and their name/value pairs vary the cache key — sorted and order-independent, like `allowQuery`, so only the relevant cookie subset is hashed rather than the entire raw `Cookie` header. A `Set-Cookie` response becomes cacheable only when _every_ cookie it sets is in the list. Cookie names are case-sensitive. `allowCookies` supersedes `varies: ["cookie"]`.
 

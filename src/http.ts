@@ -59,6 +59,12 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     ? [...new Set(opts.allowQuery.filter(Boolean))]
     : undefined;
 
+  // Non-GET/HEAD requests skip the cache entirely. Shared between the
+  // `shouldBypassCache` option and the resolver so the request-narrowing
+  // step below can't disagree with the bypass decision.
+  const _shouldBypassCache = (event: HTTPEvent) =>
+    event.req.method !== "GET" && event.req.method !== "HEAD";
+
   // Memoize the filtered query per request so getKey and the handler-facing URL
   // rewrite don't recompute it. Scoped to this handler instance so a shared
   // event can't pick up another handler's allowlist.
@@ -108,9 +114,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
           };
         }
       : undefined,
-    shouldBypassCache: (event) => {
-      return event.req.method !== "GET" && event.req.method !== "HEAD";
-    },
+    shouldBypassCache: _shouldBypassCache,
     getKey: async (event: HTTPEvent) => {
       // Custom user-defined key
       const customKey = await opts.getKey?.(event as E);
@@ -157,9 +161,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // cookie outside the allowlist — otherwise a per-request `Set-Cookie` (e.g. a
       // session id) leaks to every cache-hit request. The decision is made in the
       // resolver via `getSetCookie()` (lossless, unlike the collapsed serialized
-      // header) and flagged non-enumerably; it is absent on storage-read entries,
-      // which are never blocked (a stored entry never carried a disallowed cookie).
+      // header) and flagged non-enumerably; the flag is absent on storage-read entries.
       if ((entry.value as { _blockSetCookie?: boolean })._blockSetCookie) {
+        return false;
+      }
+      // Defense-in-depth for entries this version didn't write (e.g. cached before
+      // upgrading to the allowCookies default, or by another writer sharing the
+      // storage): reject a stored Set-Cookie outside the allowlist instead of
+      // replaying it until expiry. Serialized headers collapse multiple Set-Cookie
+      // values to the last, so this check is partial — the lossless guard is the
+      // resolver-side flag above.
+      const _setCookie = entry.value.headers?.["set-cookie"];
+      if (_setCookie && !allowedCookieNames?.includes(_cookieName(_setCookie))) {
         return false;
       }
       if (entry.value.status >= 400) {
@@ -200,43 +213,49 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   };
 
   const _cachedHandler = cachedFunction<ResponseCacheEntry>(async (event: HTTPEvent) => {
-    // Filter non variable headers, and narrow the Cookie header to the allowlist so
-    // the handler can't depend on cookies outside the cache key (mirrors allowQuery).
-    const filteredHeaders = [...event.req.headers.entries()]
-      .filter(([key]) => !variableHeaderNames.includes(key.toLowerCase()))
-      .flatMap(([key, value]) => {
-        if (key.toLowerCase() !== "cookie") {
-          return [[key, value] as [string, string]];
+    // Narrow the request for cache-key consistency — cacheable calls only. Bypassed
+    // methods (POST etc.) are never stored or key-derived, so their request must reach
+    // the handler untouched (cookies, varied headers, full query, body — the rewritten
+    // Request below carries no body).
+    if (!_shouldBypassCache(event)) {
+      // Filter non variable headers, and narrow the Cookie header to the allowlist so
+      // the handler can't depend on cookies outside the cache key (mirrors allowQuery).
+      const filteredHeaders = [...event.req.headers.entries()]
+        .filter(([key]) => !variableHeaderNames.includes(key.toLowerCase()))
+        .flatMap(([key, value]) => {
+          if (key.toLowerCase() !== "cookie") {
+            return [[key, value] as [string, string]];
+          }
+          const cookie = allowedCookieNames ? _filterCookie(value, allowedCookieNames) : "";
+          return cookie ? [["cookie", cookie] as [string, string]] : [];
+        });
+
+      // Narrow the query the handler sees to the allowlist, so it can't depend on
+      // params outside the cache key (mirrors the header filtering above).
+      let _reqUrl = event.req.url;
+      if (allowedQueryNames) {
+        const _url = event.url ?? new URL(event.req.url);
+        const _filteredUrl = new URL(_url);
+        _filteredUrl.search = _filteredSearch(event, _url);
+        _reqUrl = _filteredUrl.href;
+      }
+
+      try {
+        const originalReq = event.req;
+        (event as any).req = new Request(_reqUrl, {
+          method: event.req.method,
+          headers: filteredHeaders,
+        });
+        // Inherit runtime context
+        if ((originalReq as any).runtime) {
+          (event.req as any).runtime = (originalReq as any).runtime;
         }
-        const cookie = allowedCookieNames ? _filterCookie(value, allowedCookieNames) : "";
-        return cookie ? [["cookie", cookie] as [string, string]] : [];
-      });
-
-    // Narrow the query the handler sees to the allowlist, so it can't depend on
-    // params outside the cache key (mirrors the header filtering above).
-    let _reqUrl = event.req.url;
-    if (allowedQueryNames) {
-      const _url = event.url ?? new URL(event.req.url);
-      const _filteredUrl = new URL(_url);
-      _filteredUrl.search = _filteredSearch(event, _url);
-      _reqUrl = _filteredUrl.href;
-    }
-
-    try {
-      const originalReq = event.req;
-      (event as any).req = new Request(_reqUrl, {
-        method: event.req.method,
-        headers: filteredHeaders,
-      });
-      // Inherit runtime context
-      if ((originalReq as any).runtime) {
-        (event.req as any).runtime = (originalReq as any).runtime;
+        if (allowedQueryNames && event.url) {
+          (event as any).url = new URL(_reqUrl);
+        }
+      } catch (error) {
+        console.error("[cache] Failed to filter request:", error);
       }
-      if (allowedQueryNames && event.url) {
-        (event as any).url = new URL(_reqUrl);
-      }
-    } catch (error) {
-      console.error("[cache] Failed to filter request:", error);
     }
 
     // Call handler
