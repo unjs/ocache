@@ -181,6 +181,26 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   allowQuery?: string[] | readonly string[];
 
   /**
+   * Allowlist of cookie names that participate in caching.
+   *
+   * **By default no cookies are allowed** (secure default):
+   * - the `Cookie` request header is stripped before the handler runs and never
+   *   varies the cache key, so a handler cannot produce cookie-dependent output
+   *   that leaks across users, and
+   * - any response carrying a `Set-Cookie` header is refused storage — it is still
+   *   returned to the caller that triggered it, but never cached and replayed to
+   *   other requests (which would leak a per-request cookie such as a session id).
+   *
+   * When set, only the listed cookies are kept: their name/value pairs vary the
+   * cache key (sorted, order-independent — like {@link allowQuery}) and survive in
+   * the `Cookie` header the handler sees, and a `Set-Cookie` response is cacheable
+   * only when every cookie it sets is in this list. Case-sensitive.
+   *
+   * Supersedes `varies: ["cookie"]` (which hashes the entire raw `Cookie` header).
+   */
+  allowCookies?: string[] | readonly string[];
+
+  /**
    * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
    *
    * - `true` (default) — sets the `X-Cache` header.

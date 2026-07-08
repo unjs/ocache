@@ -46,6 +46,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     ? [...new Set(opts.allowQuery.filter(Boolean))]
     : undefined;
 
+  // Allowlist of cookie names that may participate in caching. `undefined` means
+  // "no cookies allowed": the Cookie request header is stripped before the handler
+  // runs, cookies never vary the key, and Set-Cookie responses are refused storage.
+  const allowedCookieNames = opts.allowCookies
+    ? [...new Set(opts.allowCookies.filter(Boolean))]
+    : undefined;
+
   // Memoize the filtered query per request so getKey and the handler-facing URL
   // rewrite don't recompute it. Scoped to this handler instance so a shared
   // event can't pick up another handler's allowlist.
@@ -119,7 +126,12 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       const _headers = variableHeaderNames
         .map((header) => [header, event.req.headers.get(header)])
         .map(([name, value]) => `${escapeKey(name as string)}.${hash(value)}`);
-      return [_hashedPath, ..._headers].join(":");
+      // Vary the key by the allowlisted cookie subset only (sorted, order-independent),
+      // never the full raw Cookie header. Omitted entirely when no cookies are allowed.
+      const _cookies = allowedCookieNames
+        ? [`cookie.${hash(_filterCookie(event.req.headers.get("cookie"), allowedCookieNames))}`]
+        : [];
+      return [_hashedPath, ..._headers, ..._cookies].join(":");
     },
     validate: (entry) => {
       if (!entry.value) {
@@ -127,6 +139,15 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
       if (_forbidsSharedCaching(entry.value.headers?.["cache-control"])) {
+        return false;
+      }
+      // Refuse to store (and later replay to other requests) a response that sets a
+      // cookie outside the allowlist — otherwise a per-request `Set-Cookie` (e.g. a
+      // session id) leaks to every cache-hit request. The decision is made in the
+      // resolver via `getSetCookie()` (lossless, unlike the collapsed serialized
+      // header) and flagged non-enumerably; it is absent on storage-read entries,
+      // which are never blocked (a stored entry never carried a disallowed cookie).
+      if ((entry.value as { _blockSetCookie?: boolean })._blockSetCookie) {
         return false;
       }
       if (entry.value.status >= 400) {
@@ -148,10 +169,17 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   };
 
   const _cachedHandler = cachedFunction<ResponseCacheEntry>(async (event: HTTPEvent) => {
-    // Filter non variable headers
-    const filteredHeaders = [...event.req.headers.entries()].filter(
-      ([key]) => !variableHeaderNames.includes(key.toLowerCase()),
-    );
+    // Filter non variable headers, and narrow the Cookie header to the allowlist so
+    // the handler can't depend on cookies outside the cache key (mirrors allowQuery).
+    const filteredHeaders = [...event.req.headers.entries()]
+      .filter(([key]) => !variableHeaderNames.includes(key.toLowerCase()))
+      .flatMap(([key, value]) => {
+        if (key.toLowerCase() !== "cookie") {
+          return [[key, value] as [string, string]];
+        }
+        const cookie = allowedCookieNames ? _filterCookie(value, allowedCookieNames) : "";
+        return cookie ? [["cookie", cookie] as [string, string]] : [];
+      });
 
     // Narrow the query the handler sees to the allowlist, so it can't depend on
     // params outside the cache key (mirrors the header filtering above).
@@ -226,6 +254,14 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       body,
     };
 
+    // Flag the entry non-storable when it sets a cookie outside the allowlist, read
+    // back in `validate`. Uses `getSetCookie()` so every Set-Cookie is inspected —
+    // `Object.fromEntries(headers.entries())` above collapses them to just the last.
+    const setCookies = res.headers.getSetCookie?.() ?? [];
+    if (setCookies.some((c) => !allowedCookieNames?.includes(_cookieName(c)))) {
+      Object.defineProperty(cacheEntry, "_blockSetCookie", { value: true, enumerable: false });
+    }
+
     return cacheEntry;
   }, _opts);
 
@@ -283,6 +319,31 @@ function _filterSearch(url: URL, names: string[]): string {
   }
   const query = filtered.toString();
   return query ? `?${query}` : "";
+}
+
+/** Rebuilds the `Cookie` header from only the allowlisted cookie names, sorted (order-independent). */
+function _filterCookie(header: string | null | undefined, names: string[]): string {
+  if (!header) {
+    return "";
+  }
+  const kept: Array<[string, string]> = [];
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    const name = (eq < 0 ? part : part.slice(0, eq)).trim();
+    if (name && names.includes(name)) {
+      kept.push([name, eq < 0 ? "" : part.slice(eq + 1).trim()]);
+    }
+  }
+  kept.sort((a, b) =>
+    a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : a[0] < b[0] ? -1 : 1,
+  );
+  return kept.map(([n, v]) => `${n}=${v}`).join("; ");
+}
+
+/** Extracts the cookie name from a `Set-Cookie` header value (the token before the first `=`). */
+function _cookieName(setCookie: string): string {
+  const eq = setCookie.indexOf("=");
+  return (eq < 0 ? setCookie.split(";")[0]! : setCookie.slice(0, eq)).trim();
 }
 
 /**
