@@ -1619,6 +1619,38 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("vary")).toBe("*");
   });
 
+  it("leaves a Vary header untouched when `*` appears among other tokens", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { vary: "User-Agent, *" } }),
+      { maxAge: 10, varies: ["accept-language"] },
+    );
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("vary")).toBe("User-Agent, *");
+  });
+
+  it("echoes the Vary header on a 304 response", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      varies: ["accept-language"],
+    });
+
+    const r1 = (await handler(
+      makeEvent(path, { headers: { "accept-language": "en" } }),
+    )) as Response;
+    expect(r1.headers.get("vary")).toBe("accept-language");
+    const etag = r1.headers.get("etag")!;
+
+    const r2 = (await handler(
+      makeEvent(path, { headers: { "accept-language": "en", "if-none-match": etag } }),
+    )) as Response;
+
+    expect(r2.status).toBe(304);
+    expect(r2.headers.get("vary")).toBe("accept-language");
+  });
+
   it("only varies the cache key by allowlisted query params (allowQuery)", async () => {
     let callCount = 0;
     const path = uniquePath();

@@ -258,12 +258,23 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         maxAge: opts.maxAge,
       })
     ) {
+      // A 304 must echo the `Vary` (and cache-status) that would have accompanied
+      // the full response, so a shared cache doesn't lose the variant dimension
+      // (RFC 7232 §4.1).
+      const notModifiedHeaders: Record<string, string> = {};
       const statusValue = _statusHeader
         ? (response.headers[_statusHeader] as string | undefined)
         : undefined;
+      if (statusValue !== undefined) {
+        notModifiedHeaders[_statusHeader!] = statusValue;
+      }
+      const varyValue = response.headers.vary as string | undefined;
+      if (varyValue !== undefined) {
+        notModifiedHeaders.vary = varyValue;
+      }
       return _createResponse(null, {
         status: 304,
-        headers: statusValue === undefined ? undefined : { [_statusHeader!]: statusValue },
+        headers: Object.keys(notModifiedHeaders).length > 0 ? notModifiedHeaders : undefined,
       });
     }
 
@@ -301,7 +312,8 @@ function _filterSearch(url: URL, names: string[]): string {
  */
 function _appendVary(headers: Headers, names: string[]): void {
   const existing = headers.get("vary");
-  if (existing?.trim() === "*") {
+  // A `*` token means the response varies on everything — nothing to add.
+  if (existing && existing.split(",").some((part) => part.trim() === "*")) {
     return;
   }
   const seen = new Set<string>();
