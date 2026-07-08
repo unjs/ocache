@@ -97,7 +97,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   maxAge?: number;
   /** Enable stale-while-revalidate behavior. When `true`, returns stale cache while refreshing in the background. Defaults to `true`. */
   swr?: boolean;
-  /** Maximum number of seconds a stale entry can be served while revalidating. */
+  /** Maximum number of seconds a stale entry can be served while revalidating. `0` means stale is never served — once expired, revalidation blocks the request. */
   staleMaxAge?: number;
   /**
    * Derive the per-entry cache lifetime from the resolved value. Runs after the resolver and before
