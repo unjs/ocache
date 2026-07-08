@@ -1873,6 +1873,34 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
   });
 
+  it.each([
+    // Both strip to `user1`, so only the appended key hash keeps them apart.
+    ["user:1", "user1:"],
+    // `foo:bar` strips to `foobar` and gets hashed; `foo_bar` is already clean and
+    // stays as-is — the `.` in the hashed form keeps their key spaces disjoint.
+    ["foo:bar", "foo_bar"],
+  ])("does not collide distinct custom keys (%s vs %s)", async (keyA, keyB) => {
+    let id = keyA;
+    let callCount = 0;
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(id);
+      },
+      { maxAge: 10, getKey: () => id },
+    );
+
+    id = keyA;
+    const a = (await handler(makeEvent("/x"))) as Response;
+    id = keyB;
+    const b = (await handler(makeEvent("/x"))) as Response;
+
+    // If the keys collide, `b` wrongly hits `a`'s entry and returns keyA.
+    expect(await a.text()).toBe(keyA);
+    expect(await b.text()).toBe(keyB);
+    expect(callCount).toBe(2);
+  });
+
   it("filters variable headers from handler request", async () => {
     let receivedHeaders: string | null = null;
     const path = uniquePath();
