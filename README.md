@@ -102,6 +102,24 @@ const handler = defineCachedHandler(myHandler, {
 });
 ```
 
+#### Cookies
+
+**By default no cookies participate in caching.** This is a secure default: the `Cookie` request header is stripped before the handler runs (so it can never produce cookie-dependent output that gets cached and served to other users), cookies never vary the cache key, and any response carrying a `Set-Cookie` header is refused storage — it is still returned to the caller that triggered it, but never cached and replayed to other requests (which would leak a per-request cookie such as a session id).
+
+Set `allowCookies` to an allowlist of cookie names to opt specific cookies back in. Only the listed cookies survive in the `Cookie` header the handler sees, and their name/value pairs vary the cache key — sorted and order-independent, like `allowQuery`, so only the relevant cookie subset is hashed rather than the entire raw `Cookie` header. A `Set-Cookie` response becomes cacheable only when _every_ cookie it sets is in the list. Cookie names are case-sensitive. `allowCookies` supersedes `varies: ["cookie"]`.
+
+```ts
+const handler = defineCachedHandler(myHandler, {
+  maxAge: 300,
+  allowCookies: ["theme"], // theme=dark and theme=light cache separately; sid is ignored
+});
+```
+
+Two caveats:
+
+- **Custom `getKey`.** As with `allowQuery`, a custom `getKey` controls the cache key entirely, so allowlisted cookies no longer vary it automatically — if your handler's output depends on a cookie, incorporate it into `getKey` yourself (the handler-visible `Cookie` header is still filtered to the allowlist regardless).
+- **Request coalescing.** Concurrent requests that resolve to the same cache key are de-duplicated into a single handler call and share its response. A handler that _mints_ a per-request cookie (e.g. initializing an anonymous session with a fresh `Set-Cookie`) is not isolated by the storage guard in that in-flight window — the guard prevents the response from being stored and replayed later, but coalesced callers still receive the same minted value. Give such handlers a user-specific `getKey`/`varies` (or don't cache them).
+
 #### Headers-only Mode
 
 Use `headersOnly` to handle conditional requests without caching the full response:

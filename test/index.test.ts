@@ -1834,6 +1834,197 @@ describe("defineCachedHandler", () => {
     expect(seen).toEqual(["?color=red"]);
   });
 
+  it("by default strips the Cookie header before the handler and never varies the key", async () => {
+    const seen: (string | null)[] = [];
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        seen.push(event.req.headers.get("cookie"));
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(
+      makeEvent(path, { headers: { cookie: "sid=abc; theme=dark" } }),
+    )) as Response;
+    const r2 = (await handler(
+      makeEvent(path, { headers: { cookie: "sid=xyz; theme=light" } }),
+    )) as Response;
+
+    // Different cookies share one entry (cookies don't vary the key) ...
+    expect(callCount).toBe(1);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    // ... and the handler never saw the Cookie header.
+    expect(seen).toEqual([null]);
+  });
+
+  it("varies the key by the allowlisted cookie subset only (allowCookies)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, allowCookies: ["theme"] },
+    );
+
+    // Same `theme`, different unrelated `sid` -> one entry (sid ignored).
+    const r1 = (await handler(
+      makeEvent(path, { headers: { cookie: "theme=dark; sid=1" } }),
+    )) as Response;
+    const r2 = (await handler(
+      makeEvent(path, { headers: { cookie: "sid=2; theme=dark" } }),
+    )) as Response;
+    // Different `theme` -> a separate entry.
+    const r3 = (await handler(makeEvent(path, { headers: { cookie: "theme=light" } }))) as Response;
+
+    expect(callCount).toBe(2);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    expect(await r3.text()).toBe("call-2");
+  });
+
+  it("allowCookies keeps only allowlisted cookies in the Cookie header the handler sees", async () => {
+    const seen: (string | null)[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        seen.push(event.req.headers.get("cookie"));
+        return new Response("ok");
+      },
+      { maxAge: 10, allowCookies: ["theme"] },
+    );
+
+    await handler(makeEvent(path, { headers: { cookie: "sid=secret; theme=dark" } }));
+
+    expect(seen).toEqual(["theme=dark"]);
+  });
+
+  it("by default refuses to cache a response that sets a cookie (still returned to the caller)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`, {
+          headers: { "set-cookie": `sid=${callCount}; HttpOnly` },
+        });
+      },
+      { maxAge: 10, swr: false },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // The Set-Cookie response is never stored, so each request re-resolves ...
+    expect(callCount).toBe(2);
+    // ... and the first caller still receives its own Set-Cookie.
+    expect(r1.headers.get("set-cookie")).toBe("sid=1; HttpOnly");
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-2");
+  });
+
+  it("caches a Set-Cookie response only when every cookie it sets is allowlisted", async () => {
+    let allowedCalls = 0;
+    const allowedPath = uniquePath();
+    const allowedHandler = defineCachedHandler(
+      () => {
+        allowedCalls++;
+        return new Response(`call-${allowedCalls}`, {
+          headers: { "set-cookie": "theme=dark; Path=/" },
+        });
+      },
+      { maxAge: 10, allowCookies: ["theme"] },
+    );
+
+    await allowedHandler(makeEvent(allowedPath));
+    await allowedHandler(makeEvent(allowedPath));
+    // Allowlisted cookie -> cached, second request is a hit.
+    expect(allowedCalls).toBe(1);
+
+    let mixedCalls = 0;
+    const mixedPath = uniquePath();
+    const mixedHandler = defineCachedHandler(
+      () => {
+        mixedCalls++;
+        const headers = new Headers();
+        headers.append("set-cookie", "theme=dark");
+        headers.append("set-cookie", `sid=${mixedCalls}`);
+        return new Response(`call-${mixedCalls}`, { headers });
+      },
+      { maxAge: 10, swr: false, allowCookies: ["theme"] },
+    );
+
+    await mixedHandler(makeEvent(mixedPath));
+    await mixedHandler(makeEvent(mixedPath));
+    // A non-allowlisted `sid` alongside the allowed `theme` disqualifies caching.
+    expect(mixedCalls).toBe(2);
+  });
+
+  it("blocks Set-Cookie conservatively on runtimes without getSetCookie", async () => {
+    // Simulate an environment whose Headers lacks getSetCookie (older Node / polyfills):
+    // the guard must fall back to header presence and refuse storage, not fail open.
+    const original = Object.getOwnPropertyDescriptor(Headers.prototype, "getSetCookie");
+    // @ts-expect-error - deliberately removing the method for this test
+    delete Headers.prototype.getSetCookie;
+    try {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`call-${callCount}`, {
+            headers: { "set-cookie": `sid=${callCount}` },
+          });
+        },
+        { maxAge: 10, swr: false },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+      // Never cached despite getSetCookie being unavailable.
+      expect(callCount).toBe(2);
+    } finally {
+      if (original) {
+        Object.defineProperty(Headers.prototype, "getSetCookie", original);
+      }
+    }
+  });
+
+  it("allowCookies supersedes varies: ['cookie']", async () => {
+    let callCount = 0;
+    const seen: (string | null)[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        seen.push(event.req.headers.get("cookie"));
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, varies: ["cookie"], allowCookies: ["theme"] },
+    );
+
+    // Only `theme` should drive the key — differing `sid` (which `varies:["cookie"]`
+    // would otherwise fold in as the whole raw header) must not create a new entry.
+    const r1 = (await handler(
+      makeEvent(path, { headers: { cookie: "theme=dark; sid=1" } }),
+    )) as Response;
+    const r2 = (await handler(
+      makeEvent(path, { headers: { cookie: "theme=dark; sid=2" } }),
+    )) as Response;
+
+    expect(callCount).toBe(1);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    // The handler still sees the allowlisted cookie (not stripped by the vary filter).
+    expect(seen).toEqual(["theme=dark"]);
+  });
+
   it("invalidates cache for error responses (4xx/5xx)", async () => {
     let callCount = 0;
     const path = uniquePath();
