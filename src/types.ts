@@ -95,6 +95,9 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * The second argument carries the `args` the cached function was called with (same
    * shape as `validate`), so serialization can depend on the current call.
    *
+   * Note: `validate` always inspects the serialized (stored) shape — on write it runs
+   * right after this hook, and on read it sees the entry as persisted.
+   *
    * @example
    * ```ts
    * // Persist a ReadableStream body as a string, restore it on read.
