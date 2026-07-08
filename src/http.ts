@@ -153,7 +153,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // Only synthesize a cache-control header when the handler did not set one
       // explicitly — never clobber an explicit cache-control with our SWR/s-maxage
       // directives (mirrors the etag / last-modified "preserve if present" behavior above).
-      if (!res.headers.has("cache-control")) {
+      // `sendCacheControl: false` opts out of synthesis entirely (server-only caching):
+      // the entry is still stored/served with SWR/etag/last-modified, but no
+      // cache-control is advertised to clients/CDNs — without the `no-store`/`private`
+      // tricks that would also disqualify the entry from storage (issue #49, nitro#3997).
+      if (opts.sendCacheControl !== false && !res.headers.has("cache-control")) {
         const cacheControl = [];
         if (opts.swr) {
           if (opts.maxAge != null) {

@@ -160,6 +160,22 @@ const handler = defineCachedHandler(myHandler, {
 > [!NOTE]
 > This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
 
+#### Server-only caching (`sendCacheControl`)
+
+Sometimes you want to cache a response **in storage** (to save re-computing it) while telling clients and CDNs _not_ to cache it — for example a personalized page that is cheap to serve from your own cache but must always be revalidated by the browser. Reaching for `Cache-Control: no-store`/`private` doesn't work here: those also disqualify the response from storage caching.
+
+Set `sendCacheControl: false` to decouple the two. The response is still stored and served from cache (SWR, `etag`, and `last-modified` are unaffected), but no `Cache-Control` header is synthesized:
+
+```ts
+const handler = defineCachedHandler(myHandler, {
+  maxAge: 60,
+  swr: true,
+  sendCacheControl: false, // stored & served from cache, but no Cache-Control sent downstream
+});
+```
+
+This only governs ocache's own synthesis — a `Cache-Control` the handler sets explicitly is still preserved and sent.
+
 #### Custom cache eligibility (`shouldCache`)
 
 The built-in response validation already rejects `4xx`/`5xx` statuses, `Cache-Control: no-store`/`private`, empty bodies, and responses missing `etag`/`last-modified`. Use `shouldCache` to add your own rejection rule on top — for example to keep `3xx` redirects out of the cache:

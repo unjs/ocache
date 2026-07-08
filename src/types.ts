@@ -252,6 +252,21 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   allowCookies?: string[] | readonly string[];
 
   /**
+   * Whether to synthesize a `Cache-Control` response header. Defaults to `true`.
+   *
+   * Set to `false` for **server-only caching**: the response is still stored and
+   * served from cache (SWR, `etag`, and `last-modified` all still apply), but no
+   * `Cache-Control` header is emitted to clients/CDNs. This decouples internal
+   * storage caching from downstream cache advertisement — unlike setting
+   * `Cache-Control: no-store`/`private` on the response, which also disqualifies
+   * the entry from storage via the built-in `validate` checks.
+   *
+   * Only governs ocache's own synthesis: a `Cache-Control` the handler set
+   * explicitly is left untouched (as always) and still sent.
+   */
+  sendCacheControl?: boolean;
+
+  /**
    * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
    *
    * - `true` (default) — sets the `X-Cache` header.
