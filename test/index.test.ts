@@ -1781,6 +1781,65 @@ describe("defineCachedHandler", () => {
     expect(mixedCalls).toBe(2);
   });
 
+  it("blocks Set-Cookie conservatively on runtimes without getSetCookie", async () => {
+    // Simulate an environment whose Headers lacks getSetCookie (older Node / polyfills):
+    // the guard must fall back to header presence and refuse storage, not fail open.
+    const original = Object.getOwnPropertyDescriptor(Headers.prototype, "getSetCookie");
+    // @ts-expect-error - deliberately removing the method for this test
+    delete Headers.prototype.getSetCookie;
+    try {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`call-${callCount}`, {
+            headers: { "set-cookie": `sid=${callCount}` },
+          });
+        },
+        { maxAge: 10, swr: false },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+      // Never cached despite getSetCookie being unavailable.
+      expect(callCount).toBe(2);
+    } finally {
+      if (original) {
+        Object.defineProperty(Headers.prototype, "getSetCookie", original);
+      }
+    }
+  });
+
+  it("allowCookies supersedes varies: ['cookie']", async () => {
+    let callCount = 0;
+    const seen: (string | null)[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        seen.push(event.req.headers.get("cookie"));
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, varies: ["cookie"], allowCookies: ["theme"] },
+    );
+
+    // Only `theme` should drive the key — differing `sid` (which `varies:["cookie"]`
+    // would otherwise fold in as the whole raw header) must not create a new entry.
+    const r1 = (await handler(
+      makeEvent(path, { headers: { cookie: "theme=dark; sid=1" } }),
+    )) as Response;
+    const r2 = (await handler(
+      makeEvent(path, { headers: { cookie: "theme=dark; sid=2" } }),
+    )) as Response;
+
+    expect(callCount).toBe(1);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    // The handler still sees the allowlisted cookie (not stripped by the vary filter).
+    expect(seen).toEqual(["theme=dark"]);
+  });
+
   it("invalidates cache for error responses (4xx/5xx)", async () => {
     let callCount = 0;
     const path = uniquePath();

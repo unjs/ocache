@@ -37,20 +37,26 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 ): EventHandler<E> {
   opts = { ...defaultCacheOptions(), ...opts };
 
+  // Allowlist of cookie names that may participate in caching. `undefined` means
+  // "no cookies allowed": the Cookie request header is stripped before the handler
+  // runs, cookies never vary the key, and Set-Cookie responses are refused storage.
+  // Names are trimmed/deduped; an empty (or whitespace-only) list normalizes to the
+  // "no cookies allowed" default.
+  const allowedCookieNames = ((): string[] | undefined => {
+    const names = [...new Set((opts.allowCookies ?? []).map((c) => c?.trim()).filter(Boolean))];
+    return names.length > 0 ? (names as string[]) : undefined;
+  })();
+
   const variableHeaderNames = (opts.varies || [])
     .filter(Boolean)
     .map((h) => h.toLowerCase())
+    // `allowCookies` supersedes `varies: ["cookie"]`: when set, cookie key-scoping and
+    // handler-visibility are driven by the allowlist, so drop the coarse full-header vary.
+    .filter((h) => !(allowedCookieNames && h === "cookie"))
     .sort();
 
   const allowedQueryNames = opts.allowQuery
     ? [...new Set(opts.allowQuery.filter(Boolean))]
-    : undefined;
-
-  // Allowlist of cookie names that may participate in caching. `undefined` means
-  // "no cookies allowed": the Cookie request header is stripped before the handler
-  // runs, cookies never vary the key, and Set-Cookie responses are refused storage.
-  const allowedCookieNames = opts.allowCookies
-    ? [...new Set(opts.allowCookies.filter(Boolean))]
     : undefined;
 
   // Memoize the filtered query per request so getKey and the handler-facing URL
@@ -255,10 +261,17 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     };
 
     // Flag the entry non-storable when it sets a cookie outside the allowlist, read
-    // back in `validate`. Uses `getSetCookie()` so every Set-Cookie is inspected —
+    // back in `validate`. Prefer `getSetCookie()` so every Set-Cookie is inspected —
     // `Object.fromEntries(headers.entries())` above collapses them to just the last.
-    const setCookies = res.headers.getSetCookie?.() ?? [];
-    if (setCookies.some((c) => !allowedCookieNames?.includes(_cookieName(c)))) {
+    // On runtimes without `getSetCookie` we can't enumerate individual cookies, so
+    // fall back to header presence and block conservatively rather than fail open
+    // (a fail-open default here would silently leak Set-Cookie across cache hits).
+    const setCookies =
+      typeof res.headers.getSetCookie === "function" ? res.headers.getSetCookie() : undefined;
+    const blockSetCookie = setCookies
+      ? setCookies.some((c) => !allowedCookieNames?.includes(_cookieName(c)))
+      : res.headers.has("set-cookie");
+    if (blockSetCookie) {
       Object.defineProperty(cacheEntry, "_blockSetCookie", { value: true, enumerable: false });
     }
 

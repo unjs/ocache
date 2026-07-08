@@ -115,6 +115,11 @@ const handler = defineCachedHandler(myHandler, {
 });
 ```
 
+Two caveats:
+
+- **Custom `getKey`.** As with `allowQuery`, a custom `getKey` controls the cache key entirely, so allowlisted cookies no longer vary it automatically — if your handler's output depends on a cookie, incorporate it into `getKey` yourself (the handler-visible `Cookie` header is still filtered to the allowlist regardless).
+- **Request coalescing.** Concurrent requests that resolve to the same cache key are de-duplicated into a single handler call and share its response. A handler that _mints_ a per-request cookie (e.g. initializing an anonymous session with a fresh `Set-Cookie`) is not isolated by the storage guard in that in-flight window — the guard prevents the response from being stored and replayed later, but coalesced callers still receive the same minted value. Give such handlers a user-specific `getKey`/`varies` (or don't cache them).
+
 #### Headers-only Mode
 
 Use `headersOnly` to handle conditional requests without caching the full response:
