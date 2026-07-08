@@ -39,10 +39,9 @@ jobs:
         run: pnpm install
       - name: Build docs
         working-directory: docs
-        # Project pages serve under /ocache/ — set the base path so assets resolve.
-        env:
-          NUXT_APP_BASE_URL: /ocache/
         run: pnpm build
+      - name: Add CNAME for custom domain
+        run: echo "ocache.unjs.io" > docs/.docs/.output/public/CNAME
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
