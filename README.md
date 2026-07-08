@@ -364,6 +364,20 @@ setStorage(createMemoryStorage({ maxSize: Infinity }));
 
 <!-- automd:docs4ts -->
 
+### `CachedEventHandler`
+
+```ts
+type CachedEventHandler<E extends HTTPEvent = HTTPEvent> = EventHandler<E> &
+```
+
+Cached event handler returned by `defineCachedHandler`.
+
+An [`EventHandler`](#eventhandler) augmented with on-demand revalidation methods forwarded from
+the underlying cached function. Each accepts the [`HTTPEvent`](#httpevent) directly and derives
+the exact storage key the handler caches under, so no manual key reconstruction is needed.
+
+---
+
 ### `cachedFunction`
 
 ```ts
@@ -438,7 +452,9 @@ sets `cache-control`, `etag`, and `last-modified` headers, and handles
 - **`handler`** — The event handler to cache.
 - **`opts`** — Cache and HTTP-specific configuration options.
 
-**Returns:** — A new event handler that serves cached responses when available.
+**Returns:** — A new event handler that serves cached responses when available. The handler
+also exposes `.resolveKeys(event)`, `.invalidate(event)`, and `.expire(event)` for
+on-demand revalidation, keyed exactly as the handler caches (no key reconstruction).
 
 ---
 

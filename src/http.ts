@@ -4,6 +4,7 @@ import { cachedFunction } from "./cache.ts";
 import type {
   HTTPEvent,
   EventHandler,
+  CachedEventHandler,
   CacheOptions,
   CachedEventHandlerOptions,
   CacheConditions,
@@ -29,12 +30,14 @@ function defaultCacheOptions() {
  *
  * @param handler - The event handler to cache.
  * @param opts - Cache and HTTP-specific configuration options.
- * @returns A new event handler that serves cached responses when available.
+ * @returns A new event handler that serves cached responses when available. The handler
+ *   also exposes `.resolveKeys(event)`, `.invalidate(event)`, and `.expire(event)` for
+ *   on-demand revalidation, keyed exactly as the handler caches (no key reconstruction).
  */
 export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   handler: EventHandler<E>,
   opts: CachedEventHandlerOptions<E> = {},
-): EventHandler<E> {
+): CachedEventHandler<E> {
   opts = { ...defaultCacheOptions(), ...opts };
 
   // Allowlist of cookie names that may participate in caching. `undefined` means
@@ -378,7 +381,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     return _toResponse(rawValue, event as E);
   }, _opts);
 
-  return async (event) => {
+  const cachedHandler: EventHandler<E> = async (event) => {
     // Headers-only mode
     if (opts.headersOnly) {
       if (_handleCacheHeaders(event, { maxAge: opts.maxAge })) {
@@ -440,6 +443,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       headers: response.headers,
     });
   };
+
+  // Forward the on-demand revalidation methods from the internal cached function so
+  // callers can `.expire(event)` / `.invalidate(event)` / `.resolveKeys(event)` without
+  // reconstructing the auto-generated key (which internal escaping makes error-prone —
+  // issue #71). The internal resolver's args are `[event]`, so these accept the event
+  // directly and derive the exact keys the handler stores under.
+  const _revalidate = cachedHandler as CachedEventHandler<E>;
+  _revalidate.resolveKeys = (event: E) => _cachedHandler.resolveKeys(event);
+  _revalidate.invalidate = (event: E) => _cachedHandler.invalidate(event);
+  _revalidate.expire = (event: E) => _cachedHandler.expire(event);
+
+  return _revalidate;
 }
 
 // --- Internal helpers ---

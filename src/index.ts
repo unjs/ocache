@@ -21,6 +21,7 @@ export type {
   HTTPEvent,
   ServerRequest,
   EventHandler,
+  CachedEventHandler,
   CacheEntry,
   CacheStatus,
   CacheOptions,
