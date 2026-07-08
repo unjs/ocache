@@ -102,7 +102,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // Custom user-defined key
       const customKey = await opts.getKey?.(event as E);
       if (customKey) {
-        return escapeKey(customKey);
+        const _key = escapeKey(customKey);
+        // If escaping was a no-op the key is already storage-safe and can't collide,
+        // so keep it as-is. Otherwise escaping is lossy (distinct keys can collapse to
+        // the same segment), so append a hash of the raw key to keep them distinct.
+        // The `.` separator only appears in the hashed form, so an escaped-clean key
+        // (pure `\w`, never contains `.`) and a hashed key can never overlap.
+        return _key === customKey ? _key : `${_key.slice(0, 64)}.${hash(customKey)}`;
       }
       // Auto-generated key
       const _url = event.url ?? new URL(event.req.url);
