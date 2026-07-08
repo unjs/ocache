@@ -8,3 +8,8 @@ themeColor: yellow
 automd: true
 
 github: unjs/ocache
+
+# No blog section yet — redirect the built-in /blog route so it isn't
+# prerendered into a 404.
+redirects:
+  "/blog": "/guide"
