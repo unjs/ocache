@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   cachedFunction,
   defineCachedFunction,
@@ -10,6 +10,7 @@ import {
   setStorage,
   useStorage,
   type HTTPEvent,
+  type StorageInterface,
 } from "../src/index.ts";
 beforeEach(() => {
   setStorage(createMemoryStorage());
@@ -2189,5 +2190,121 @@ describe("multi-tier base", () => {
     const result = await fn2();
     expect(result).toBe("from-tier1");
     expect(callCount).toBe(0);
+  });
+});
+
+describe("warnWhenSlower", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function slowReadStorage(delayMs = 15): StorageInterface {
+    const base = createMemoryStorage();
+    return {
+      get: async (key: string) => {
+        await new Promise((r) => setTimeout(r, delayMs));
+        return base.get(key);
+      },
+      set: (key: string, value: unknown, opts?: { ttl?: number }) => base.set(key, value, opts),
+    } as StorageInterface;
+  }
+
+  it("warns once when recompute is cheaper than retrieval", async () => {
+    setStorage(slowReadStorage());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fn = defineCachedFunction(() => "fast", {
+      maxAge: 1000,
+      name: "slow-cache",
+      warnWhenSlower: true,
+    });
+
+    for (let i = 0; i < 10; i++) {
+      await fn();
+    }
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]![0]).toContain('Recomputing "functions:slow-cache"');
+    expect(warnSpy.mock.calls[0]![0]).toContain("cheaper than");
+  });
+
+  it("does not warn when disabled (default)", async () => {
+    setStorage(slowReadStorage());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fn = defineCachedFunction(() => "fast", { maxAge: 1000, name: "no-warn" });
+
+    for (let i = 0; i < 10; i++) {
+      await fn();
+    }
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when recompute is more expensive than retrieval", async () => {
+    setStorage(createMemoryStorage());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fn = defineCachedFunction(
+      async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        return "slow";
+      },
+      { maxAge: 1000, name: "expensive", warnWhenSlower: true },
+    );
+
+    for (let i = 0; i < 10; i++) {
+      await fn();
+    }
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for a cheap function on fast in-memory storage", async () => {
+    setStorage(createMemoryStorage());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fn = defineCachedFunction(() => 42, {
+      maxAge: 1000,
+      name: "cheap",
+      warnWhenSlower: true,
+    });
+
+    for (let i = 0; i < 20; i++) {
+      await fn();
+    }
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn before enough retrieval samples are collected", async () => {
+    setStorage(slowReadStorage());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fn = defineCachedFunction(() => "fast", {
+      maxAge: 1000,
+      name: "few-hits",
+      warnWhenSlower: true,
+    });
+
+    // 1 miss (compute) + 4 hits: below the 5-hit minimum.
+    for (let i = 0; i < 5; i++) {
+      await fn();
+    }
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("warns for cached handlers (http path)", async () => {
+    setStorage(slowReadStorage());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const handler = defineCachedHandler(() => new Response("hello"), {
+      maxAge: 1000,
+      name: "slow-handler",
+      warnWhenSlower: true,
+    });
+    const event = { req: new Request("http://localhost/slow-handler") };
+
+    for (let i = 0; i < 10; i++) {
+      await handler(event);
+    }
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0]![0]).toContain('Recomputing "handlers:slow-handler"');
   });
 });

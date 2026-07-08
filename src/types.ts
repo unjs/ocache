@@ -121,6 +121,14 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   base?: string | string[];
   /** Optional error handler called for all cache-related errors (read, write, SWR, malformed data). */
   onError?: (error: unknown) => void;
+  /**
+   * When `true`, measure retrieval vs. recompute time and emit a one-time `console.warn`
+   * when retrieval is non-trivial and recomputing the value is meaningfully cheaper than
+   * reading it back from the cache (i.e. caching adds net overhead here). Fast/local storage
+   * never triggers it. Adds negligible cost when disabled. Intended for development.
+   * Defaults to `false`.
+   */
+  warnWhenSlower?: boolean;
 }
 
 /**

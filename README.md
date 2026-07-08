@@ -48,6 +48,7 @@ const cached = defineCachedFunction(fn, {
   validate: (entry) => entry.value !== undefined, // Custom validation
   transform: (entry) => entry.value, // Transform before returning
   onError: (error) => console.error(error), // Error handler
+  warnWhenSlower: false, // Warn once when recompute is meaningfully cheaper than retrieval (default: false)
 });
 ```
 
