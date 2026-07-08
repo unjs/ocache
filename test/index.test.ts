@@ -842,6 +842,55 @@ describe("cachedFunction", () => {
   });
 });
 
+// Regression: unjs/ocache#53 — defaultCacheOptions() merged `name: "_"` before the
+// `opts.name || fn.name || "_"` fallback ran, making `fn.name` dead code. Every unnamed
+// cached function then resolved to the same storage key (`/cache:functions:_:.json`),
+// silently colliding across distinct functions.
+describe("cache key name resolution (#53)", () => {
+  it("uses fn.name in the storage key when no name option is given", async () => {
+    const getUser = defineCachedFunction(async function getUser() {
+      return "user";
+    });
+    const getPost = defineCachedFunction(async function getPost() {
+      return "post";
+    });
+
+    const userKey = (await getUser.resolveKeys())[0]!;
+    const postKey = (await getPost.resolveKeys())[0]!;
+
+    expect(userKey).toBe("/cache:functions:getUser:.json");
+    expect(postKey).toBe("/cache:functions:getPost:.json");
+    expect(userKey).not.toBe(postKey);
+  });
+
+  it("does not collide cached values across distinct named functions", async () => {
+    const getUser = defineCachedFunction(async function getUser() {
+      return "user-value";
+    });
+    const getPost = defineCachedFunction(async function getPost() {
+      return "post-value";
+    });
+
+    expect(await getUser()).toBe("user-value");
+    expect(await getPost()).toBe("post-value");
+  });
+
+  it("explicit name option still overrides fn.name", async () => {
+    const fn = defineCachedFunction(
+      async function actualName() {
+        return 1;
+      },
+      { name: "custom" },
+    );
+    expect((await fn.resolveKeys())[0]).toBe("/cache:functions:custom:.json");
+  });
+
+  it("anonymous function falls back to _", async () => {
+    const fn = defineCachedFunction(async () => 1);
+    expect((await fn.resolveKeys())[0]).toBe("/cache:functions:_:.json");
+  });
+});
+
 describe("getMaxAge (dynamic per-entry TTL)", () => {
   it("derives maxAge from the resolved value for the freshness check", async () => {
     let callCount = 0;

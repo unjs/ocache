@@ -35,13 +35,17 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   fn: (...args: ArgsT) => T | Promise<T>,
   opts: CacheOptions<T, ArgsT> = {},
 ): CachedFunction<T, ArgsT> {
-  opts = { ...defaultCacheOptions(), ...opts };
+  // Resolve `name` from the caller's opts BEFORE merging defaults: defaultCacheOptions()
+  // sets a truthy `name: "_"`, so if defaults were merged first `opts.name` would always
+  // be `"_"` and the `fn.name` fallback would be unreachable (silent cache-key collision
+  // across every unnamed cached function — https://github.com/unjs/ocache/issues/53).
+  const name = opts.name || fn.name || "_";
+  opts = { ...defaultCacheOptions(), ...opts, name };
 
   const pending: { [key: string]: Promise<T> } = {};
 
   // Normalize cache params
   const group = opts.group || "functions";
-  const name = opts.name || fn.name || "_";
   const integrity = opts.integrity || hash([fn, _integrityOpts(opts)]);
   const validate = opts.validate || ((entry) => entry.value !== undefined);
   const _onError = (context: string, error: unknown) => {
