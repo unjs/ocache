@@ -14,7 +14,7 @@ function defaultCacheOptions() {
   return {
     name: "_",
     base: "/cache",
-    swr: true,
+    swr: false,
     maxAge: 1,
     cacheStatusHeader: true,
   } as const;

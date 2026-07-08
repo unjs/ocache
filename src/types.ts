@@ -99,7 +99,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   integrity?: any;
   /** Number of seconds to cache the response. Defaults to `1`. */
   maxAge?: number;
-  /** Enable stale-while-revalidate behavior. When `true`, returns stale cache while refreshing in the background. Defaults to `true`. */
+  /** Enable stale-while-revalidate behavior. When `true`, returns stale cache while refreshing in the background. Defaults to `false` (an expired entry is re-resolved in the foreground before returning). */
   swr?: boolean;
   /** Maximum number of seconds a stale entry can be served while revalidating. `0` means stale is never served — once expired, revalidation blocks the request. */
   staleMaxAge?: number;
