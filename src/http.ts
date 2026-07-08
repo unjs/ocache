@@ -144,8 +144,21 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // Additive user hook: ANDed with the built-in checks above so callers can
       // reject responses (e.g. redirects) without reimplementing load-bearing
       // safety checks. Cannot be used to force-cache a response the built-ins reject.
-      if (opts.shouldCache && (await opts.shouldCache(entry.value, ctx.args[0] as E)) === false) {
-        return false;
+      // A throwing hook fails closed (treat as not cacheable) rather than breaking
+      // the request — the response is still served, just not stored/served-from-cache.
+      if (opts.shouldCache) {
+        try {
+          if ((await opts.shouldCache(entry.value, ctx.args[0] as E)) === false) {
+            return false;
+          }
+        } catch (error) {
+          if (opts.onError) {
+            opts.onError(error);
+          } else {
+            console.error("[cache] shouldCache hook error.", error);
+          }
+          return false;
+        }
       }
       return true;
     },

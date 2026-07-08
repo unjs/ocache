@@ -135,7 +135,7 @@ const handler = defineCachedHandler(myHandler, {
 });
 ```
 
-`shouldCache` receives the serialized response entry and the originating event, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject.
+`shouldCache` receives the serialized response entry and the event, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject. It gates both storing a fresh response and serving a stored one (so base the decision on the response `entry`), and a throwing hook fails closed (treated as non-cacheable) and is reported via `onError`.
 
 ### Cache Invalidation
 

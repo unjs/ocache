@@ -211,17 +211,24 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   handleCacheHeaders?: (event: E, conditions: CacheConditions) => boolean;
 
   /**
-   * Additional predicate deciding whether a handler response should be cached.
+   * Additional predicate deciding whether a handler response is cacheable.
    *
    * Runs *after* — and in addition to — the built-in response validation, which
    * always applies and cannot be bypassed (it rejects `4xx`/`5xx` statuses,
    * `Cache-Control: no-store`/`private`, missing bodies, and absent
    * `etag`/`last-modified`). Return `false` (or a Promise resolving to `false`)
-   * to skip caching this response; it is still returned to the caller, just not
-   * stored. Receives the serialized response entry and the originating event.
+   * to treat the response as non-cacheable; it is still returned to the caller,
+   * just not stored. Receives the serialized response entry and the event.
    *
    * Because it is ANDed with the built-ins, it can only *narrow* what gets
    * cached — it cannot force-cache a response the built-in checks reject.
+   *
+   * Note it gates both storing a fresh response **and** serving a stored one, so
+   * it also runs on cache reads (including the stale-while-revalidate serve
+   * decision) — prefer basing the decision on the response `entry`, since the
+   * `event` may reflect either the original or the internally header/query-filtered
+   * request depending on the code path. Keep it fast; a throwing hook fails closed
+   * (treated as non-cacheable) and is reported via `onError`.
    *
    * @example
    * ```ts

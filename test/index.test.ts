@@ -1441,6 +1441,34 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(2);
   });
 
+  it("fails closed (does not cache, does not throw) when shouldCache throws", async () => {
+    let callCount = 0;
+    const onError = vi.fn();
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      {
+        maxAge: 10,
+        onError,
+        shouldCache: () => {
+          throw new Error("boom");
+        },
+      },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // The request still succeeds; the response is just never cached.
+    expect(await r1.text()).toBe("ok");
+    expect(await r2.text()).toBe("ok");
+    expect(callCount).toBe(2);
+    expect(onError).toHaveBeenCalled();
+  });
+
   // Regression: a corrupt/partial stored entry whose `value` lacks a `headers`
   // field must degrade to a cache miss, not throw from validate()'s cache-control
   // check (which runs before the status/body guards).
