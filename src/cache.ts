@@ -114,7 +114,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     // Computed once and reused for both the `expired` check and the `status`
     // decision below (same entry state, so re-validating would just repeat work).
-    const _isValid = validate(entry) !== false;
+    // `validate` may be async (e.g. checking the cached value against an external source),
+    // so await it here. A sync return is fine too — `await` on a non-promise is a no-op.
+    const _isValid = (await validate(entry)) !== false;
 
     const expired =
       shouldInvalidateCache ||
@@ -196,7 +198,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             _onError("[cache] getMaxAge hook error.", error);
           }
         }
-        if (validate(entry) !== false) {
+        if ((await validate(entry)) !== false) {
           // Per-entry TTL (from the `getMaxAge` hook) falls back to static options when not provided.
           const writeMaxAge = entry.maxAge ?? opts.maxAge;
           const writeStaleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
@@ -266,7 +268,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       configurable: true,
     });
 
-    if (opts.swr && validate(entry) !== false) {
+    if (opts.swr && (await validate(entry)) !== false) {
       _resolvePromise.catch((error) => {
         _onError("[cache] SWR handler error.", error);
       });

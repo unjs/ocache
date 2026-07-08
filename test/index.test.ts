@@ -231,6 +231,72 @@ describe("cachedFunction", () => {
     expect(r2).toBe(2);
   });
 
+  it("supports asynchronous validate", async () => {
+    // Mirrors issue #32: validate needs to check the cached value against an
+    // external source (e.g. fetching a signed URL to confirm it is still valid).
+    let callCount = 0;
+    let remoteValid = true;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        validate: async (entry) => {
+          // Simulate an async check against a remote source
+          await new Promise((r) => setTimeout(r, 1));
+          return remoteValid && (entry.value ?? 0) > 0;
+        },
+      },
+    );
+
+    // First call resolves fresh (miss)
+    expect(await fn()).toBe(1);
+    // Cached value passes async validation -> served from cache
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+
+    // Remote now reports the cached value as invalid -> re-resolve
+    remoteValid = false;
+    expect(await fn()).toBe(2);
+    expect(callCount).toBe(2);
+  });
+
+  it("supports asynchronous validate with SWR", async () => {
+    // When async validate reports the cached value as invalid, the entry is
+    // treated as fully invalid: SWR does NOT serve the stale value (it can't be
+    // trusted), and the call re-resolves in the foreground instead.
+    let callCount = 0;
+    let remoteValid = true;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return `v${callCount}`;
+      },
+      {
+        maxAge: 1,
+        staleMaxAge: 10,
+        swr: true,
+        validate: async (entry) => {
+          await new Promise((r) => setTimeout(r, 1));
+          return remoteValid && entry.value !== undefined;
+        },
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    // Within maxAge, async validate passes -> cache hit
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Async validate now reports invalid -> re-resolve in foreground (no stale served)
+    remoteValid = false;
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
   it("handles cache read errors gracefully", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     setStorage({
