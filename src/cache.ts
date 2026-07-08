@@ -108,9 +108,15 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         ? readStaleMaxAge * 1000
         : undefined;
 
+    // A zero stale window means stale must never be served (e.g. upstream
+    // proxy-revalidate semantics): revalidate in the foreground instead.
+    const swr = opts.swr && staleTtl !== 0;
+
     // When staleMaxAge is set, an entry is completely dead after maxAge + staleMaxAge
     const isFullyExpired =
-      staleTtl !== undefined && ttl > 0 && Date.now() - (entry.mtime || 0) > ttl + staleTtl;
+      staleTtl !== undefined &&
+      readMaxAge != null &&
+      Date.now() - (entry.mtime || 0) > ttl + staleTtl;
 
     // Computed once and reused for both the `expired` check and the `status`
     // decision below (same entry state, so re-validating would just repeat work).
@@ -143,7 +149,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         ? "miss"
         : !expired
           ? "hit"
-          : opts.swr && _isValid
+          : swr && _isValid
             ? "stale"
             : "revalidated";
 
@@ -266,7 +272,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       configurable: true,
     });
 
-    if (opts.swr && validate(entry) !== false) {
+    if (swr && validate(entry) !== false) {
       _resolvePromise.catch((error) => {
         _onError("[cache] SWR handler error.", error);
       });
