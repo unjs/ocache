@@ -190,6 +190,25 @@ const handler = defineCachedHandler(myHandler, {
 
 `shouldCache` receives the serialized response entry, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject. It gates both storing a fresh response and serving a stored one, and a throwing hook fails closed (treated as non-cacheable) and is reported via `onError`.
 
+#### Streaming responses (`stream`)
+
+By default a cache MISS buffers the entire response body before anything reaches the client — the client waits for the full read _and_ the cache write. Set `stream: true` to hand the body to the client as it is produced: the body is `tee()`'d so one branch streams to the client immediately (time-to-first-byte is no longer blocked on buffering or storage) while the other is drained in the background to build the stored entry. Cache HITs are served from the buffered entry exactly as before.
+
+```ts
+const handler = defineCachedHandler(() => new Response(readableStreamFromUpstream()), {
+  maxAge: 60,
+  stream: true, // stream the MISS to the client, cache a copy in the background
+});
+```
+
+Useful for proxying or generating large binary/JSON payloads where you don't want to hold the whole body in memory before responding. Things to know about the streamed MISS response (only the very first, uncached one):
+
+- it carries **no body-hash `etag`** — an etag can't be computed without buffering the body first, so it is added only to the stored entry and therefore to subsequent cache HITs (`cache-control`, `last-modified`, `Vary`, and `Set-Cookie` stripping all still apply to the streamed response);
+- its cache-status header always reports `MISS`;
+- concurrent cold MISSes are **not** streamed in parallel — a `ReadableStream` has a single consumer, so the coalesced peers are served the buffered copy once the background write lands.
+
+Only cacheable (`GET`/`HEAD`) responses with a body are affected; bypassed methods (e.g. `POST`) already stream their live response through untouched.
+
 #### Incremental Static Regeneration (ISR)
 
 you can reproduce a similar ISR behavior with `defineCachedHandler`: serve a cached page instantly, regenerate it in the background after it goes stale, and keep serving the last-good version until the refresh lands:

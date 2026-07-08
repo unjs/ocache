@@ -296,12 +296,39 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   toResponse?: (value: unknown, event: E) => Response | Promise<Response>;
 
   /**
+   * Stream the response body to the client while a copy is cached in the background.
+   *
+   * By default (`stream: false`) a cache MISS buffers the entire response body before
+   * anything is sent to the client — the client waits for the full read and the cache
+   * write. With `stream: true`, the body is `tee()`'d: one branch is handed to the client
+   * immediately (so time-to-first-byte isn't blocked on buffering or storage), while the
+   * other is drained in the background to build the stored entry. Cache HITs are served
+   * from the buffered entry exactly as before.
+   *
+   * Trade-offs of the streamed MISS response (the very first, uncached response):
+   * - it carries **no body-hash `etag`** (an etag can't be computed without buffering the
+   *   body first) — subsequent cache HITs, served from the stored entry, do carry one;
+   * - its cache-status header always reports `MISS`;
+   * - concurrent MISSes are **not** coalesced onto a single stream (a `ReadableStream` has
+   *   a single consumer), so each cold caller resolves and streams independently until the
+   *   background write lands, after which requests hit the buffered entry.
+   *
+   * Only affects cacheable (`GET`/`HEAD`) responses that actually have a body; bypassed
+   * methods (e.g. `POST`) already stream their live response through untouched.
+   */
+  stream?: boolean;
+
+  /**
    * Create the final cached Response from serialized cache entry data. The body is a
    * `string` for text responses, a `Uint8Array` for cached binary responses (decoded
-   * from the stored base64), or `null` for empty/304 responses.
+   * from the stored base64), a `ReadableStream` for a streamed MISS response (when
+   * {@link stream} is enabled), or `null` for empty/304 responses.
    * Default: `new Response(body, init)`.
    */
-  createResponse?: (body: string | Uint8Array | null, init: ResponseInit) => Response;
+  createResponse?: (
+    body: string | Uint8Array | ReadableStream | null,
+    init: ResponseInit,
+  ) => Response;
 
   /**
    * Check conditional request headers (etag/if-modified-since).

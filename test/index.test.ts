@@ -2773,7 +2773,7 @@ describe("defineCachedHandler", () => {
   it("uses custom createResponse hook", async () => {
     const path = uniquePath();
     const createResponse = vi.fn(
-      (body: string | Uint8Array | null, init: ResponseInit) =>
+      (body: string | Uint8Array | ReadableStream | null, init: ResponseInit) =>
         new Response(body as BodyInit | null, init),
     );
     const handler = defineCachedHandler(() => new Response("ok"), {
@@ -2789,7 +2789,7 @@ describe("defineCachedHandler", () => {
   it("uses custom createResponse for 304", async () => {
     const path = uniquePath();
     const createResponse = vi.fn(
-      (body: string | Uint8Array | null, init: ResponseInit) =>
+      (body: string | Uint8Array | ReadableStream | null, init: ResponseInit) =>
         new Response(body as BodyInit | null, init),
     );
     const handler = defineCachedHandler(
@@ -2927,6 +2927,209 @@ describe("defineCachedHandler", () => {
     await handler(makeEvent(path));
     await handler(makeEvent(path));
     expect(callCount).toBe(2);
+  });
+});
+
+describe("defineCachedHandler streaming", () => {
+  let testId = 0;
+  function makeEvent(path: string, opts?: RequestInit & { headers?: Record<string, string> }) {
+    return { req: new Request(`http://localhost${path}`, opts) };
+  }
+  function uniquePath() {
+    return `/stream-${++testId}-${Date.now()}`;
+  }
+
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  /** A ReadableStream that emits the given chunks (strings or bytes) then closes. */
+  function streamFrom(chunks: Array<string | Uint8Array>): ReadableStream<Uint8Array> {
+    return new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(typeof chunk === "string" ? enc.encode(chunk) : chunk);
+        }
+        controller.close();
+      },
+    });
+  }
+  const readAll = async (res: Response) => new Uint8Array(await res.arrayBuffer());
+  // Let the background cache write (buffer + store) land before the next request.
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  it("streams a MISS response and serves the cached copy on the next HIT", async () => {
+    let calls = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return new Response(streamFrom(["hello ", "stream"]));
+      },
+      { maxAge: 10, stream: true },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    // The streamed MISS carries no body-hash etag — it can't be hashed without buffering.
+    expect(r1.headers.get("etag")).toBe(null);
+    expect(dec.decode(await readAll(r1))).toBe("hello stream");
+
+    await settle();
+
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(await r2.text()).toBe("hello stream");
+    // The stored entry (and thus every cache hit) does carry an etag.
+    expect(r2.headers.get("etag")).toBeTruthy();
+    expect(calls).toBe(1);
+  });
+
+  it("responds before the body stream has finished (does not buffer first)", async () => {
+    const path = uniquePath();
+    let controller: ReadableStreamDefaultController<Uint8Array>;
+    const handler = defineCachedHandler(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(c) {
+              c.enqueue(enc.encode("first"));
+              controller = c; // deliberately left open
+            },
+          }),
+        ),
+      { maxAge: 10, stream: true },
+    );
+
+    // In buffered mode this would hang on `res.arrayBuffer()` until the stream closes;
+    // with streaming it resolves after the first chunk while the stream is still open.
+    const res = (await handler(makeEvent(path))) as Response;
+    const reader = res.body!.getReader();
+    expect(dec.decode((await reader.read()).value)).toBe("first");
+    controller!.close();
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  it("roundtrips a binary (non-UTF-8) streamed body", async () => {
+    const path = uniquePath();
+    const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe, 0x01, 0x89, 0x50, 0x4e, 0x47]);
+    const handler = defineCachedHandler(() => new Response(streamFrom([bytes])), {
+      maxAge: 10,
+      stream: true,
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect([...(await readAll(r1))]).toEqual([...bytes]);
+
+    await settle();
+
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect([...new Uint8Array(await r2.arrayBuffer())]).toEqual([...bytes]);
+  });
+
+  it("synthesizes cache-control and last-modified on the streamed MISS", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response(streamFrom(["x"])), {
+      maxAge: 30,
+      stream: true,
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect(r1.headers.get("cache-control")).toBe("max-age=30");
+    expect(r1.headers.get("last-modified")).toBeTruthy();
+    await readAll(r1);
+  });
+
+  it("strips Set-Cookie from the streamed response by default", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response(streamFrom(["ok"]), { headers: { "set-cookie": "sid=secret" } }),
+      { maxAge: 10, stream: true },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect(r1.headers.get("set-cookie")).toBe(null);
+    expect(dec.decode(await readAll(r1))).toBe("ok");
+  });
+
+  it("streams a fixed-body response too when stream is enabled", async () => {
+    let calls = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return new Response("plain");
+      },
+      { maxAge: 10, stream: true },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(await r1.text()).toBe("plain");
+
+    await settle();
+
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(await r2.text()).toBe("plain");
+    expect(calls).toBe(1);
+  });
+
+  it("passes a bypassed (POST) request through as a live streamed response", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response(streamFrom(["live"])), {
+      maxAge: 10,
+      stream: true,
+    });
+
+    const res = (await handler(makeEvent(path, { method: "POST" }))) as Response;
+    // Bypassed: no cache-status header, live body passed straight through.
+    expect(res.headers.get("x-cache")).toBe(null);
+    expect(dec.decode(await readAll(res))).toBe("live");
+  });
+
+  it("coalesces concurrent cold MISS callers onto one resolution", async () => {
+    let calls = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return new Response(streamFrom(["data-", String(calls)]));
+      },
+      { maxAge: 10, stream: true },
+    );
+
+    const results = (await Promise.all([
+      handler(makeEvent(path)),
+      handler(makeEvent(path)),
+    ])) as Response[];
+    const r1 = results[0]!;
+    const r2 = results[1]!;
+
+    // The resolver (and its stream) runs once; the coalesced peer is served the buffered
+    // copy. Both callers observe the same body.
+    expect(dec.decode(await readAll(r1))).toBe("data-1");
+    expect(dec.decode(await readAll(r2))).toBe("data-1");
+    expect(calls).toBe(1);
+  });
+
+  it("still returns a 304 for a conditional request against a cached streamed entry", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response(streamFrom(["body"])), {
+      maxAge: 10,
+      stream: true,
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    await readAll(r1);
+    await settle();
+
+    const r2 = (await handler(makeEvent(path))) as Response;
+    const etag = r2.headers.get("etag")!;
+    expect(etag).toBeTruthy();
+
+    const r3 = (await handler(makeEvent(path, { headers: { "if-none-match": etag } }))) as Response;
+    expect(r3.status).toBe(304);
   });
 });
 
