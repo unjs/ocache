@@ -35,6 +35,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Auto-generates cache keys from URL path + variable headers
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
 - Sets `cache-control`, `etag`, `last-modified` headers — but never clobbers an explicit `cache-control` set by the handler (SWR/`s-maxage`/`max-age` directives are only synthesized when the handler didn't set one)
+- Emits a `Vary` response header from `opts.varies` (the same header names used for the cache key), merging with any `Vary` the handler already set (case-insensitive dedup, wildcard `*` left untouched) so downstream caches store per-variant
 - Honors explicit `Cache-Control: no-store` / `private` on the response — those are never cached (rejected in `validate`), though still returned to the caller. This only governs storage: concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`)
 - Filters non-variable headers before calling the handler (for consistent cache keys)
 - Framework integration hooks on `CachedEventHandlerOptions`:
