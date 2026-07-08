@@ -79,6 +79,34 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    */
   transform?: (entry: CacheEntry<T>, ...args: ArgsT) => any;
   /**
+   * Prepare the resolved value for storage — the write-side counterpart of `transform`.
+   *
+   * Runs once, right after the resolver (and after `getMaxAge`, so that hook still sees the
+   * raw value) and before the entry is persisted. Return the value to store (the storable
+   * shape usually differs from `T`, so the return is untyped like `transform`); `transform`
+   * then reconstructs the usable value when the entry is read back.
+   *
+   * Use this when the resolver returns something a storage backend can't persist as-is
+   * (e.g. a `ReadableStream` or a class instance): `serialize` converts it to a storable
+   * form on write, `transform` restores it on read. Because it runs exactly once per
+   * resolution — even under concurrent, deduplicated calls, where every caller observes
+   * the serialized value — it is safe to consume a one-shot source such as a stream here.
+   *
+   * The second argument carries the `args` the cached function was called with (same
+   * shape as `validate`), so serialization can depend on the current call.
+   *
+   * Note: `validate` always inspects the serialized (stored) shape — on write it runs
+   * right after this hook, and on read it sees the entry as persisted.
+   *
+   * @example
+   * ```ts
+   * // Persist a ReadableStream body as a string, restore it on read.
+   * serialize: async (entry) => ({ ...entry.value, body: await streamToString(entry.value.body) }),
+   * transform: (entry) => ({ ...entry.value, body: stringToStream(entry.value.body) }),
+   * ```
+   */
+  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => any;
+  /**
    * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
    * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
    * that need to check the cached value against an external source (e.g. fetching a
@@ -158,11 +186,13 @@ export interface CacheConditions {
 /**
  * Options for configuring cached HTTP handlers created by `defineCachedHandler`.
  *
- * Extends {@link CacheOptions} (without `transform` and `validate`, which are set internally).
+ * Extends {@link CacheOptions} (without `transform` and `validate`, which are set internally,
+ * and without `serialize`: the handler already stringifies the response into a fully
+ * serializable `ResponseCacheEntry`, so there is nothing left to prepare for storage).
  */
 export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
   CacheOptions<ResponseCacheEntry, [E]>,
-  "transform" | "validate"
+  "transform" | "validate" | "serialize"
 > {
   /** When `true`, only handles conditional headers (304 responses) without full response caching. */
   headersOnly?: boolean;

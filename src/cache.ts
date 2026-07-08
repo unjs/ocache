@@ -37,7 +37,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 ): CachedFunction<T, ArgsT> {
   opts = { ...defaultCacheOptions(), ...opts };
 
-  const pending: { [key: string]: Promise<T> } = {};
+  // Deduplicates concurrent resolutions for the same key. The shared result carries
+  // the storable (post-`serialize`) value plus any dynamic TTL, so `getMaxAge` and
+  // `serialize` run exactly once and every caller observes the same value.
+  const pending: {
+    [key: string]: Promise<{ value: T; maxAge?: number; staleMaxAge?: number }>;
+  } = {};
 
   // Normalize cache params
   const group = opts.group || "functions";
@@ -167,11 +172,42 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           entry.mtime = undefined;
           entry.expires = undefined;
         }
-        pending[key] = Promise.resolve(resolver());
+        // Resolve the value once and share it (plus any dynamic TTL and the
+        // storable form) with all concurrent callers. `getMaxAge` and `serialize`
+        // run exactly once here — critical for `serialize`, which may consume a
+        // one-shot source (e.g. a `ReadableStream`).
+        pending[key] = (async () => {
+          const value = await resolver();
+          // Throwaway entry so the hooks can inspect resolution metadata.
+          const resolvedEntry: CacheEntry<T> = { value, mtime: Date.now(), integrity };
+          let maxAge: number | undefined;
+          let staleMaxAge: number | undefined;
+          // Derive per-entry lifetime from the resolved value, overriding static options for this write.
+          if (opts.getMaxAge) {
+            try {
+              const resolved = await opts.getMaxAge(resolvedEntry);
+              // A bare number is shorthand for `{ maxAge }`.
+              const dynamic = typeof resolved === "number" ? { maxAge: resolved } : resolved;
+              // Clamp to a non-negative TTL: a value <= 0 means "don't cache" (re-resolve every
+              // access), never "cache forever as fresh". Non-finite (NaN) falls back to static options.
+              maxAge = _clampTtl(dynamic?.maxAge);
+              staleMaxAge = _clampTtl(dynamic?.staleMaxAge);
+              resolvedEntry.maxAge = maxAge;
+              resolvedEntry.staleMaxAge = staleMaxAge;
+            } catch (error) {
+              _onError("[cache] getMaxAge hook error.", error);
+            }
+          }
+          // Prepare the value for storage (write-side counterpart of `transform`).
+          // Runs after `getMaxAge` so that hook still sees the raw resolved value.
+          const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
+          return { value: stored, maxAge, staleMaxAge };
+        })();
       }
 
+      let resolved: { value: T; maxAge?: number; staleMaxAge?: number };
       try {
-        entry.value = await pending[key];
+        resolved = await pending[key]!;
       } catch (error) {
         // Make sure entries that reject get removed.
         if (!isPending) {
@@ -186,25 +222,20 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         throw error;
       }
 
+      // Every caller (leader + deduplicated followers) observes the same storable
+      // value, so `transform` deserializes consistently on every path.
+      entry.value = resolved.value;
+
       if (!isPending) {
         // Update mtime, integrity + validate and set the value in cache only the first time the request is made.
         entry.mtime = Date.now();
         entry.integrity = integrity;
         entry.stale = undefined;
         delete pending[key];
-        // Derive per-entry lifetime from the resolved value, overriding static options for this write.
+        // Persist the per-entry lifetime derived by `getMaxAge` above, overriding static options for this write.
         if (opts.getMaxAge) {
-          try {
-            const resolved = await opts.getMaxAge(entry);
-            // A bare number is shorthand for `{ maxAge }`.
-            const dynamic = typeof resolved === "number" ? { maxAge: resolved } : resolved;
-            // Clamp to a non-negative TTL: a value <= 0 means "don't cache" (re-resolve every
-            // access), never "cache forever as fresh". Non-finite (NaN) falls back to static options.
-            entry.maxAge = _clampTtl(dynamic?.maxAge);
-            entry.staleMaxAge = _clampTtl(dynamic?.staleMaxAge);
-          } catch (error) {
-            _onError("[cache] getMaxAge hook error.", error);
-          }
+          entry.maxAge = resolved.maxAge;
+          entry.staleMaxAge = resolved.staleMaxAge;
         }
         if ((await validate(entry, validateCtx)) !== false) {
           // Per-entry TTL (from the `getMaxAge` hook) falls back to static options when not provided.
