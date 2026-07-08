@@ -1365,6 +1365,82 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(2);
   });
 
+  it("does not cache responses rejected by shouldCache", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        // A 3xx redirect passes the built-in checks (status < 400) but the caller
+        // wants to keep it out of the cache.
+        return new Response("", { status: 302, headers: { location: "/elsewhere" } });
+      },
+      { maxAge: 10, shouldCache: (res) => res.status < 300 || res.status >= 400 },
+    );
+
+    await handler(makeEvent(path));
+    await handler(makeEvent(path));
+
+    // Rejected by shouldCache -> never served from cache: handler runs every time.
+    expect(callCount).toBe(2);
+  });
+
+  it("caches responses accepted by shouldCache", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10, shouldCache: (res) => res.status === 200 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(await r1.text()).toBe("ok");
+    expect(await r2.text()).toBe("ok");
+    // Accepted by shouldCache -> second request served from cache.
+    expect(callCount).toBe(1);
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
+  it("shouldCache receives the response entry and event, and supports async", async () => {
+    const seen: Array<{ status: number; url: string }> = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      shouldCache: async (res, event) => {
+        seen.push({ status: res.status, url: new URL(event.req.url).pathname });
+        return true;
+      },
+    });
+
+    await handler(makeEvent(path));
+
+    expect(seen).toContainEqual({ status: 200, url: path });
+  });
+
+  it("shouldCache cannot force-cache a response the built-in checks reject", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        // 500 is rejected by the built-in status check; shouldCache returning true
+        // must not override that.
+        return new Response("err", { status: 500 });
+      },
+      { maxAge: 10, shouldCache: () => true },
+    );
+
+    await handler(makeEvent(path));
+    await handler(makeEvent(path));
+
+    expect(callCount).toBe(2);
+  });
+
   // Regression: a corrupt/partial stored entry whose `value` lacks a `headers`
   // field must degrade to a cache miss, not throw from validate()'s cache-control
   // check (which runs before the status/body guards).

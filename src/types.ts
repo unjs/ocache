@@ -209,4 +209,25 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * Default: built-in if-none-match / if-modified-since check.
    */
   handleCacheHeaders?: (event: E, conditions: CacheConditions) => boolean;
+
+  /**
+   * Additional predicate deciding whether a handler response should be cached.
+   *
+   * Runs *after* — and in addition to — the built-in response validation, which
+   * always applies and cannot be bypassed (it rejects `4xx`/`5xx` statuses,
+   * `Cache-Control: no-store`/`private`, missing bodies, and absent
+   * `etag`/`last-modified`). Return `false` (or a Promise resolving to `false`)
+   * to skip caching this response; it is still returned to the caller, just not
+   * stored. Receives the serialized response entry and the originating event.
+   *
+   * Because it is ANDed with the built-ins, it can only *narrow* what gets
+   * cached — it cannot force-cache a response the built-in checks reject.
+   *
+   * @example
+   * ```ts
+   * // Don't cache redirects (3xx), which the built-in checks would otherwise allow.
+   * shouldCache: (res) => res.status < 300 || res.status >= 400,
+   * ```
+   */
+  shouldCache?: (entry: ResponseCacheEntry, event: E) => boolean | Promise<boolean>;
 }
