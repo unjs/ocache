@@ -490,7 +490,9 @@ function _remainingTtl(
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
-function _integrityOpts(opts: CacheOptions<any, any>): Omit<CacheOptions, "base" | "group" | "name"> {
+function _integrityOpts(
+  opts: CacheOptions<any, any>,
+): Omit<CacheOptions, "base" | "group" | "name"> {
   const { base: _, group: _g, name: _n, ...rest } = opts;
   return rest;
 }

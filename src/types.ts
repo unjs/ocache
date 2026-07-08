@@ -88,10 +88,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * entry can be validated against the current call (e.g. comparing a request parameter
    * against `entry.mtime`).
    */
-  validate?: (
-    entry: CacheEntry<T>,
-    ctx: { args: ArgsT },
-  ) => boolean | Promise<boolean>;
+  validate?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is invalidated and the function is re-invoked. */
   shouldInvalidateCache?: (...args: ArgsT) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is bypassed entirely and the function is called directly. */
