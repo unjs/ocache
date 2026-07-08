@@ -1606,6 +1606,64 @@ describe("defineCachedHandler", () => {
     expect([...out]).toEqual([...bytes]);
   });
 
+  it("caches a binary (non-UTF-8) response body without corruption", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    // Bytes that are NOT valid UTF-8 (0x80/0xff lead bytes, embedded NUL) — res.text()
+    // would replace them with U+FFFD and mangle the payload irreversibly.
+    const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe, 0x01, 0x89, 0x50, 0x4e, 0x47]);
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(bytes, { headers: { "content-type": "image/png" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect([...new Uint8Array(await r1.arrayBuffer())]).toEqual([...bytes]);
+    // The cache HIT reconstructs the exact same bytes from storage.
+    expect([...new Uint8Array(await r2.arrayBuffer())]).toEqual([...bytes]);
+    expect(callCount).toBe(1);
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(r2.headers.get("content-type")).toBe("image/png");
+  });
+
+  it("stores binary bodies as base64 (survives a JSON-roundtripping storage backend)", async () => {
+    const path = uniquePath();
+    // A storage backend that JSON-serializes entries (like most real ones) — a raw
+    // Uint8Array wouldn't survive this, but a base64 string does.
+    const inner = createMemoryStorage();
+    setStorage({
+      get: (key) => {
+        const raw = inner.get<string>(key) as string | null;
+        return raw == null ? null : JSON.parse(raw);
+      },
+      set: (key, value) => inner.set(key, JSON.stringify(value)),
+    });
+
+    const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe]);
+    const handler = defineCachedHandler(() => new Response(bytes), { maxAge: 10 });
+
+    await handler(makeEvent(path));
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect([...new Uint8Array(await r2.arrayBuffer())]).toEqual([...bytes]);
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
+  it("preserves multi-byte UTF-8 text bodies across a cache hit", async () => {
+    const path = uniquePath();
+    const text = "héllo 世界 🚀 — café";
+    const handler = defineCachedHandler(() => new Response(text), { maxAge: 10 });
+
+    await handler(makeEvent(path));
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(await r2.text()).toBe(text);
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
   it("reaches the handler with the bypassed request body intact", async () => {
     const path = uniquePath();
     let received: string | undefined;
@@ -2637,7 +2695,8 @@ describe("defineCachedHandler", () => {
   it("uses custom createResponse hook", async () => {
     const path = uniquePath();
     const createResponse = vi.fn(
-      (body: string | null, init: ResponseInit) => new Response(body, init),
+      (body: string | Uint8Array | null, init: ResponseInit) =>
+        new Response(body as BodyInit | null, init),
     );
     const handler = defineCachedHandler(() => new Response("ok"), {
       maxAge: 10,
@@ -2652,7 +2711,8 @@ describe("defineCachedHandler", () => {
   it("uses custom createResponse for 304", async () => {
     const path = uniquePath();
     const createResponse = vi.fn(
-      (body: string | null, init: ResponseInit) => new Response(body, init),
+      (body: string | Uint8Array | null, init: ResponseInit) =>
+        new Response(body as BodyInit | null, init),
     );
     const handler = defineCachedHandler(
       () => new Response("body", { headers: { etag: '"test-etag"' } }),

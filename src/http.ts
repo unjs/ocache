@@ -86,7 +86,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       rawValue instanceof Response ? rawValue : new Response(String(rawValue)));
 
   const _createResponse =
-    opts.createResponse || ((body: string | null, init: ResponseInit) => new Response(body, init));
+    opts.createResponse ||
+    ((body: string | Uint8Array | null, init: ResponseInit) =>
+      new Response(body as BodyInit | null, init));
 
   const _handleCacheHeaders = opts.handleCacheHeaders || _defaultHandleCacheHeaders;
 
@@ -123,15 +125,22 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       : undefined,
     // Write-side seam: consume the resolved `Response` body, synthesize the cache
     // headers, and build the storable `ResponseCacheEntry`. Runs exactly once per
-    // resolution (shared across deduplicated callers), so `res.text()`'s one-shot
+    // resolution (shared across deduplicated callers), so `res.arrayBuffer()`'s one-shot
     // consumption is safe. Kept out of the resolver so bypassed requests — which never
     // reach `serialize` — get their live `Response` back untouched.
     serialize: async (entry) => {
       const res = entry.value as unknown as Response;
 
-      // Stringified body
-      // TODO: support binary responses
-      const body = await res.text();
+      // Read the body once as raw bytes. A valid-UTF-8 body is stored verbatim as a
+      // string (unchanged behavior, so text etags stay stable); anything else (images,
+      // protobuf/MVT tiles, other binary Buffers) is base64-encoded and flagged, so the
+      // lossy `res.text()` UTF-8 decode can't mangle it and it survives JSON-serializing
+      // storage backends. Valid UTF-8 roundtrips losslessly through the string form, so
+      // the discriminator is byte validity, not the (spoofable/absent) content-type.
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const text = _decodeUtf8(bytes);
+      const base64 = text === undefined;
+      const body = base64 ? _bytesToBase64(bytes) : text;
 
       if (!res.headers.has("etag")) {
         res.headers.set("etag", `W/"${hash(body)}"`);
@@ -178,6 +187,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         statusText: res.statusText,
         headers: Object.fromEntries(res.headers.entries()),
         body,
+        // Only set for binary bodies — text entries stay flag-free (and byte-identical to
+        // pre-binary-support entries), so `transform`'s `{ ...value }` spread carries it through.
+        ...(base64 && { base64: true }),
       };
 
       // Flag the entry non-storable when it sets a cookie outside the allowlist, read
@@ -410,8 +422,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       });
     }
 
-    // Send Response
-    return _createResponse(response.body ?? null, {
+    // Send Response. Binary bodies were stored base64-encoded; decode them back to raw
+    // bytes so the Response carries the original payload untouched (no UTF-8 mangling).
+    const body =
+      response.base64 && typeof response.body === "string"
+        ? _base64ToBytes(response.body)
+        : (response.body ?? null);
+    return _createResponse(body, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -420,6 +437,40 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 }
 
 // --- Internal helpers ---
+
+// Fatal decoder so invalid UTF-8 throws (→ binary) instead of substituting replacement
+// characters. `ignoreBOM` keeps a leading BOM in the string so it re-encodes byte-for-byte,
+// preserving the lossless roundtrip that lets valid UTF-8 be stored as a plain string.
+const _utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/** Decodes bytes as UTF-8, returning `undefined` when they aren't valid UTF-8 (i.e. binary). */
+function _decodeUtf8(bytes: Uint8Array): string | undefined {
+  try {
+    return _utf8Decoder.decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Encodes raw bytes to a base64 string (chunked to stay within `String.fromCharCode` arg limits). */
+function _bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x80_00;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/** Decodes a base64 string produced by {@link _bytesToBase64} back to raw bytes. */
+function _base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
 
 function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
