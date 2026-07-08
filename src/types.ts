@@ -186,12 +186,15 @@ export interface CacheConditions {
 /**
  * Options for configuring cached HTTP handlers created by `defineCachedHandler`.
  *
- * Extends {@link CacheOptions} (without `transform` and `validate`, which are set internally,
- * and without `serialize`: the handler already stringifies the response into a fully
- * serializable `ResponseCacheEntry`, so there is nothing left to prepare for storage).
+ * Extends {@link CacheOptions} (without `transform`, `validate`, and `serialize`, which are
+ * set internally): the resolver returns the live `Response`, an internal `serialize` hook
+ * turns it into the stored `ResponseCacheEntry`, and `transform` reconstructs the servable
+ * shape on read. Because the cached value is the `Response`, hooks that run before
+ * serialization — notably `getMaxAge` — receive `CacheEntry<Response>` (inspect its headers
+ * or status; do not consume its body, which `serialize` reads exactly once).
  */
 export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
-  CacheOptions<ResponseCacheEntry, [E]>,
+  CacheOptions<Response, [E]>,
   "transform" | "validate" | "serialize"
 > {
   /** When `true`, only handles conditional headers (304 responses) without full response caching. */
