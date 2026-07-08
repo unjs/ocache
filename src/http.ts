@@ -42,10 +42,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   // runs, cookies never vary the key, and Set-Cookie responses are refused storage.
   // Names are trimmed/deduped; an empty (or whitespace-only) list normalizes to the
   // "no cookies allowed" default.
-  const allowedCookieNames = ((): string[] | undefined => {
-    const names = [...new Set((opts.allowCookies ?? []).map((c) => c?.trim()).filter(Boolean))];
-    return names.length > 0 ? (names as string[]) : undefined;
-  })();
+  const _cookieNames = [
+    ...new Set((opts.allowCookies ?? []).map((c) => c?.trim()).filter(Boolean)),
+  ];
+  const allowedCookieNames = _cookieNames.length > 0 ? _cookieNames : undefined;
 
   const variableHeaderNames = (opts.varies || [])
     .filter(Boolean)
