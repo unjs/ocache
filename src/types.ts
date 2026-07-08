@@ -25,6 +25,22 @@ export type EventHandler<E extends HTTPEvent = HTTPEvent> = (
 ) => unknown | Promise<unknown>;
 
 /**
+ * Cached event handler returned by `defineCachedHandler`.
+ *
+ * An {@link EventHandler} augmented with on-demand revalidation methods forwarded from
+ * the underlying cached function. Each accepts the {@link HTTPEvent} directly and derives
+ * the exact storage key the handler caches under, so no manual key reconstruction is needed.
+ */
+export type CachedEventHandler<E extends HTTPEvent = HTTPEvent> = EventHandler<E> & {
+  /** Resolves all storage keys (one per base prefix) the handler would cache the event under. */
+  resolveKeys: (event: E) => Promise<string[]>;
+  /** Invalidates (removes) cached entries for the event across all base prefixes. */
+  invalidate: (event: E) => Promise<void>;
+  /** Marks cached entries for the event as stale across all base prefixes. With SWR, stale values are still served (within `staleMaxAge`) while the next access triggers a background refresh. */
+  expire: (event: E) => Promise<void>;
+};
+
+/**
  * How a cached value was served on a given call.
  *
  * - `"hit"` — a fresh cached value was returned without re-resolving.

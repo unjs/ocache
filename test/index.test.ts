@@ -2928,6 +2928,73 @@ describe("defineCachedHandler", () => {
     await handler(makeEvent(path));
     expect(callCount).toBe(2);
   });
+
+  it("exposes .resolveKeys(event) matching the auto-generated storage key (#71)", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+    const event = makeEvent(path);
+    // Populate the cache, then read it directly using the resolved key.
+    await handler(event);
+
+    const keys = await handler.resolveKeys(event);
+    expect(keys.length).toBe(1);
+    const stored = await useStorage().get(keys[0]!);
+    expect(stored).toBeTruthy();
+    expect((stored as any).value.body).toBe("ok");
+  });
+
+  it(".invalidate(event) removes the cached entry (#71)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`);
+      },
+      { maxAge: 100 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect(await r1.text()).toBe("v1");
+    // Cache hit — handler not re-invoked.
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(await r2.text()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    await handler.invalidate(makeEvent(path));
+    const [key] = await handler.resolveKeys(makeEvent(path));
+    expect(await useStorage().get(key!)).toBeFalsy();
+
+    // Next call re-resolves.
+    const r3 = (await handler(makeEvent(path))) as Response;
+    expect(await r3.text()).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it(".expire(event) triggers a background refresh under SWR (#71)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`);
+      },
+      { maxAge: 100, swr: true, staleMaxAge: 100 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    expect(await r1.text()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    await handler.expire(makeEvent(path));
+
+    // Stale value is served while the background refresh runs.
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(await r2.text()).toBe("v1");
+    // Background revalidation eventually re-invokes the handler.
+    await vi.waitFor(() => expect(callCount).toBe(2));
+  });
 });
 
 describe("resolveCacheKeys", () => {
