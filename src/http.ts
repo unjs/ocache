@@ -121,7 +121,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         .map(([name, value]) => `${escapeKey(name as string)}.${hash(value)}`);
       return [_hashedPath, ..._headers].join(":");
     },
-    validate: (entry) => {
+    validate: async (entry) => {
       if (!entry.value) {
         return false;
       }
@@ -140,6 +140,25 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         entry.value.headers["last-modified"] === "undefined"
       ) {
         return false;
+      }
+      // Additive user hook: ANDed with the built-in checks above so callers can
+      // reject responses (e.g. redirects) without reimplementing load-bearing
+      // safety checks. Cannot be used to force-cache a response the built-ins reject.
+      // A throwing hook fails closed (treat as not cacheable) rather than breaking
+      // the request — the response is still served, just not stored/served-from-cache.
+      if (opts.shouldCache) {
+        try {
+          if ((await opts.shouldCache(entry.value)) === false) {
+            return false;
+          }
+        } catch (error) {
+          if (opts.onError) {
+            opts.onError(error);
+          } else {
+            console.error("[cache] shouldCache hook error.", error);
+          }
+          return false;
+        }
       }
       return true;
     },

@@ -123,6 +123,20 @@ const handler = defineCachedHandler(myHandler, {
 > [!NOTE]
 > This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
 
+#### Custom cache eligibility (`shouldCache`)
+
+The built-in response validation already rejects `4xx`/`5xx` statuses, `Cache-Control: no-store`/`private`, empty bodies, and responses missing `etag`/`last-modified`. Use `shouldCache` to add your own rejection rule on top — for example to keep `3xx` redirects out of the cache:
+
+```ts
+const handler = defineCachedHandler(myHandler, {
+  maxAge: 60,
+  // Return false to skip caching this response (it is still returned to the caller).
+  shouldCache: (res) => res.status < 300 || res.status >= 400,
+});
+```
+
+`shouldCache` receives the serialized response entry, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject. It gates both storing a fresh response and serving a stored one, and a throwing hook fails closed (treated as non-cacheable) and is reported via `onError`.
+
 ### Cache Invalidation
 
 Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:
