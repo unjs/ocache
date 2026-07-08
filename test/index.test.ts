@@ -1723,6 +1723,51 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("cache-control")).toBe("public, max-age=600");
   });
 
+  it("suppresses cache-control synthesis when sendCacheControl is false (server-only caching)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 60, swr: true, staleMaxAge: 120, sendCacheControl: false },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // No cache-control is advertised to clients/CDNs...
+    expect(r1.headers.get("cache-control")).toBeNull();
+    expect(r2.headers.get("cache-control")).toBeNull();
+    // ...but the response is still stored and served from cache (only one handler run),
+    // and etag/last-modified are still synthesized.
+    expect(callCount).toBe(1);
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(r1.headers.get("etag")).toBeTruthy();
+    expect(r1.headers.get("last-modified")).toBeTruthy();
+  });
+
+  it("still sends an explicit handler cache-control when sendCacheControl is false", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "cache-control": "public, max-age=600" } }),
+      { maxAge: 60, sendCacheControl: false },
+    );
+
+    const res = (await handler(makeEvent(path))) as Response;
+    // sendCacheControl only governs ocache's own synthesis; a handler-set header is untouched.
+    expect(res.headers.get("cache-control")).toBe("public, max-age=600");
+  });
+
+  it("synthesizes cache-control by default (sendCacheControl defaults to true)", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 60 });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-control")).toBe("max-age=60");
+  });
+
   it("does not cache responses with Cache-Control: no-store", async () => {
     let callCount = 0;
     const path = uniquePath();
