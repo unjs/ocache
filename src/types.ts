@@ -93,7 +93,9 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * the serialized value — it is safe to consume a one-shot source such as a stream here.
    *
    * The second argument carries the `args` the cached function was called with (same
-   * shape as `validate`), so serialization can depend on the current call.
+   * shape as `validate`), plus `background`: `true` when this resolution is a
+   * stale-while-revalidate refresh the caller was **not** blocked on (it was already
+   * served the stale value), `false`/absent for a foreground miss the caller is waiting on.
    *
    * Note: `validate` always inspects the serialized (stored) shape — on write it runs
    * right after this hook, and on read it sees the entry as persisted.
@@ -105,7 +107,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * transform: (entry) => ({ ...entry.value, body: stringToStream(entry.value.body) }),
    * ```
    */
-  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => any;
+  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT; background?: boolean }) => any;
   /**
    * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
    * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
@@ -296,12 +298,45 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   toResponse?: (value: unknown, event: E) => Response | Promise<Response>;
 
   /**
+   * Stream the response body to the client while a copy is cached in the background.
+   *
+   * By default (`stream: false`) a cache MISS buffers the entire response body before
+   * anything is sent to the client — the client waits for the full read and the cache
+   * write. With `stream: true`, the body is `tee()`'d: one branch is handed to the client
+   * immediately (so time-to-first-byte isn't blocked on buffering or storage), while the
+   * other is drained in the background to build the stored entry. Cache HITs are served
+   * from the buffered entry exactly as before.
+   *
+   * Trade-offs of the streamed MISS response (the very first, uncached response):
+   * - it carries **no body-hash `etag`** (an etag can't be computed without buffering the
+   *   body first) — subsequent cache HITs, served from the stored entry, do carry one;
+   * - it is sent chunked, with no `Content-Length`, and its cache-status header reports `MISS`;
+   * - concurrent MISSes are **not** coalesced onto a single stream (a `ReadableStream` has
+   *   a single consumer), so the coalesced peers are served the buffered copy once the
+   *   background write lands;
+   * - a mid-stream failure can't be un-sent: the `200` and headers are already flushed, so
+   *   an upstream error partway through reaches the client as a truncated `200` (the
+   *   buffered path can still surface it as a `5xx`), and nothing is cached;
+   * - the cache is written entirely after the response is flushed, so on serverless the
+   *   runtime's `waitUntil` must reach `event.req` (forwarded through request narrowing) or
+   *   the instance may suspend before the entry is persisted.
+   *
+   * Only affects cacheable (`GET`/`HEAD`) responses that actually have a body; bypassed
+   * methods (e.g. `POST`) already stream their live response through untouched.
+   */
+  stream?: boolean;
+
+  /**
    * Create the final cached Response from serialized cache entry data. The body is a
    * `string` for text responses, a `Uint8Array` for cached binary responses (decoded
-   * from the stored base64), or `null` for empty/304 responses.
+   * from the stored base64), a `ReadableStream` for a streamed MISS response (when
+   * {@link stream} is enabled), or `null` for empty/304 responses.
    * Default: `new Response(body, init)`.
    */
-  createResponse?: (body: string | Uint8Array | null, init: ResponseInit) => Response;
+  createResponse?: (
+    body: string | Uint8Array | ReadableStream | null,
+    init: ResponseInit,
+  ) => Response;
 
   /**
    * Check conditional request headers (etag/if-modified-since).

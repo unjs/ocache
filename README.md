@@ -190,6 +190,34 @@ const handler = defineCachedHandler(myHandler, {
 
 `shouldCache` receives the serialized response entry, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject. It gates both storing a fresh response and serving a stored one, and a throwing hook fails closed (treated as non-cacheable) and is reported via `onError`.
 
+#### Streaming responses (`stream`)
+
+By default a cache MISS buffers the entire response body before anything reaches the client — the client waits for the full read _and_ the cache write. Set `stream: true` to hand the body to the client as it is produced: the body is `tee()`'d so one branch streams to the client immediately (time-to-first-byte is no longer blocked on buffering or storage) while the other is drained in the background to build the stored entry. Cache HITs are served from the buffered entry exactly as before.
+
+```ts
+const handler = defineCachedHandler(() => new Response(readableStreamFromUpstream()), {
+  maxAge: 60,
+  stream: true, // stream the MISS to the client, cache a copy in the background
+});
+```
+
+Useful for proxying or generating large binary/JSON payloads where you don't want to hold the whole body in memory before responding. It is opt-in rather than the default because the streamed MISS trades away several guarantees the buffered path gives you — decide per route.
+
+Response shape of the streamed MISS (only the very first, uncached response):
+
+- it carries **no body-hash `etag`** — an etag can't be computed without buffering the body first, so it is added only to the stored entry and therefore to subsequent cache HITs (`cache-control`, `last-modified`, `Vary`, and `Set-Cookie` stripping all still apply to the streamed response);
+- it is sent **chunked, with no `Content-Length`**, even for a fixed-size body;
+- its cache-status header always reports `MISS`;
+- concurrent cold MISSes are **not** streamed in parallel — a `ReadableStream` has a single consumer, so the coalesced peers are served the buffered copy once the background write lands.
+
+Operational tradeoffs to weigh:
+
+- **A mid-stream failure can't be un-sent.** The `200` status and headers are flushed before the body starts, so if the upstream stream errors partway through, the client receives a truncated `200` and nothing is cached. The buffered path reads the whole body first, so the same failure can still surface as a `5xx`. Prefer buffering for bodies whose production can fail.
+- **The cache is written entirely after the response is flushed.** On serverless, make sure the runtime's `waitUntil` reaches `event.req` (srvx/Cloudflare `ServerRequest`) — ocache forwards it through request narrowing, but if it is absent the instance may suspend before the background buffer-and-store completes and the entry is never persisted. On a long-running server this is a non-issue.
+- **Transient memory under a slow client.** The cache branch is drained at full speed regardless of how fast the client reads, so a slow client makes the yet-unread bytes queue in memory on top of what is being buffered for storage.
+
+Only cacheable (`GET`/`HEAD`) responses with a body are affected; bypassed methods (e.g. `POST`) already stream their live response through untouched.
+
 #### Incremental Static Regeneration (ISR)
 
 you can reproduce a similar ISR behavior with `defineCachedHandler`: serve a cached page instantly, regenerate it in the background after it goes stale, and keep serving the last-good version until the refresh lands:

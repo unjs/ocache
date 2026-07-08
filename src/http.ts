@@ -87,8 +87,15 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const _createResponse =
     opts.createResponse ||
-    ((body: string | Uint8Array | null, init: ResponseInit) =>
+    ((body: string | Uint8Array | ReadableStream | null, init: ResponseInit) =>
       new Response(body as BodyInit | null, init));
+
+  // Streaming handshake between the internal `serialize` hook (which owns the resolved
+  // `Response` and tees its body) and the outer wrapper (which serves the client). Keyed
+  // by the live event so a shared event can't cross handler instances. On a streamed MISS,
+  // `serialize` resolves the deferred with the client-facing branch before it buffers the
+  // other branch, letting the wrapper answer without waiting on the full read.
+  const _streamDeferreds = new WeakMap<HTTPEvent, StreamDeferred>();
 
   const _handleCacheHeaders = opts.handleCacheHeaders || _defaultHandleCacheHeaders;
 
@@ -128,31 +135,21 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // resolution (shared across deduplicated callers), so `res.arrayBuffer()`'s one-shot
     // consumption is safe. Kept out of the resolver so bypassed requests — which never
     // reach `serialize` — get their live `Response` back untouched.
-    serialize: async (entry) => {
+    serialize: async (entry, ctx) => {
       const res = entry.value as unknown as Response;
 
-      // Read the body once as raw bytes. A valid-UTF-8 body is stored verbatim as a
-      // string (unchanged behavior, so text etags stay stable); anything else (images,
-      // protobuf/MVT tiles, other binary Buffers) is base64-encoded and flagged, so the
-      // lossy `res.text()` UTF-8 decode can't mangle it and it survives JSON-serializing
-      // storage backends. Valid UTF-8 roundtrips losslessly through the string form, so
-      // the discriminator is byte validity, not the (spoofable/absent) content-type.
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      const text = _decodeUtf8(bytes);
-      const base64 = text === undefined;
-      const body = base64 ? _bytesToBase64(bytes) : text;
-
-      if (!res.headers.has("etag")) {
-        res.headers.set("etag", `W/"${hash(body)}"`);
-      }
-
+      // Synthesize the body-independent response headers first, so a streamed MISS
+      // response (handed to the client below, before the body is buffered) still carries
+      // them. `etag` is the exception — it hashes the body, so it is synthesized after
+      // buffering and therefore only decorates the *stored* entry (and thus cache HITs),
+      // never the initial streamed response, which can't be hashed without buffering.
       if (!res.headers.has("last-modified")) {
         res.headers.set("last-modified", new Date().toUTCString());
       }
 
       // Only synthesize a cache-control header when the handler did not set one
       // explicitly — never clobber an explicit cache-control with our SWR/s-maxage
-      // directives (mirrors the etag / last-modified "preserve if present" behavior above).
+      // directives (mirrors the etag / last-modified "preserve if present" behavior).
       // `sendCacheControl: false` opts out of synthesis entirely (server-only caching):
       // the entry is still stored/served with SWR/etag/last-modified, but no
       // cache-control is advertised to clients/CDNs — without the `no-store`/`private`
@@ -180,23 +177,23 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // Advertise the request headers this response varies on so downstream
       // caches/CDNs/browsers store a separate variant per value — merging with any
       // `Vary` the handler already set rather than clobbering it (mirrors the
-      // "preserve if present" behavior of the etag / last-modified / cache-control
-      // synthesis above).
+      // "preserve if present" behavior of the cache-control synthesis above).
       if (variableHeaderNames.length > 0) {
         _appendVary(res.headers, variableHeaderNames);
       }
 
       // Strip every Set-Cookie the allowlist doesn't cover BEFORE the headers are
-      // serialized, so a per-request cookie (e.g. a session id) can never reach a caller
-      // other than the one it was minted for — neither a future cache hit nor a
-      // concurrent, coalesced peer that shares this single resolution (issue #61). By
-      // default (no `allowCookies`) that drops every Set-Cookie: a shared cache must not
-      // carry per-client cookies, mirroring both the Cookie-request-header stripping on
-      // the way in and how CDNs / Varnish treat cacheable responses. The rest of the
-      // response is still cached. Prefer `getSetCookie()` so each cookie is inspected
-      // individually — `Object.fromEntries(headers.entries())` below collapses multiples
-      // to one. On runtimes without it we can't tell which cookies are present, so strip
-      // all of them (fail safe) rather than risk replaying one.
+      // serialized (and before the streaming tee below), so a per-request cookie (e.g. a
+      // session id) can never reach a caller other than the one it was minted for —
+      // neither a future cache hit, a concurrent coalesced peer sharing this resolution,
+      // nor the streamed MISS response (issue #61). By default (no `allowCookies`) that
+      // drops every Set-Cookie: a shared cache must not carry per-client cookies,
+      // mirroring both the Cookie-request-header stripping on the way in and how CDNs /
+      // Varnish treat cacheable responses. The rest of the response is still cached.
+      // Prefer `getSetCookie()` so each cookie is inspected individually —
+      // `Object.fromEntries(headers.entries())` below collapses multiples to one. On
+      // runtimes without it we can't tell which cookies are present, so strip all of them
+      // (fail safe) rather than risk replaying one.
       if (typeof res.headers.getSetCookie === "function") {
         const setCookies = res.headers.getSetCookie();
         const kept = setCookies.filter((c) => allowedCookieNames?.includes(_cookieName(c)));
@@ -208,6 +205,49 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         }
       } else if (res.headers.has("set-cookie")) {
         res.headers.delete("set-cookie");
+      }
+
+      // Streaming: hand a live branch of the body to the waiting client before buffering
+      // the other branch for storage, so the client isn't blocked on the full read. Gated
+      // on a foreground miss the client is actually waiting for (`!ctx.background`): a
+      // stale-while-revalidate refresh already served the caller its stale copy, so it
+      // must not hijack the response into a foreground stream (and mislabel it `MISS`).
+      // Also requires `stream`, a body, and this event's still-unsettled deferred. The
+      // check-and-settle is synchronous (no `await` between them), so exactly one tee
+      // happens per resolution, shared across all coalesced callers.
+      let bodySource: Response = res;
+      if (opts.stream && res.body && !ctx.background) {
+        const _event = ctx.args[0] as HTTPEvent | undefined;
+        const _deferred = _event && _streamDeferreds.get(_event);
+        if (_deferred && !_deferred.settled) {
+          _deferred.settled = true;
+          const [cacheBranch, clientBranch] = res.body.tee();
+          // Buffer the cache branch below; the client reads its own branch concurrently.
+          bodySource = new Response(cacheBranch);
+          _deferred.resolve({
+            body: clientBranch,
+            status: res.status,
+            statusText: res.statusText,
+            // Headers captured post-synthesis / post-cookie-strip but pre-etag.
+            headers: Object.fromEntries(res.headers.entries()),
+          });
+        }
+      }
+
+      // Read the body once as raw bytes (from the cache branch when streaming). A
+      // valid-UTF-8 body is stored verbatim as a string (unchanged behavior, so text
+      // etags stay stable); anything else (images, protobuf/MVT tiles, other binary
+      // Buffers) is base64-encoded and flagged, so the lossy `res.text()` UTF-8 decode
+      // can't mangle it and it survives JSON-serializing storage backends. Valid UTF-8
+      // roundtrips losslessly through the string form, so the discriminator is byte
+      // validity, not the (spoofable/absent) content-type.
+      const bytes = new Uint8Array(await bodySource.arrayBuffer());
+      const text = _decodeUtf8(bytes);
+      const base64 = text === undefined;
+      const body = base64 ? _bytesToBase64(bytes) : text;
+
+      if (!res.headers.has("etag")) {
+        res.headers.set("etag", `W/"${hash(body)}"`);
       }
 
       const cacheEntry: ResponseCacheEntry = {
@@ -365,6 +405,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         if ((originalReq as any).runtime) {
           (event.req as any).runtime = (originalReq as any).runtime;
         }
+        // Carry `waitUntil` across the narrowing rebuild — without this the background
+        // cache write (and, in `stream` mode, the entire buffer-and-store) would lose the
+        // runtime hook that keeps it alive on serverless, so the entry might never persist.
+        // Bound to the original request in case the runtime's implementation relies on it.
+        if (typeof (originalReq as any).waitUntil === "function") {
+          (event.req as any).waitUntil = (originalReq as any).waitUntil.bind(originalReq);
+        }
         if (allowedQueryNames && event.url) {
           (event as any).url = new URL(_reqUrl);
         }
@@ -378,28 +425,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     return _toResponse(rawValue, event as E);
   }, _opts);
 
-  return async (event) => {
-    // Headers-only mode
-    if (opts.headersOnly) {
-      if (_handleCacheHeaders(event, { maxAge: opts.maxAge })) {
-        return _createResponse(null, { status: 304 });
-      }
-      return handler(event);
-    }
-
-    // Call with cache
-    const cached = (await _cachedHandler(event))! as Response | ResponseCacheEntry;
-
-    // Bypassed requests (non-GET/HEAD, or a caller `shouldBypassCache`) resolve to the
-    // handler's live `Response`: `cachedFunction` returns the resolver output raw on the
-    // bypass path (no `serialize`/`transform`). Pass it straight through — no body
-    // buffering (streaming and binary bodies survive), no synthesized cache headers, and
-    // no bogus 304 for a method that was never cacheable.
-    if (cached instanceof Response) {
-      return cached;
-    }
-    const response = cached;
-
+  // Builds the servable Response from a stored `ResponseCacheEntry` (cache hit path):
+  // handles the 304 conditional short-circuit and decodes base64 binary bodies. Shared
+  // by the non-streaming path and the cache-hit branch of the streaming path.
+  const _serveEntry = (event: E, response: ResponseCacheEntry): Response => {
     // Check for cache headers
     if (
       _handleCacheHeaders(event, {
@@ -440,9 +469,104 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       headers: response.headers,
     });
   };
+
+  return async (event) => {
+    // Headers-only mode
+    if (opts.headersOnly) {
+      if (_handleCacheHeaders(event, { maxAge: opts.maxAge })) {
+        return _createResponse(null, { status: 304 });
+      }
+      return handler(event);
+    }
+
+    // Streaming mode: race the cached resolution against the streaming handshake. On a
+    // foreground MISS `serialize` tees the body and resolves the deferred (with the client
+    // branch) *before* it buffers the storage branch, so the deferred wins and we answer
+    // with a live stream while the store completes in the background. On a HIT `serialize`
+    // never runs, and on an SWR stale hit its background refresh doesn't tee (it's flagged
+    // `background`), so `_cachedHandler` (the buffered/stale entry) wins and we serve it
+    // normally. A bypassed method resolves `_cachedHandler` to the live `Response`, which
+    // also wins.
+    if (opts.stream) {
+      const deferred = _createDeferred();
+      _streamDeferreds.set(event, deferred);
+      const cachedP = _cachedHandler(event) as Promise<Response | ResponseCacheEntry | undefined>;
+
+      const outcome = await Promise.race([
+        cachedP.then((v) => ({ streamed: null as StreamSignal | null, cached: v })),
+        deferred.promise.then((s) => ({ streamed: s, cached: undefined })),
+      ]);
+
+      if (outcome.streamed) {
+        const s = outcome.streamed;
+        // Let the background buffer-and-store finish; `waitUntil` keeps it alive on
+        // serverless. The shared `catch` prevents an unhandled rejection if the stream or
+        // store errors after the client response was already handed off — and must be
+        // attached unconditionally, since `waitUntil?.(cachedP.catch(...))` would skip
+        // evaluating the argument (and thus the catch) whenever `waitUntil` is absent.
+        const bg = cachedP.catch(() => {});
+        event.req.waitUntil?.(bg);
+        const headers = { ...s.headers };
+        if (_statusHeader) {
+          headers[_statusHeader] = "MISS";
+        }
+        return _createResponse(s.body, {
+          status: s.status,
+          statusText: s.statusText,
+          headers,
+        });
+      }
+
+      // Served from cache, a stale SWR copy, or bypassed. `serialize` only tees for a
+      // foreground miss (never a background refresh — see `!ctx.background` there), and
+      // such a resolution always settles the deferred before `cachedP` — so reaching this
+      // branch means the deferred never fired and needs no cleanup.
+      const cached = outcome.cached!;
+      if (cached instanceof Response) {
+        return cached;
+      }
+      return _serveEntry(event, cached as ResponseCacheEntry);
+    }
+
+    // Call with cache
+    const cached = (await _cachedHandler(event))! as Response | ResponseCacheEntry;
+
+    // Bypassed requests (non-GET/HEAD, or a caller `shouldBypassCache`) resolve to the
+    // handler's live `Response`: `cachedFunction` returns the resolver output raw on the
+    // bypass path (no `serialize`/`transform`). Pass it straight through — no body
+    // buffering (streaming and binary bodies survive), no synthesized cache headers, and
+    // no bogus 304 for a method that was never cacheable.
+    if (cached instanceof Response) {
+      return cached;
+    }
+    return _serveEntry(event, cached);
+  };
 }
 
 // --- Internal helpers ---
+
+/** The live, client-facing branch of a streamed response, plus its response line/headers. */
+interface StreamSignal {
+  body: ReadableStream;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+}
+
+/** One-shot handshake for a streamed resolution. `settled` guards against a second tee. */
+interface StreamDeferred {
+  promise: Promise<StreamSignal>;
+  resolve: (signal: StreamSignal) => void;
+  settled: boolean;
+}
+
+function _createDeferred(): StreamDeferred {
+  let resolve!: (signal: StreamSignal) => void;
+  const promise = new Promise<StreamSignal>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve, settled: false };
+}
 
 // Fatal decoder so invalid UTF-8 throws (→ binary) instead of substituting replacement
 // characters. `ignoreBOM` keeps a leading BOM in the string so it re-encodes byte-for-byte,
