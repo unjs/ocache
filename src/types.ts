@@ -170,8 +170,19 @@ export interface ResponseCacheEntry {
   statusText: string | undefined;
   /** Response headers as a flat key-value record. */
   headers: Record<string, string>;
-  /** Response body as a string. */
+  /**
+   * Serialized response body. Text bodies are stored verbatim; bodies that aren't
+   * valid UTF-8 (images, protobuf, other binary payloads) are base64-encoded and
+   * flagged with {@link base64}, so they survive both the lossy `res.text()` decode
+   * and JSON-serializing storage backends. Always a string when set.
+   */
   body: string | undefined;
+  /**
+   * When `true`, {@link body} is base64-encoded raw bytes (a non-UTF-8 binary body).
+   * The read path decodes it back to a `Uint8Array` before rebuilding the Response.
+   * Absent for text bodies.
+   */
+  base64?: boolean;
 }
 
 /**
@@ -258,10 +269,12 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   toResponse?: (value: unknown, event: E) => Response | Promise<Response>;
 
   /**
-   * Create the final cached Response from serialized cache entry data.
+   * Create the final cached Response from serialized cache entry data. The body is a
+   * `string` for text responses, a `Uint8Array` for cached binary responses (decoded
+   * from the stored base64), or `null` for empty/304 responses.
    * Default: `new Response(body, init)`.
    */
-  createResponse?: (body: string | null, init: ResponseInit) => Response;
+  createResponse?: (body: string | Uint8Array | null, init: ResponseInit) => Response;
 
   /**
    * Check conditional request headers (etag/if-modified-since).

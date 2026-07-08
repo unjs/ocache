@@ -34,7 +34,8 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 ### HTTP handler caching (`http.ts`)
 
 - `defineCachedHandler<E extends HTTPEvent>(handler, opts)` — wraps an `EventHandler` with response caching (generic over event type)
-- Split along the `serialize` seam (built on `cache.ts`'s `cachedFunction<Response>`): the **resolver** narrows the request and returns the handler's live `Response`; the internal **`serialize`** hook consumes the body (`res.text()`), synthesizes `etag`/`last-modified`/`cache-control`/`Vary`, builds the stored `ResponseCacheEntry`, and sets the `_blockSetCookie` flag; **`transform`** reconstructs the servable shape and injects the cache-status header on read. `serialize`/`validate`/`transform` are `Omit`ted from the user-facing `CachedEventHandlerOptions` so internal use doesn't collide
+- Split along the `serialize` seam (built on `cache.ts`'s `cachedFunction<Response>`): the **resolver** narrows the request and returns the handler's live `Response`; the internal **`serialize`** hook consumes the body (`res.arrayBuffer()`), synthesizes `etag`/`last-modified`/`cache-control`/`Vary`, builds the stored `ResponseCacheEntry`, and sets the `_blockSetCookie` flag; **`transform`** reconstructs the servable shape and injects the cache-status header on read. `serialize`/`validate`/`transform` are `Omit`ted from the user-facing `CachedEventHandlerOptions` so internal use doesn't collide
+- Binary responses: `serialize` reads the body as bytes and decides by **byte validity, not content-type** — a valid-UTF-8 body (fatal `TextDecoder` with `ignoreBOM`, lossless roundtrip) is stored verbatim as a string (unchanged text behavior, stable text etags); anything else (images, protobuf/MVT tiles, arbitrary binary) is base64-encoded and flagged `base64: true` on the `ResponseCacheEntry`. Base64 (not a raw `Uint8Array`) so binary bodies survive JSON-serializing storage backends. On read, a `base64` entry is decoded back to a `Uint8Array` before `createResponse`, so the exact bytes replay untouched. `createResponse` therefore receives `string | Uint8Array | null` (widened from `string | null`)
 - Auto-generates cache keys from URL path + variable headers
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
 - Sets `cache-control`, `etag`, `last-modified` headers — but never clobbers an explicit `cache-control` set by the handler (SWR/`s-maxage`/`max-age` directives are only synthesized when the handler didn't set one)
@@ -64,7 +65,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - `CacheOptions<T>` — maxAge, swr, staleMaxAge, getMaxAge (dynamic per-entry TTL hook), serialize (write-time hook, mirrors `transform`), base (string | string[] for multi-tier), getKey, validate, transform, etc.
 - `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
 - `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
-- `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
+- `ResponseCacheEntry` — serialized response (status, statusText, headers, body; optional `base64` flag when `body` is base64-encoded binary)
 
 ## Dependencies
 
