@@ -61,7 +61,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   // Non-GET/HEAD requests skip the cache entirely. Shared between the
   // `shouldBypassCache` option and the resolver so the request-narrowing
-  // step below can't disagree with the bypass decision.
+  // step below can't disagree with the bypass decision. This is the built-in
+  // method check only — a caller's `opts.shouldBypassCache` is composed on top
+  // of it in `_opts` below, never in place of it.
   const _shouldBypassCache = (event: HTTPEvent) =>
     event.req.method !== "GET" && event.req.method !== "HEAD";
 
@@ -114,7 +116,16 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
           };
         }
       : undefined,
-    shouldBypassCache: _shouldBypassCache,
+    // Compose the built-in non-GET/HEAD bypass with the caller's opt-in check
+    // instead of clobbering it: bypass when either says so. A bare `...opts`
+    // spread already carried `opts.shouldBypassCache`, but assigning the
+    // built-in here used to silently discard it (issue #50).
+    shouldBypassCache: async (event: HTTPEvent) => {
+      if (_shouldBypassCache(event)) {
+        return true;
+      }
+      return (await opts.shouldBypassCache?.(event as E)) === true;
+    },
     getKey: async (event: HTTPEvent) => {
       // Custom user-defined key
       const customKey = await opts.getKey?.(event as E);
