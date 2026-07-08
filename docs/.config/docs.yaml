@@ -1,8 +1,8 @@
 # yaml-language-server: $schema=https://unpkg.com/undocs/schema/config.json
 name: ocache
 url: https://ocache.unjs.io
-shortDescription: Standalone caching utilities
-description: Standalone caching utilities with TTL, SWR, and HTTP response caching. Zero framework dependencies.
+shortDescription: Composable caching primitives
+description: Composable caching primitives for functions and HTTP responses — TTL, stale-while-revalidate, and request deduplication, in any runtime.
 
 themeColor: cyan
 automd: true
