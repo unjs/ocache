@@ -83,8 +83,15 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
    * that need to check the cached value against an external source (e.g. fetching a
    * signed URL to confirm it is still valid).
+   *
+   * The second argument carries the `args` the cached function was called with, so the
+   * entry can be validated against the current call (e.g. comparing a request parameter
+   * against `entry.mtime`).
    */
-  validate?: (entry: CacheEntry<T>, ...args: ArgsT) => boolean | Promise<boolean>;
+  validate?: (
+    entry: CacheEntry<T>,
+    ctx: { args: ArgsT },
+  ) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is invalidated and the function is re-invoked. */
   shouldInvalidateCache?: (...args: ArgsT) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is bypassed entirely and the function is called directly. */
