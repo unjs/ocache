@@ -4,7 +4,7 @@ url: https://ocache.unjs.io
 shortDescription: Standalone caching utilities
 description: Standalone caching utilities with TTL, SWR, and HTTP response caching. Zero framework dependencies.
 
-themeColor: yellow
+themeColor: cyan
 automd: true
 
 github: unjs/ocache
