@@ -55,9 +55,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   async function get(
     key: string,
     resolver: () => T | Promise<T>,
+    args: ArgsT,
     shouldInvalidateCache?: boolean,
     event?: HTTPEvent,
   ): Promise<ResolvedCacheEntry<T>> {
+    const validateCtx = { args };
     // Use extension for key to avoid conflicting with parent namespace (foo/bar and foo/bar/baz)
     const bases = _normalizeBases(opts.base);
 
@@ -122,7 +124,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     // decision below (same entry state, so re-validating would just repeat work).
     // `validate` may be async (e.g. checking the cached value against an external source),
     // so await it here. A sync return is fine too — `await` on a non-promise is a no-op.
-    const _isValid = (await validate(entry)) !== false;
+    const _isValid = (await validate(entry, validateCtx)) !== false;
 
     const expired =
       shouldInvalidateCache ||
@@ -204,7 +206,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             _onError("[cache] getMaxAge hook error.", error);
           }
         }
-        if ((await validate(entry)) !== false) {
+        if ((await validate(entry, validateCtx)) !== false) {
           // Per-entry TTL (from the `getMaxAge` hook) falls back to static options when not provided.
           const writeMaxAge = entry.maxAge ?? opts.maxAge;
           const writeStaleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
@@ -274,7 +276,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       configurable: true,
     });
 
-    if (swr && (await validate(entry)) !== false) {
+    if (swr && (await validate(entry, validateCtx)) !== false) {
       _resolvePromise.catch((error) => {
         _onError("[cache] SWR handler error.", error);
       });
@@ -294,6 +296,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const entry = await get(
       key,
       () => fn(...args),
+      args,
       shouldInvalidateCache,
       isHTTPEvent(args[0]) ? args[0] : undefined,
     );
@@ -487,7 +490,9 @@ function _remainingTtl(
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
-function _integrityOpts(opts: CacheOptions): Omit<CacheOptions, "base" | "group" | "name"> {
+function _integrityOpts(
+  opts: CacheOptions<any, any>,
+): Omit<CacheOptions, "base" | "group" | "name"> {
   const { base: _, group: _g, name: _n, ...rest } = opts;
   return rest;
 }
