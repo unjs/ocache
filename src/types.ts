@@ -97,7 +97,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   maxAge?: number;
   /** Enable stale-while-revalidate behavior. When `true`, returns stale cache while refreshing in the background. Defaults to `true`. */
   swr?: boolean;
-  /** Maximum number of seconds a stale entry can be served while revalidating. */
+  /** Maximum number of seconds a stale entry can be served while revalidating. `0` means stale is never served — once expired, revalidation blocks the request. */
   staleMaxAge?: number;
   /**
    * Derive the per-entry cache lifetime from the resolved value. Runs after the resolver and before
@@ -164,6 +164,31 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   headersOnly?: boolean;
   /** Request header names that should vary the cache key (e.g., `["accept-language"]`). */
   varies?: string[] | readonly string[];
+
+  /**
+   * Opt in to honoring the freshness directives on the handler (upstream) response's
+   * `Cache-Control` header when deriving the per-entry cache lifetime.
+   *
+   * The response's `Cache-Control` is parsed with shared-cache semantics (RFC 9111 / 5861):
+   * - `s-maxage` (preferred) or `max-age` → `maxAge`
+   * - `stale-while-revalidate` → `staleMaxAge`
+   * - `s-maxage` implies `proxy-revalidate`: without an explicit `stale-while-revalidate`,
+   *   `staleMaxAge` is forced to `0` — once stale (immediately for `s-maxage=0`), the entry
+   *   is revalidated in the foreground instead of being served stale
+   * - `no-cache` → the response is never cached (the handler runs on every request)
+   *
+   * An upstream directive takes precedence for its field — it can shorten *or* extend the
+   * configured lifetime. Absent directives fall back to {@link CacheOptions.getMaxAge} when
+   * you supply one, then to the static `maxAge` / `staleMaxAge`. Only a `Cache-Control` set
+   * by the handler itself counts as upstream — the header synthesized from the static
+   * options is never parsed back.
+   *
+   * `no-store` / `private` are always honored independently (such responses are never
+   * cached) regardless of this flag.
+   *
+   * @default false
+   */
+  honorCacheControl?: boolean;
 
   /**
    * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).

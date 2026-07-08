@@ -111,6 +111,31 @@ const handler = defineCachedHandler(myHandler, {
 > [!NOTE]
 > This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
 
+#### Honoring upstream freshness headers
+
+By default the cache lifetime comes from the configured `maxAge` / `staleMaxAge` options. Opt in with `honorCacheControl: true` to also honor the freshness directives on the handler (upstream) response's `Cache-Control` header — useful when proxying an origin that already advertises how long its responses stay fresh:
+
+```ts
+const handler = defineCachedHandler(
+  async (event) => fetch(upstreamURL(event)), // origin sets its own Cache-Control
+  {
+    maxAge: 60, // fallback when the response has no freshness directive
+    honorCacheControl: true,
+  },
+);
+```
+
+The response's `Cache-Control` is parsed with shared-cache semantics ([RFC 9111](https://www.rfc-editor.org/rfc/rfc9111) / [RFC 5861](https://www.rfc-editor.org/rfc/rfc5861)):
+
+- `s-maxage` (preferred) or `max-age` → `maxAge`
+- `stale-while-revalidate` → `staleMaxAge`
+- `s-maxage` implies `proxy-revalidate` (RFC 9111 §5.2.2.10): without an explicit `stale-while-revalidate`, the stale window is zero — once stale (immediately for `s-maxage=0`), the entry is revalidated in the foreground instead of being served stale
+- `no-cache` → the response is never cached (the handler runs on every request)
+
+An upstream directive takes precedence for its field — it can shorten _or_ extend the configured lifetime. Absent directives fall back to [`getMaxAge`](#dynamic-ttl) when you supply one, then to the configured `maxAge` / `staleMaxAge`. Only a `Cache-Control` set by the handler itself counts as upstream — the header synthesized from the static options is never parsed back.
+
+`no-store` / `private` are always honored regardless of this flag (such responses are never stored).
+
 ### Cache Invalidation
 
 Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:

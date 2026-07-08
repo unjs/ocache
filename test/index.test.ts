@@ -1343,6 +1343,302 @@ describe("defineCachedHandler", () => {
     expect(r2.headers.get("x-cache")).toBe("HIT");
   });
 
+  describe("honorCacheControl", () => {
+    it("uses the response's shorter s-maxage over the configured maxAge", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "public, s-maxage=10" } }),
+        { maxAge: 1000, swr: false, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // Configured maxAge is 1000, but the response's s-maxage=10 wins.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 10 });
+    });
+
+    it("upstream freshness can extend past the configured maxAge (no clamping)", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=1000" } }),
+        { maxAge: 10, swr: false, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // The upstream directive wins for its field — the configured maxAge: 10 is only a fallback.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 1000 });
+    });
+
+    it("works with bare `honorCacheControl: true` (default maxAge does not cap upstream)", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=60" } }),
+        { swr: false, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // No maxAge configured: the default (1s) must not shadow the upstream s-maxage=60.
+      expect(setSpy.mock.calls.at(-1)?.[1]).toMatchObject({ maxAge: 60 });
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 60 });
+    });
+
+    it("keeps serving upstream-extended entries past the configured maxAge", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "s-maxage=60" } });
+        },
+        { maxAge: 0.05, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+      // Past the configured 50ms maxAge, but well within the upstream s-maxage=60.
+      await new Promise((r) => setTimeout(r, 100));
+      const res = (await handler(makeEvent(path))) as Response;
+
+      expect(callCount).toBe(1);
+      expect(res.headers.get("x-cache")).toBe("HIT");
+    });
+
+    it("prefers s-maxage over max-age (shared-cache semantics)", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () =>
+          new Response("ok", {
+            headers: { "cache-control": "max-age=1, s-maxage=100, stale-while-revalidate=50" },
+          }),
+        { maxAge: 1000, swr: true, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // s-maxage=100 (not max-age=1) drives maxAge; stale-while-revalidate=50 → staleMaxAge.
+      // Storage TTL covers maxAge + staleMaxAge (100 + 50).
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 150 });
+    });
+
+    it("really honors no-cache: never serves a cached body", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            headers: { "cache-control": "no-cache" },
+          });
+        },
+        { maxAge: 60, honorCacheControl: true },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // Every request must reach the handler AND get the fresh body — a stale body
+      // served under SWR would keep callCount at 2 but return "body-1" twice.
+      expect(callCount).toBe(2);
+      expect(await r1.text()).toBe("body-1");
+      expect(await r2.text()).toBe("body-2");
+      expect(r1.headers.get("x-cache")).toBe("MISS");
+      expect(r2.headers.get("x-cache")).toBe("MISS");
+    });
+
+    it("honors s-maxage=0 (implied proxy-revalidate): never serves a cached body", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            headers: { "cache-control": "s-maxage=0" },
+          });
+        },
+        { maxAge: 60, staleMaxAge: 300, honorCacheControl: true },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // RFC 9111 §5.2.2.10: s-maxage implies proxy-revalidate — the response is
+      // immediately stale and must be revalidated before every reuse. The default
+      // SWR mode must not serve the previous body.
+      expect(callCount).toBe(2);
+      expect(await r1.text()).toBe("body-1");
+      expect(await r2.text()).toBe("body-2");
+    });
+
+    it("s-maxage without stale-while-revalidate never serves stale once expired", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            headers: { "cache-control": "s-maxage=0.05" },
+          });
+        },
+        { staleMaxAge: 300, honorCacheControl: true },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      await new Promise((r) => setTimeout(r, 100));
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // Past the 50ms freshness with no stale-while-revalidate grant: the implied
+      // proxy-revalidate forces a blocking revalidation (fresh body), even though the
+      // configured staleMaxAge: 300 would otherwise allow serving stale.
+      expect(callCount).toBe(2);
+      expect(await r1.text()).toBe("body-1");
+      expect(await r2.text()).toBe("body-2");
+    });
+
+    it("explicit stale-while-revalidate grants stale serving alongside s-maxage", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            headers: { "cache-control": "s-maxage=0.05, stale-while-revalidate=300" },
+          });
+        },
+        { honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+      await new Promise((r) => setTimeout(r, 100));
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // Within the explicit stale-while-revalidate window: RFC 5861 permits serving
+      // the stale body while revalidating in the background.
+      expect(await r2.text()).toBe("body-1");
+      expect(r2.headers.get("x-cache")).toBe("STALE");
+      expect(callCount).toBe(2);
+    });
+
+    it("falls back to the configured maxAge when the response has no freshness directive", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "public" } });
+        },
+        { maxAge: 60, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+
+      // No max-age/s-maxage on the response → configured maxAge: 60 keeps it cached.
+      expect(callCount).toBe(1);
+    });
+
+    it("treats an empty directive value as absent (falls back to configured)", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "public, max-age=" } });
+        },
+        { maxAge: 60, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+
+      // Malformed `max-age=` must not parse as 0 (which would disable caching).
+      expect(callCount).toBe(1);
+    });
+
+    it("is off by default (configured options win, upstream freshness ignored)", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok", { headers: { "cache-control": "s-maxage=0" } });
+        },
+        { maxAge: 60 },
+      );
+
+      await handler(makeEvent(path));
+      await handler(makeEvent(path));
+
+      // Flag not set: the s-maxage=0 on the response is ignored, configured maxAge: 60 caches it.
+      expect(callCount).toBe(1);
+    });
+
+    it("upstream directives take precedence over getMaxAge", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=100" } }),
+        { swr: false, honorCacheControl: true, getMaxAge: () => 5 },
+      );
+
+      await handler(makeEvent(path));
+
+      // The response set its own freshness (100) — getMaxAge (5) is only a fallback.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 100 });
+    });
+
+    it("falls back to getMaxAge when the response sets no Cache-Control", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(() => new Response("ok"), {
+        swr: false,
+        honorCacheControl: true,
+        getMaxAge: () => 3600,
+      });
+
+      await handler(makeEvent(path));
+
+      // The cache-control synthesized from the static options (max-age=1 here) must not
+      // be parsed back as "upstream" — getMaxAge (3600) drives the entry.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 3600 });
+    });
+
+    it("still applies upstream directives when getMaxAge throws", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      const onError = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=10" } }),
+        {
+          maxAge: 3600,
+          swr: false,
+          honorCacheControl: true,
+          getMaxAge: () => {
+            throw new Error("boom");
+          },
+          onError,
+        },
+      );
+
+      await handler(makeEvent(path));
+
+      // The user hook failing must not disable honoring — the upstream 10s still applies.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 10 });
+      expect(onError).toHaveBeenCalledOnce();
+    });
+  });
+
   it("auto-generates etag and last-modified", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("test-body"), { maxAge: 10 });

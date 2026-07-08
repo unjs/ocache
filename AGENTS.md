@@ -36,6 +36,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - Handles `304 Not Modified` via `if-none-match`/`if-modified-since`
 - Sets `cache-control`, `etag`, `last-modified` headers — but never clobbers an explicit `cache-control` set by the handler (SWR/`s-maxage`/`max-age` directives are only synthesized when the handler didn't set one)
 - Honors explicit `Cache-Control: no-store` / `private` on the response — those are never cached (rejected in `validate`), though still returned to the caller. This only governs storage: concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`)
+- `honorCacheControl` option (opt-in, default off) — honor the freshness directives on the handler (upstream) response's `Cache-Control` (`s-maxage` preferred over `max-age` → `maxAge`, `stale-while-revalidate` → `staleMaxAge`) when deriving the per-entry TTL. An upstream directive wins for its field (no clamping — it can shorten or extend); absent fields fall back to the user's `getMaxAge`, then the static `maxAge`/`staleMaxAge`. Per RFC 9111 §5.2.2.10, `s-maxage` implies `proxy-revalidate`: without an explicit `stale-while-revalidate`, `staleMaxAge` is forced to `0` (once stale — immediately for `s-maxage=0` — revalidation is blocking, never served stale). Only a handler-set `Cache-Control` counts as upstream: the resolver parses it _before_ the synthesized header is added and stashes it in a per-handler `WeakMap` keyed by response value, so the header synthesized from static options is never parsed back. `no-cache` is honored by never caching the response (rejected in `validate`, like `no-store`) — the handler runs on every request. `no-store` / `private` handling is independent (always honored)
 - Filters non-variable headers before calling the handler (for consistent cache keys)
 - Framework integration hooks on `CachedEventHandlerOptions`:
   - `toResponse(value, event)` — convert handler return value to Response (default: plain Response constructor)
@@ -55,7 +56,7 @@ Never touch contents inside `<!-- automd -->` in README.md. They are auto genera
 - `EventHandler<E>` — `(event: E) => unknown | Promise<unknown>` (generic, defaults to HTTPEvent)
 - `CacheEntry<T>` — stored cache entry with value, expires, mtime, integrity
 - `CacheOptions<T>` — maxAge, swr, staleMaxAge, getMaxAge (dynamic per-entry TTL hook), base (string | string[] for multi-tier), getKey, validate, transform, etc.
-- `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, toResponse, createResponse, handleCacheHeaders
+- `CachedEventHandlerOptions<E>` — extends CacheOptions with headersOnly, varies, honorCacheControl, toResponse, createResponse, handleCacheHeaders
 - `CacheConditions` — `{ modifiedTime?, maxAge?, etag? }` passed to handleCacheHeaders hook
 - `ResponseCacheEntry` — serialized response (status, statusText, headers, body)
 
