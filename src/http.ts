@@ -219,6 +219,15 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
     }
 
+    // Advertise the request headers this response varies on so downstream
+    // caches/CDNs/browsers store a separate variant per value — merging with any
+    // `Vary` the handler already set rather than clobbering it (mirrors the
+    // "preserve if present" behavior of the etag / last-modified / cache-control
+    // synthesis above).
+    if (variableHeaderNames.length > 0) {
+      _appendVary(res.headers, variableHeaderNames);
+    }
+
     const cacheEntry: ResponseCacheEntry = {
       status: res.status,
       statusText: res.statusText,
@@ -283,6 +292,38 @@ function _filterSearch(url: URL, names: string[]): string {
   }
   const query = filtered.toString();
   return query ? `?${query}` : "";
+}
+
+/**
+ * Merges `names` into the response's `Vary` header, preserving any header names the
+ * handler already declared and deduplicating case-insensitively. A wildcard
+ * (`Vary: *`) is left untouched since it already varies on everything.
+ */
+function _appendVary(headers: Headers, names: string[]): void {
+  const existing = headers.get("vary");
+  if (existing?.trim() === "*") {
+    return;
+  }
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  const add = (raw: string) => {
+    const name = raw.trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(name);
+  };
+  if (existing) {
+    for (const part of existing.split(",")) {
+      add(part);
+    }
+  }
+  for (const name of names) {
+    add(name);
+  }
+  headers.set("vary", merged.join(", "));
 }
 
 /**

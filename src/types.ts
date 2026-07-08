@@ -166,7 +166,11 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
 > {
   /** When `true`, only handles conditional headers (304 responses) without full response caching. */
   headersOnly?: boolean;
-  /** Request header names that should vary the cache key (e.g., `["accept-language"]`). */
+  /**
+   * Request header names that should vary the cache key (e.g., `["accept-language"]`).
+   * These names are also merged into the response's `Vary` header so downstream
+   * caches/CDNs/browsers store a separate variant per value.
+   */
   varies?: string[] | readonly string[];
 
   /**

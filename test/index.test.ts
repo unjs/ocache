@@ -1571,6 +1571,54 @@ describe("defineCachedHandler", () => {
     expect(await r2.text()).toBe("call-2");
   });
 
+  it("emits a Vary response header for configured varies", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      varies: ["Accept-Language", "X-Custom"],
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("vary")).toBe("accept-language, x-custom");
+
+    // Served from cache on the next request with the same variant
+    const cached = (await handler(makeEvent(path))) as Response;
+    expect(cached.headers.get("vary")).toBe("accept-language, x-custom");
+  });
+
+  it("does not emit a Vary header when varies is empty", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("vary")).toBe(null);
+  });
+
+  it("merges configured varies into a handler-set Vary without duplicates", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () =>
+        new Response("ok", {
+          headers: { vary: "User-Agent, Accept-Language" },
+        }),
+      { maxAge: 10, varies: ["accept-language", "x-custom"] },
+    );
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("vary")).toBe("User-Agent, Accept-Language, x-custom");
+  });
+
+  it("leaves a wildcard Vary header untouched", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok", { headers: { vary: "*" } }), {
+      maxAge: 10,
+      varies: ["accept-language"],
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("vary")).toBe("*");
+  });
+
   it("only varies the cache key by allowlisted query params (allowQuery)", async () => {
     let callCount = 0;
     const path = uniquePath();
