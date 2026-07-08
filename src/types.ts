@@ -78,8 +78,13 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * how the value was served on this call — useful for metrics or conditional logic.
    */
   transform?: (entry: CacheEntry<T>, ...args: ArgsT) => any;
-  /** Validate a cache entry. Return `false` to treat the entry as invalid and re-resolve. */
-  validate?: (entry: CacheEntry<T>, ...args: ArgsT) => boolean;
+  /**
+   * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
+   * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
+   * that need to check the cached value against an external source (e.g. fetching a
+   * signed URL to confirm it is still valid).
+   */
+  validate?: (entry: CacheEntry<T>, ...args: ArgsT) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is invalidated and the function is re-invoked. */
   shouldInvalidateCache?: (...args: ArgsT) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is bypassed entirely and the function is called directly. */
