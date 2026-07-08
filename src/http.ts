@@ -121,7 +121,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         .map(([name, value]) => `${escapeKey(name as string)}.${hash(value)}`);
       return [_hashedPath, ..._headers].join(":");
     },
-    validate: async (entry, ctx) => {
+    validate: async (entry) => {
       if (!entry.value) {
         return false;
       }
@@ -148,7 +148,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // the request — the response is still served, just not stored/served-from-cache.
       if (opts.shouldCache) {
         try {
-          if ((await opts.shouldCache(entry.value, ctx.args[0] as E)) === false) {
+          if ((await opts.shouldCache(entry.value)) === false) {
             return false;
           }
         } catch (error) {

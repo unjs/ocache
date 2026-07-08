@@ -1406,20 +1406,20 @@ describe("defineCachedHandler", () => {
     expect(r2.headers.get("x-cache")).toBe("HIT");
   });
 
-  it("shouldCache receives the response entry and event, and supports async", async () => {
-    const seen: Array<{ status: number; url: string }> = [];
+  it("shouldCache receives the response entry and supports async", async () => {
+    const seen: Array<{ status: number; body: string | undefined }> = [];
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
       maxAge: 10,
-      shouldCache: async (res, event) => {
-        seen.push({ status: res.status, url: new URL(event.req.url).pathname });
+      shouldCache: async (res) => {
+        seen.push({ status: res.status, body: res.body });
         return true;
       },
     });
 
     await handler(makeEvent(path));
 
-    expect(seen).toContainEqual({ status: 200, url: path });
+    expect(seen).toContainEqual({ status: 200, body: "ok" });
   });
 
   it("shouldCache cannot force-cache a response the built-in checks reject", async () => {

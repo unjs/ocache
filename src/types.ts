@@ -218,17 +218,15 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * `Cache-Control: no-store`/`private`, missing bodies, and absent
    * `etag`/`last-modified`). Return `false` (or a Promise resolving to `false`)
    * to treat the response as non-cacheable; it is still returned to the caller,
-   * just not stored. Receives the serialized response entry and the event.
+   * just not stored. Receives the serialized response entry.
    *
    * Because it is ANDed with the built-ins, it can only *narrow* what gets
    * cached — it cannot force-cache a response the built-in checks reject.
    *
    * Note it gates both storing a fresh response **and** serving a stored one, so
    * it also runs on cache reads (including the stale-while-revalidate serve
-   * decision) — prefer basing the decision on the response `entry`, since the
-   * `event` may reflect either the original or the internally header/query-filtered
-   * request depending on the code path. Keep it fast; a throwing hook fails closed
-   * (treated as non-cacheable) and is reported via `onError`.
+   * decision). Keep it fast and pure (decide only from `entry`); a throwing hook
+   * fails closed (treated as non-cacheable) and is reported via `onError`.
    *
    * @example
    * ```ts
@@ -236,5 +234,5 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * shouldCache: (res) => res.status < 300 || res.status >= 400,
    * ```
    */
-  shouldCache?: (entry: ResponseCacheEntry, event: E) => boolean | Promise<boolean>;
+  shouldCache?: (entry: ResponseCacheEntry) => boolean | Promise<boolean>;
 }
