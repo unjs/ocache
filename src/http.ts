@@ -1,10 +1,11 @@
 import { hash } from "ohash";
-import { cachedFunction } from "./cache.ts";
+import { cachedFunction, _handleCacheError, _normalizeMaxAge } from "./cache.ts";
 
 import type {
   HTTPEvent,
   EventHandler,
   CacheEntry,
+  CacheEntryTtl,
   CacheOptions,
   CachedEventHandlerOptions,
   CacheConditions,
@@ -82,7 +83,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   // response value. Populated in the resolver *before* the synthesized cache-control is
   // added, so `honorCacheControl` only ever honors a real upstream header — never the
   // one synthesized below from the static options.
-  const _upstreamTtl = new WeakMap<ResponseCacheEntry, { maxAge?: number; staleMaxAge?: number }>();
+  const _upstreamTtl = new WeakMap<ResponseCacheEntry, CacheEntryTtl>();
 
   const _opts: CacheOptions<ResponseCacheEntry> = {
     ...opts,
@@ -139,16 +140,15 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       if (!entry.value) {
         return false;
       }
-      // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
-      if (_forbidsSharedCaching(entry.value.headers?.["cache-control"])) {
+      const cacheControl = _parseCacheControlDirectives(entry.value.headers?.["cache-control"]);
+      // Honor an explicit `Cache-Control: no-store` / `private` on the response — such
+      // responses must never be stored in a shared cache.
+      if (cacheControl?.has("no-store") || cacheControl?.has("private")) {
         return false;
       }
       // With honorCacheControl, `no-cache` gets the same treatment: without conditional
       // revalidation machinery, "revalidate on every use" means never serving from cache.
-      if (
-        opts.honorCacheControl &&
-        _parseCacheControlDirectives(entry.value.headers?.["cache-control"])?.has("no-cache")
-      ) {
+      if (opts.honorCacheControl && cacheControl?.has("no-cache")) {
         return false;
       }
       if (entry.value.status >= 400) {
@@ -338,15 +338,6 @@ function _parseCacheControlDirectives(
 }
 
 /**
- * Whether a `Cache-Control` header value explicitly forbids storing the response in a
- * shared cache — `no-store` (never store anywhere) or `private` (not in a shared cache).
- */
-function _forbidsSharedCaching(cacheControl: unknown): boolean {
-  const directives = _parseCacheControlDirectives(cacheControl);
-  return directives !== undefined && (directives.has("no-store") || directives.has("private"));
-}
-
-/**
  * `getMaxAge` implementation for `honorCacheControl`: derives the per-entry lifetime from
  * the freshness directives the handler (upstream) response set on its own `Cache-Control`.
  *
@@ -358,22 +349,18 @@ function _forbidsSharedCaching(cacheControl: unknown): boolean {
 async function _honorCacheControlMaxAge<E extends HTTPEvent>(
   entry: CacheEntry<ResponseCacheEntry>,
   opts: CachedEventHandlerOptions<E>,
-  upstreamTtl: WeakMap<ResponseCacheEntry, { maxAge?: number; staleMaxAge?: number }>,
-): Promise<{ maxAge?: number; staleMaxAge?: number }> {
+  upstreamTtl: WeakMap<ResponseCacheEntry, CacheEntryTtl>,
+): Promise<CacheEntryTtl> {
   const upstream = entry.value ? upstreamTtl.get(entry.value) : undefined;
-  let dynamic: { maxAge?: number; staleMaxAge?: number } | undefined;
-  if (opts.getMaxAge) {
+  let dynamic: CacheEntryTtl | undefined;
+  // The hook can only fill fields the upstream directives left undefined — skip the
+  // (possibly expensive) call entirely when there is nothing left to fill.
+  if (opts.getMaxAge && (upstream?.maxAge === undefined || upstream?.staleMaxAge === undefined)) {
     try {
-      const resolved = await opts.getMaxAge(entry);
-      // A bare number is shorthand for `{ maxAge }` (mirrors cache.ts).
-      dynamic = typeof resolved === "number" ? { maxAge: resolved } : resolved;
+      dynamic = _normalizeMaxAge(await opts.getMaxAge(entry));
     } catch (error) {
       // Isolate user-hook failures (as cache.ts does) so upstream directives still apply.
-      if (opts.onError) {
-        opts.onError(error);
-      } else {
-        console.error("[cache] getMaxAge hook error.", error);
-      }
+      _handleCacheError(opts, "[cache] getMaxAge hook error.", error);
     }
   }
   return {
@@ -387,29 +374,37 @@ async function _honorCacheControlMaxAge<E extends HTTPEvent>(
  * TTL overrides for the `getMaxAge` hook, using shared-cache semantics:
  * - `s-maxage` takes precedence over `max-age` for `maxAge`
  * - `stale-while-revalidate` maps to `staleMaxAge`
- * - `s-maxage` without `stale-while-revalidate` forces `staleMaxAge: 0` — per RFC 9111
- *   §5.2.2.10 `s-maxage` implies `proxy-revalidate`, so once stale the response must be
- *   revalidated before reuse (never served stale). An explicit `stale-while-revalidate`
- *   (RFC 5861) is the origin's in-protocol permission to serve stale and wins when present.
+ * - serving stale requires explicit permission (RFC 9111 §4.2.4), and
+ *   `stale-while-revalidate` (RFC 5861) is that in-protocol permission. So an upstream
+ *   freshness lifetime *without* a `stale-while-revalidate` directive forces
+ *   `staleMaxAge: 0` — once stale, the response is revalidated before reuse (never
+ *   served stale). An explicit `must-revalidate` / `proxy-revalidate` forces the same
+ *   even when `stale-while-revalidate` is present (RFC 5861 does not override them);
+ *   `s-maxage` implies `proxy-revalidate` (RFC 9111 §5.2.2.10).
  *
  * Returns `undefined` when no relevant directive is present. A directive present but
  * without a numeric value (e.g. bare `stale-while-revalidate`, `max-age=`) yields
- * `undefined` for that field alone. `no-cache` is handled in `validate` instead —
- * such responses are never cached at all.
+ * `undefined` for that field alone — a bare `stale-while-revalidate` still counts as
+ * permission to serve stale, with the window falling back to `getMaxAge` / the static
+ * options. `no-cache` is handled in `validate` instead — such responses are never
+ * cached at all.
  */
-function _parseCacheControlTtl(
-  cacheControl: unknown,
-): { maxAge?: number; staleMaxAge?: number } | undefined {
+function _parseCacheControlTtl(cacheControl: unknown): CacheEntryTtl | undefined {
   const directives = _parseCacheControlDirectives(cacheControl);
   if (!directives) {
     return undefined;
   }
   // Shared cache: s-maxage overrides max-age.
-  const sMaxAge = _parseSeconds(directives.get("s-maxage"));
-  const maxAge = sMaxAge ?? _parseSeconds(directives.get("max-age"));
+  const maxAge =
+    _parseSeconds(directives.get("s-maxage")) ?? _parseSeconds(directives.get("max-age"));
   let staleMaxAge = _parseSeconds(directives.get("stale-while-revalidate"));
-  if (sMaxAge !== undefined && staleMaxAge === undefined) {
-    // Implied proxy-revalidate: zero stale window (blocking revalidation once stale).
+  if (directives.has("must-revalidate") || directives.has("proxy-revalidate")) {
+    // Explicit revalidation requirement: stale must never be served, not even with an
+    // explicit stale-while-revalidate.
+    staleMaxAge = 0;
+  } else if (maxAge !== undefined && !directives.has("stale-while-revalidate")) {
+    // A freshness lifetime without permission to serve stale: zero stale window
+    // (blocking revalidation once stale — immediately for max-age=0 / s-maxage=0).
     staleMaxAge = 0;
   }
   if (maxAge === undefined && staleMaxAge === undefined) {
@@ -418,12 +413,16 @@ function _parseCacheControlTtl(
   return { maxAge, staleMaxAge };
 }
 
-/** Parses a Cache-Control directive value into seconds, or `undefined` if absent/empty/non-numeric. */
+/**
+ * Parses a Cache-Control directive value into seconds, or `undefined` if
+ * absent/empty/non-numeric. Accepts the RFC 9111 §5.2 quoted-string argument form
+ * (`max-age="60"`).
+ */
 function _parseSeconds(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
   }
-  const seconds = Number(value);
+  const seconds = Number(value.replace(/^"(.*)"$/, "$1"));
   return Number.isFinite(seconds) ? seconds : undefined;
 }
 

@@ -51,6 +51,8 @@ const cached = defineCachedFunction(fn, {
 });
 ```
 
+A `maxAge <= 0` means the entry is immediately stale: with `swr` and a positive `staleMaxAge` the stale value is served (within that window) while refreshing in the background; with `staleMaxAge: 0` or `swr: false` every access blocks on a fresh resolve. Entries whose servable window is zero (no freshness, no stale window) are never written to storage.
+
 #### Dynamic TTL
 
 Some cached values carry their own expiry — an OAuth token with `expires_in`, an upstream response with `Cache-Control: max-age`. Use `getMaxAge` to derive the lifetime from the resolved value instead of a fixed constant. It runs after the resolver and returns either a number (seconds, shorthand for `maxAge`) or `{ maxAge?, staleMaxAge? }` to also override the stale window. The resolved values override the static options for that entry and are used for both the freshness check and the storage TTL. Return `undefined` (or omit a field) to fall back to the static option.
@@ -139,12 +141,12 @@ const handler = defineCachedHandler(
 
 The response's `Cache-Control` is parsed with shared-cache semantics ([RFC 9111](https://www.rfc-editor.org/rfc/rfc9111) / [RFC 5861](https://www.rfc-editor.org/rfc/rfc5861)):
 
-- `s-maxage` (preferred) or `max-age` → `maxAge`
+- `s-maxage` (preferred) or `max-age` → `maxAge` (quoted values like `max-age="60"` are supported)
 - `stale-while-revalidate` → `staleMaxAge`
-- `s-maxage` implies `proxy-revalidate` (RFC 9111 §5.2.2.10): without an explicit `stale-while-revalidate`, the stale window is zero — once stale (immediately for `s-maxage=0`), the entry is revalidated in the foreground instead of being served stale
+- serving stale requires explicit permission (RFC 9111 §4.2.4): a freshness lifetime without a `stale-while-revalidate` directive — or an explicit `must-revalidate` / `proxy-revalidate` (`s-maxage` implies the latter, §5.2.2.10) — forces a zero stale window, so once stale (immediately for `max-age=0` / `s-maxage=0`) the entry is revalidated in the foreground instead of being served stale. A valueless `stale-while-revalidate` still grants stale serving; its window falls back to the configured `staleMaxAge`
 - `no-cache` → the response is never cached (the handler runs on every request)
 
-An upstream directive takes precedence for its field — it can shorten _or_ extend the configured lifetime. Absent directives fall back to [`getMaxAge`](#dynamic-ttl) when you supply one, then to the configured `maxAge` / `staleMaxAge`. Only a `Cache-Control` set by the handler itself counts as upstream — the header synthesized from the static options is never parsed back.
+An upstream directive takes precedence for its field — it can shorten _or_ extend the configured lifetime. Absent directives fall back to [`getMaxAge`](#dynamic-ttl) when you supply one (the hook is skipped entirely when upstream defines both fields), then to the configured `maxAge` / `staleMaxAge`. Only a `Cache-Control` set by the handler itself counts as upstream — the header synthesized from the static options is never parsed back.
 
 `no-store` / `private` are always honored regardless of this flag (such responses are never stored).
 
@@ -266,6 +268,34 @@ setStorage(createMemoryStorage({ maxSize: Infinity }));
 ## API
 
 <!-- automd:docs4ts -->
+
+### `_handleCacheError`
+
+```ts
+function _handleCacheError(
+  opts: Pick<CacheOptions, "onError">,
+  context: string,
+  error: unknown,
+): void;
+```
+
+Routes a cache error to `opts.onError` when provided, falling back to `console.error`.
+
+**@internal** Shared with http.ts — not part of the public API.
+
+---
+
+### `_normalizeMaxAge`
+
+```ts
+function _normalizeMaxAge(resolved: number | CacheEntryTtl | undefined): CacheEntryTtl | undefined;
+```
+
+Normalizes a `getMaxAge` result — a bare number is shorthand for `{ maxAge }`.
+
+**@internal** Shared with http.ts — not part of the public API.
+
+---
 
 ### `cachedFunction`
 

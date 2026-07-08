@@ -64,6 +64,18 @@ export interface CacheEntry<T = any> {
 }
 
 /**
+ * Per-entry TTL overrides (seconds) resolved for a cache entry — returned by the
+ * `getMaxAge` hook or derived from upstream `Cache-Control` directives by
+ * `defineCachedHandler`'s `honorCacheControl`.
+ */
+export interface CacheEntryTtl {
+  /** Overrides {@link CacheOptions.maxAge} for this entry. */
+  maxAge?: number;
+  /** Overrides {@link CacheOptions.staleMaxAge} for this entry. */
+  staleMaxAge?: number;
+}
+
+/**
  * Options for configuring cached functions created by `defineCachedFunction`.
  */
 export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
@@ -121,11 +133,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    */
   getMaxAge?: (
     entry: CacheEntry<T>,
-  ) =>
-    | number
-    | { maxAge?: number; staleMaxAge?: number }
-    | undefined
-    | Promise<number | { maxAge?: number; staleMaxAge?: number } | undefined>;
+  ) => number | CacheEntryTtl | undefined | Promise<number | CacheEntryTtl | undefined>;
   /** Base path prefix(es) for cache keys. When an array, reads try each prefix in order (multi-tier) and writes go to all prefixes. Defaults to `"/cache"`. */
   base?: string | string[];
   /** Optional error handler called for all cache-related errors (read, write, SWR, malformed data). */
@@ -174,16 +182,21 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * `Cache-Control` header when deriving the per-entry cache lifetime.
    *
    * The response's `Cache-Control` is parsed with shared-cache semantics (RFC 9111 / 5861):
-   * - `s-maxage` (preferred) or `max-age` → `maxAge`
+   * - `s-maxage` (preferred) or `max-age` → `maxAge` (quoted values like `max-age="60"` are supported)
    * - `stale-while-revalidate` → `staleMaxAge`
-   * - `s-maxage` implies `proxy-revalidate`: without an explicit `stale-while-revalidate`,
-   *   `staleMaxAge` is forced to `0` — once stale (immediately for `s-maxage=0`), the entry
-   *   is revalidated in the foreground instead of being served stale
+   * - serving stale requires explicit permission (RFC 9111 §4.2.4): an upstream freshness
+   *   lifetime without a `stale-while-revalidate` directive — or an explicit
+   *   `must-revalidate` / `proxy-revalidate` (`s-maxage` implies the latter, §5.2.2.10) —
+   *   forces `staleMaxAge` to `0`, so once stale (immediately for `max-age=0` /
+   *   `s-maxage=0`) the entry is revalidated in the foreground instead of being served
+   *   stale. A valueless `stale-while-revalidate` still grants stale serving; its window
+   *   falls back to `getMaxAge` / the configured `staleMaxAge`
    * - `no-cache` → the response is never cached (the handler runs on every request)
    *
    * An upstream directive takes precedence for its field — it can shorten *or* extend the
    * configured lifetime. Absent directives fall back to {@link CacheOptions.getMaxAge} when
-   * you supply one, then to the static `maxAge` / `staleMaxAge`. Only a `Cache-Control` set
+   * you supply one (the hook is skipped entirely when the upstream directives define both
+   * fields), then to the static `maxAge` / `staleMaxAge`. Only a `Cache-Control` set
    * by the handler itself counts as upstream — the header synthesized from the static
    * options is never parsed back.
    *

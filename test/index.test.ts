@@ -987,8 +987,38 @@ describe("getMaxAge (dynamic per-entry TTL)", () => {
     expect(callCount).toBe(2);
 
     const keys = await fn.resolveKeys();
-    const entry = (await useStorage().get(keys[0]!)) as any;
-    expect(entry.maxAge).toBe(0);
+    // No freshness and no stale window: the dead entry is not persisted at all.
+    expect(await useStorage().get(keys[0]!)).toBeNull();
+  });
+
+  it("re-resolves a stored entry that is fully expired with a negative static maxAge", async () => {
+    // A storage backend without TTL support keeps entries past their window.
+    const map = new Map<string, unknown>();
+    setStorage({
+      get: (key) => (map.get(key) as any) ?? null,
+      set: (key, value) => {
+        if (value == null) {
+          map.delete(key);
+        } else {
+          map.set(key, value);
+        }
+      },
+    });
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return `value-${callCount}`;
+      },
+      { maxAge: -1, swr: true, staleMaxAge: 0.05, getKey: () => "negative-static-key" },
+    );
+
+    expect(await fn()).toBe("value-1");
+    await new Promise((r) => setTimeout(r, 100));
+    // Past maxAge + staleMaxAge with the entry still in storage: the cleared entry must
+    // re-resolve in the foreground — not resolve to `undefined` without calling the resolver.
+    expect(await fn()).toBe("value-2");
+    expect(callCount).toBe(2);
   });
 
   it("respects per-entry TTL when expiring via expireCache", async () => {
@@ -1591,6 +1621,155 @@ describe("defineCachedHandler", () => {
       expect(callCount).toBe(2);
     });
 
+    it("honors max-age=0: never serves a cached body", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            headers: { "cache-control": "max-age=0" },
+          });
+        },
+        { maxAge: 60, honorCacheControl: true },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // The common "always revalidate" idiom: with no stale-while-revalidate grant the
+      // response is revalidated in the foreground on every request — never served
+      // one-request-behind under the default SWR mode.
+      expect(callCount).toBe(2);
+      expect(await r1.text()).toBe("body-1");
+      expect(await r2.text()).toBe("body-2");
+    });
+
+    it("max-age without stale-while-revalidate never serves stale once expired", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            headers: { "cache-control": "max-age=0.05" },
+          });
+        },
+        { staleMaxAge: 300, honorCacheControl: true },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      await new Promise((r) => setTimeout(r, 100));
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // Past the 50ms freshness with no explicit permission to serve stale (RFC 9111
+      // §4.2.4): blocking revalidation, even though the configured staleMaxAge: 300
+      // would otherwise allow serving stale.
+      expect(callCount).toBe(2);
+      expect(await r1.text()).toBe("body-1");
+      expect(await r2.text()).toBe("body-2");
+    });
+
+    it("must-revalidate forbids stale serving even with stale-while-revalidate", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            headers: {
+              "cache-control": "max-age=0.05, must-revalidate, stale-while-revalidate=300",
+            },
+          });
+        },
+        { staleMaxAge: 300, honorCacheControl: true },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      await new Promise((r) => setTimeout(r, 100));
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // RFC 9111 §5.2.2.2: once stale, must-revalidate responses MUST NOT be reused
+      // without validation — stale-while-revalidate does not override it.
+      expect(callCount).toBe(2);
+      expect(await r1.text()).toBe("body-1");
+      expect(await r2.text()).toBe("body-2");
+    });
+
+    it("a bare stale-while-revalidate grants stale serving with the configured window", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(`body-${callCount}`, {
+            // The exact shape ocache itself synthesizes when staleMaxAge is unset.
+            headers: { "cache-control": "s-maxage=0.05, stale-while-revalidate" },
+          });
+        },
+        { staleMaxAge: 300, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+      await new Promise((r) => setTimeout(r, 100));
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // The valueless directive is still permission to serve stale — the window falls
+      // back to the configured staleMaxAge: 300 instead of being forced to 0.
+      expect(await r2.text()).toBe("body-1");
+      expect(r2.headers.get("x-cache")).toBe("STALE");
+      expect(callCount).toBe(2);
+    });
+
+    it('parses quoted directive values (s-maxage="10")', async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": 'public, s-maxage="10"' } }),
+        { maxAge: 1000, swr: false, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // RFC 9111 §5.2: directive arguments may use the quoted-string form.
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 10 });
+    });
+
+    it("does not store entries that can never be served (s-maxage=0)", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=0" } }),
+        { maxAge: 60, staleMaxAge: 300, honorCacheControl: true },
+      );
+
+      await handler(makeEvent(path));
+
+      // Immediately stale with a zero stale window: the entry could never be served,
+      // so nothing is written (previously it was stored forever with no TTL).
+      expect(setSpy).not.toHaveBeenCalled();
+    });
+
+    it("skips the getMaxAge hook when upstream directives define both fields", async () => {
+      const path = uniquePath();
+      const setSpy = vi.fn();
+      const getMaxAge = vi.fn(() => 5);
+      setStorage({ get: () => null, set: setSpy });
+      const handler = defineCachedHandler(
+        // s-maxage forces staleMaxAge: 0, so both fields are upstream-defined.
+        () => new Response("ok", { headers: { "cache-control": "s-maxage=100" } }),
+        { swr: false, honorCacheControl: true, getMaxAge },
+      );
+
+      await handler(makeEvent(path));
+
+      // The hook's result would be discarded entirely — it must not even be invoked.
+      expect(getMaxAge).not.toHaveBeenCalled();
+      expect(setSpy.mock.calls.at(-1)?.[2]).toEqual({ ttl: 100 });
+    });
+
     it("falls back to the configured maxAge when the response has no freshness directive", async () => {
       let callCount = 0;
       const path = uniquePath();
@@ -1683,7 +1862,12 @@ describe("defineCachedHandler", () => {
       const onError = vi.fn();
       setStorage({ get: () => null, set: setSpy });
       const handler = defineCachedHandler(
-        () => new Response("ok", { headers: { "cache-control": "s-maxage=10" } }),
+        // The bare stale-while-revalidate leaves staleMaxAge undefined, so the
+        // getMaxAge hook still runs (it is skipped when upstream defines both fields).
+        () =>
+          new Response("ok", {
+            headers: { "cache-control": "s-maxage=10, stale-while-revalidate" },
+          }),
         {
           maxAge: 3600,
           swr: false,
