@@ -190,6 +190,61 @@ const handler = defineCachedHandler(myHandler, {
 
 `shouldCache` receives the serialized response entry, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject. It gates both storing a fresh response and serving a stored one, and a throwing hook fails closed (treated as non-cacheable) and is reported via `onError`.
 
+#### Incremental Static Regeneration (ISR)
+
+you can reproduce a similar ISR behavior with `defineCachedHandler`: serve a cached page instantly, regenerate it in the background after it goes stale, and keep serving the last-good version until the refresh lands:
+
+```ts
+const page = defineCachedHandler(
+  async (event) => {
+    const html = await renderPage(event.url ?? new URL(event.req.url));
+    return new Response(html, { headers: { "content-type": "text/html" } });
+  },
+  {
+    swr: true, // serve stale instantly, refresh in the background
+    maxAge: 60, // "revalidate" window: fresh for 60s, then refresh on next request
+    // no staleMaxAge → stale is served indefinitely until the refresh succeeds
+  },
+);
+```
+
+The two options that make it ISR-like:
+
+- **`swr: true`** turns on stale-while-revalidate: once an entry is older than `maxAge`, the next request gets the stale page immediately while a fresh render runs in the background.
+- **Omit `staleMaxAge`.** This is the important part. Leaving it unset means there's no point at which the entry becomes "too old to serve" — the last successful render is served forever until a refresh replaces it, exactly like ISR. (If instead you _set_ `staleMaxAge`, you get a hard cutoff: after `maxAge + staleMaxAge` the entry is dropped and the next request blocks on a fresh render.)
+
+With this config the handler also emits `Cache-Control: s-maxage=60, stale-while-revalidate`, so any shared/CDN cache in front of it revalidates on the same schedule.
+
+**On-demand revalidation** (the equivalent of `revalidatePath` / `revalidateTag`) uses the methods on the returned handler:
+
+```ts
+await page.expire(event); // ISR-style: serve the stale page once more, refresh in the background
+await page.invalidate(event); // hard purge: next request blocks on a fresh render
+```
+
+Prefer `.expire()` for the ISR feel — there's no blocking gap for visitors. Reach for `.invalidate()` only when the next reader must get a guaranteed-fresh render.
+
+**Per-route revalidate windows.** If different pages need different refresh intervals (like Next's per-fetch `revalidate`), use `getMaxAge` to derive the window from the response — for example an `x-revalidate` header your handler sets. `entry.value` is the standard `Response`:
+
+```ts
+const page = defineCachedHandler(
+  async (event) => {
+    const url = event.url ?? new URL(event.req.url);
+    const { html, revalidate } = await renderPage(url);
+    return new Response(html, {
+      headers: { "content-type": "text/html", "x-revalidate": String(revalidate) },
+    });
+  },
+  {
+    swr: true,
+    getMaxAge: (entry) => Number(entry.value.headers.get("x-revalidate")) || 60,
+  },
+);
+```
+
+> [!NOTE]
+> Two things differ from CDN managed ISR. **(1) Background refresh is coalesced per instance**, not globally — across multiple servers/serverless instances the origin can see one refresh per instance. Add a distributed lock in your [custom storage](#custom-storage) if regeneration is expensive. **(2) Entries never auto-expire** with `staleMaxAge` omitted, so storage grows until you `.invalidate()` — or set a large `staleMaxAge` to trade exact ISR semantics for eventual cleanup.
+
 ### Cache Invalidation
 
 Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:
