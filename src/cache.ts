@@ -39,7 +39,14 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   // sets a truthy `name: "_"`, so if defaults were merged first `opts.name` would always
   // be `"_"` and the `fn.name` fallback would be unreachable (silent cache-key collision
   // across every unnamed cached function — https://github.com/unjs/ocache/issues/53).
-  const name = opts.name || fn.name || "_";
+  //
+  // For anonymous functions (no `opts.name`, no `fn.name`) fall back to a hash of the
+  // function source instead of a shared literal: two distinct inline arrows would
+  // otherwise resolve to the same key and thrash each other (each read fails the
+  // integrity check and re-resolves). This can't disambiguate same-source functions
+  // that only differ by closed-over variables — pass an explicit `name`/`getKey` for
+  // those (the integrity hash collides there too, so it's unfixable from the source alone).
+  const name = opts.name || fn.name || `anon_${hash(fn).slice(0, 16)}`;
   opts = { ...defaultCacheOptions(), ...opts, name };
 
   const pending: { [key: string]: Promise<T> } = {};

@@ -136,7 +136,7 @@ describe("cachedFunction", () => {
     const fn = defineCachedFunction(() => "v", { maxAge: 100, getKey: () => "k" });
     await fn(); // miss (writes entry)
     await fn(); // hit — must not mutate the stored entry with `status`
-    const [key] = await resolveCacheKeys({ options: { getKey: () => "k" } });
+    const [key] = await fn.resolveKeys();
     const stored = (await useStorage().get(key!)) as Record<string, unknown>;
     expect(Object.keys(stored)).not.toContain("status");
   });
@@ -151,7 +151,7 @@ describe("cachedFunction", () => {
     await fn(); // miss
     await fn(); // hit (sets per-call status on the returned entry)
     await fn.expire();
-    const [key] = await resolveCacheKeys({ options: { getKey: () => "k" } });
+    const [key] = await fn.resolveKeys();
     const stored = (await useStorage().get(key!)) as Record<string, unknown>;
     expect(stored.stale).toBe(true);
     expect(Object.keys(stored)).not.toContain("status");
@@ -885,9 +885,44 @@ describe("cache key name resolution (#53)", () => {
     expect((await fn.resolveKeys())[0]).toBe("/cache:functions:custom:.json");
   });
 
-  it("anonymous function falls back to _", async () => {
+  it("anonymous function falls back to a stable hash of its source", async () => {
     const fn = defineCachedFunction(async () => 1);
-    expect((await fn.resolveKeys())[0]).toBe("/cache:functions:_:.json");
+    const key = (await fn.resolveKeys())[0]!;
+    expect(key).toMatch(/^\/cache:functions:anon_[\w-]{16}:\.json$/);
+    // Stable across separate definitions of the identical function source.
+    const same = defineCachedFunction(async () => 1);
+    expect((await same.resolveKeys())[0]).toBe(key);
+  });
+
+  it("distinct anonymous functions get distinct keys (no thrash)", async () => {
+    let aCalls = 0;
+    let bCalls = 0;
+    const a = defineCachedFunction(
+      () => {
+        aCalls++;
+        return "A";
+      },
+      { maxAge: 1000 },
+    );
+    const b = defineCachedFunction(
+      () => {
+        bCalls++;
+        return "B";
+      },
+      { maxAge: 1000 },
+    );
+
+    const aKey = (await a.resolveKeys())[0]!;
+    const bKey = (await b.resolveKeys())[0]!;
+    expect(aKey).not.toBe(bKey);
+
+    // Interleaved calls must not evict each other: each resolves exactly once.
+    for (let i = 0; i < 3; i++) {
+      expect(await a()).toBe("A");
+      expect(await b()).toBe("B");
+    }
+    expect(aCalls).toBe(1);
+    expect(bCalls).toBe(1);
   });
 });
 
@@ -1043,6 +1078,9 @@ describe("getMaxAge (dynamic per-entry TTL)", () => {
 
   it("respects per-entry TTL when expiring via expireCache", async () => {
     const options = {
+      // Standalone helpers (expireCache) can't see `fn`, so an anonymous function's
+      // hash-derived name wouldn't line up — pass an explicit `name` to keep keys aligned.
+      name: "expire-dyn",
       swr: true,
       getKey: () => "expire-dyn-key",
       getMaxAge: () => ({ maxAge: 60, staleMaxAge: 120 }),
