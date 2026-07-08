@@ -42,8 +42,8 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     .map((h) => h.toLowerCase())
     .sort();
 
-  const variableQueryNames = opts.variesQuery
-    ? [...new Set(opts.variesQuery.filter(Boolean))]
+  const allowedQueryNames = opts.allowQuery
+    ? [...new Set(opts.allowQuery.filter(Boolean))]
     : undefined;
 
   // Memoize the filtered query per request so getKey and the handler-facing URL
@@ -53,7 +53,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   const _filteredSearch = (event: HTTPEvent, url: URL): string => {
     let search = _searchCache.get(event);
     if (search === undefined) {
-      search = _filterSearch(url, variableQueryNames!);
+      search = _filterSearch(url, allowedQueryNames!);
       _searchCache.set(event, search);
     }
     return search;
@@ -106,7 +106,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       // Auto-generated key
       const _url = event.url ?? new URL(event.req.url);
-      const _search = variableQueryNames ? _filteredSearch(event, _url) : _url.search;
+      const _search = allowedQueryNames ? _filteredSearch(event, _url) : _url.search;
       const _path = _url.pathname + _search;
       let _pathname: string;
       try {
@@ -156,7 +156,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // Narrow the query the handler sees to the allowlist, so it can't depend on
     // params outside the cache key (mirrors the header filtering above).
     let _reqUrl = event.req.url;
-    if (variableQueryNames) {
+    if (allowedQueryNames) {
       const _url = event.url ?? new URL(event.req.url);
       const _filteredUrl = new URL(_url);
       _filteredUrl.search = _filteredSearch(event, _url);
@@ -173,7 +173,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       if ((originalReq as any).runtime) {
         (event.req as any).runtime = (originalReq as any).runtime;
       }
-      if (variableQueryNames && event.url) {
+      if (allowedQueryNames && event.url) {
         (event as any).url = new URL(_reqUrl);
       }
     } catch (error) {

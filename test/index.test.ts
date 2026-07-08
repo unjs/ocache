@@ -1532,7 +1532,7 @@ describe("defineCachedHandler", () => {
     expect(await r2.text()).toBe("call-2");
   });
 
-  it("only varies the cache key by allowlisted query params (variesQuery)", async () => {
+  it("only varies the cache key by allowlisted query params (allowQuery)", async () => {
     let callCount = 0;
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -1540,7 +1540,7 @@ describe("defineCachedHandler", () => {
         callCount++;
         return new Response(`call-${callCount}`);
       },
-      { maxAge: 10, variesQuery: ["color"] },
+      { maxAge: 10, allowQuery: ["color"] },
     );
 
     const r1 = (await handler(makeEvent(`${path}?color=red&lang=en`))) as Response;
@@ -1553,7 +1553,7 @@ describe("defineCachedHandler", () => {
     expect(await r3.text()).toBe("call-2");
   });
 
-  it("variesQuery is order-independent", async () => {
+  it("allowQuery is order-independent", async () => {
     let callCount = 0;
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -1561,7 +1561,7 @@ describe("defineCachedHandler", () => {
         callCount++;
         return new Response(`call-${callCount}`);
       },
-      { maxAge: 10, variesQuery: ["a", "b"] },
+      { maxAge: 10, allowQuery: ["a", "b"] },
     );
 
     const r1 = (await handler(makeEvent(`${path}?a=1&b=2`))) as Response;
@@ -1572,7 +1572,7 @@ describe("defineCachedHandler", () => {
     expect(await r2.text()).toBe("call-1");
   });
 
-  it("variesQuery handles repeated (array) params order-independently", async () => {
+  it("allowQuery handles repeated (array) params order-independently", async () => {
     let callCount = 0;
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -1580,7 +1580,7 @@ describe("defineCachedHandler", () => {
         callCount++;
         return new Response(`call-${callCount}`);
       },
-      { maxAge: 10, variesQuery: ["color"] },
+      { maxAge: 10, allowQuery: ["color"] },
     );
 
     const r1 = (await handler(makeEvent(`${path}?color=red&color=blue`))) as Response;
@@ -1593,7 +1593,7 @@ describe("defineCachedHandler", () => {
     expect(await r3.text()).toBe("call-2");
   });
 
-  it("variesQuery strips non-allowlisted params from the URL the handler sees", async () => {
+  it("allowQuery strips non-allowlisted params from the URL the handler sees", async () => {
     const seen: string[] = [];
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -1602,7 +1602,7 @@ describe("defineCachedHandler", () => {
         seen.push(url.search);
         return new Response("ok");
       },
-      { maxAge: 10, variesQuery: ["color"] },
+      { maxAge: 10, allowQuery: ["color"] },
     );
 
     await handler(makeEvent(`${path}?color=red&lang=de&_=123`));

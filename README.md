@@ -86,19 +86,19 @@ const handler = defineCachedHandler(
     swr: true,
     staleMaxAge: 600,
     varies: ["accept-language"], // Vary cache by these headers
-    variesQuery: ["color"], // Vary cache by these query params only
+    allowQuery: ["color"], // Vary cache by these query params only
   },
 );
 ```
 
 #### Query Parameters
 
-By default the full query string varies the cache key, so `?color=red` and `?color=red&utm=x` are cached separately and unknown params can bust the cache. Set `variesQuery` to an allowlist of param names so only those affect the key — all other params are ignored. Ignored params are also stripped from the URL the handler receives (like non-`varies` headers), so a handler can never accidentally produce output that depends on a param outside the key. Param order is normalized, and repeated (array) params like `?color=red&color=blue` are matched regardless of order. Passing an empty array (`variesQuery: []`) varies by nothing — every query shares one entry. If you set a custom `getKey`, it controls the key entirely and `variesQuery` no longer affects it, but non-allowlisted params are still stripped from the URL the handler receives:
+By default the full query string varies the cache key, so `?color=red` and `?color=red&utm=x` are cached separately and unknown params can bust the cache. Set `allowQuery` to an allowlist of param names so only those affect the key — all other params are ignored. Ignored params are also stripped from the URL the handler receives (like non-`varies` headers), so a handler can never accidentally produce output that depends on a param outside the key. Param order is normalized, and repeated (array) params like `?color=red&color=blue` are matched regardless of order. Passing an empty array (`allowQuery: []`) varies by nothing — every query shares one entry. If you set a custom `getKey`, it controls the key entirely and `allowQuery` no longer affects it, but non-allowlisted params are still stripped from the URL the handler receives:
 
 ```ts
 const handler = defineCachedHandler(myHandler, {
   maxAge: 300,
-  variesQuery: ["color"], // ?color=red&lang=en and ?color=red&lang=de share one entry
+  allowQuery: ["color"], // ?color=red&lang=en and ?color=red&lang=de share one entry
 });
 ```
 

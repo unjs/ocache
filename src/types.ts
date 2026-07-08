@@ -174,7 +174,7 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * longer affects it, but non-allowlisted params are still stripped from the
    * URL the handler sees.
    */
-  variesQuery?: string[] | readonly string[];
+  allowQuery?: string[] | readonly string[];
 
   /**
    * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
