@@ -1073,8 +1073,16 @@ describe("serialize (write-time hook)", () => {
       return out;
     };
 
+    // A single stream instance shared across all concurrent callers: it can be
+    // consumed exactly once, so if the resolver or serialize ran more than once the
+    // second read would throw ("locked")/yield an empty body and this test would fail.
+    const sharedStream = new Response("hello stream").body as ReadableStream;
+    let resolverCalls = 0;
     const fn = defineCachedFunction(
-      () => ({ body: new Response("hello stream").body as ReadableStream }),
+      () => {
+        resolverCalls++;
+        return { body: sharedStream };
+      },
       {
         maxAge: 100,
         getKey: () => "k",
@@ -1084,9 +1092,9 @@ describe("serialize (write-time hook)", () => {
       },
     );
 
-    // A stream can only be read once; running serialize once (shared across dedupe) must not throw.
-    const results = await Promise.all([fn(), fn()]);
-    expect(results).toEqual(["hello stream", "hello stream"]);
+    const results = await Promise.all([fn(), fn(), fn()]);
+    expect(resolverCalls).toBe(1);
+    expect(results).toEqual(["hello stream", "hello stream", "hello stream"]);
   });
 
   it("runs after getMaxAge, so getMaxAge still sees the raw resolved value", async () => {
