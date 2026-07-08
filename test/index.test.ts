@@ -1867,6 +1867,84 @@ describe("defineCachedHandler", () => {
     expect(await r2.text()).toBe("call-2");
   });
 
+  it("only varies the cache key by allowlisted query params (allowQuery)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, allowQuery: ["color"] },
+    );
+
+    const r1 = (await handler(makeEvent(`${path}?color=red&lang=en`))) as Response;
+    const r2 = (await handler(makeEvent(`${path}?color=red&lang=de&_=123`))) as Response;
+    const r3 = (await handler(makeEvent(`${path}?color=blue`))) as Response;
+
+    expect(callCount).toBe(2);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    expect(await r3.text()).toBe("call-2");
+  });
+
+  it("allowQuery is order-independent", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, allowQuery: ["a", "b"] },
+    );
+
+    const r1 = (await handler(makeEvent(`${path}?a=1&b=2`))) as Response;
+    const r2 = (await handler(makeEvent(`${path}?b=2&a=1`))) as Response;
+
+    expect(callCount).toBe(1);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+  });
+
+  it("allowQuery handles repeated (array) params order-independently", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, allowQuery: ["color"] },
+    );
+
+    const r1 = (await handler(makeEvent(`${path}?color=red&color=blue`))) as Response;
+    const r2 = (await handler(makeEvent(`${path}?color=blue&color=red`))) as Response;
+    const r3 = (await handler(makeEvent(`${path}?color=red`))) as Response;
+
+    expect(callCount).toBe(2);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    expect(await r3.text()).toBe("call-2");
+  });
+
+  it("allowQuery strips non-allowlisted params from the URL the handler sees", async () => {
+    const seen: string[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        const url = event.url ?? new URL(event.req.url);
+        seen.push(url.search);
+        return new Response("ok");
+      },
+      { maxAge: 10, allowQuery: ["color"] },
+    );
+
+    await handler(makeEvent(`${path}?color=red&lang=de&_=123`));
+
+    expect(seen).toEqual(["?color=red"]);
+  });
+
   it("invalidates cache for error responses (4xx/5xx)", async () => {
     let callCount = 0;
     const path = uniquePath();

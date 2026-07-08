@@ -43,6 +43,23 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     .map((h) => h.toLowerCase())
     .sort();
 
+  const allowedQueryNames = opts.allowQuery
+    ? [...new Set(opts.allowQuery.filter(Boolean))]
+    : undefined;
+
+  // Memoize the filtered query per request so getKey and the handler-facing URL
+  // rewrite don't recompute it. Scoped to this handler instance so a shared
+  // event can't pick up another handler's allowlist.
+  const _searchCache = new WeakMap<HTTPEvent, string>();
+  const _filteredSearch = (event: HTTPEvent, url: URL): string => {
+    let search = _searchCache.get(event);
+    if (search === undefined) {
+      search = _filterSearch(url, allowedQueryNames!);
+      _searchCache.set(event, search);
+    }
+    return search;
+  };
+
   const _toResponse =
     opts.toResponse ||
     ((rawValue: unknown) =>
@@ -103,7 +120,8 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       // Auto-generated key
       const _url = event.url ?? new URL(event.req.url);
-      const _path = _url.pathname + _url.search;
+      const _search = allowedQueryNames ? _filteredSearch(event, _url) : _url.search;
+      const _path = _url.pathname + _search;
       let _pathname: string;
       try {
         _pathname =
@@ -157,9 +175,19 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       ([key]) => !variableHeaderNames.includes(key.toLowerCase()),
     );
 
+    // Narrow the query the handler sees to the allowlist, so it can't depend on
+    // params outside the cache key (mirrors the header filtering above).
+    let _reqUrl = event.req.url;
+    if (allowedQueryNames) {
+      const _url = event.url ?? new URL(event.req.url);
+      const _filteredUrl = new URL(_url);
+      _filteredUrl.search = _filteredSearch(event, _url);
+      _reqUrl = _filteredUrl.href;
+    }
+
     try {
       const originalReq = event.req;
-      (event as any).req = new Request(event.req.url, {
+      (event as any).req = new Request(_reqUrl, {
         method: event.req.method,
         headers: filteredHeaders,
       });
@@ -167,8 +195,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       if ((originalReq as any).runtime) {
         (event.req as any).runtime = (originalReq as any).runtime;
       }
+      if (allowedQueryNames && event.url) {
+        (event as any).url = new URL(_reqUrl);
+      }
     } catch (error) {
-      console.error("[cache] Failed to filter headers:", error);
+      console.error("[cache] Failed to filter request:", error);
     }
 
     // Call handler
@@ -274,6 +305,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
 function escapeKey(key: string | string[]) {
   return String(key).replace(/\W/g, "");
+}
+
+/** Rebuilds the query string from only the allowlisted param names, order-independent. */
+function _filterSearch(url: URL, names: string[]): string {
+  const filtered = new URLSearchParams();
+  for (const name of names) {
+    for (const value of url.searchParams.getAll(name).sort()) {
+      filtered.append(name, value);
+    }
+  }
+  const query = filtered.toString();
+  return query ? `?${query}` : "";
 }
 
 /**

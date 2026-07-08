@@ -195,6 +195,17 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   honorCacheControl?: boolean;
 
   /**
+   * Allowlist of query parameter names that vary the cache key (e.g., `["color"]`).
+   * When set, only these params affect the auto-generated key; all others are
+   * ignored. When unset, the full query string varies the key. Case-sensitive.
+   *
+   * If a custom `getKey` is provided it controls the key entirely and this no
+   * longer affects it, but non-allowlisted params are still stripped from the
+   * URL the handler sees.
+   */
+  allowQuery?: string[] | readonly string[];
+
+  /**
    * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
    *
    * - `true` (default) — sets the `X-Cache` header.
