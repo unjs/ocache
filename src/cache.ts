@@ -1,7 +1,7 @@
 import { hash } from "ohash";
 import { useStorage } from "./storage.ts";
 
-import type { HTTPEvent, CacheEntry, CacheOptions } from "./types.ts";
+import type { HTTPEvent, CacheEntry, CacheOptions, CacheStatus } from "./types.ts";
 
 function defaultCacheOptions() {
   return {
@@ -12,7 +12,7 @@ function defaultCacheOptions() {
   } as const;
 }
 
-type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T };
+type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
 export type CachedFunction<T, ArgsT extends unknown[]> = {
   (...args: ArgsT): Promise<T>;
@@ -85,29 +85,52 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       entry = {};
       const error = new Error("Malformed data read from cache.");
       _onError("[cache]", error);
+    } else {
+      // Work on a per-call shallow clone: a storage backend may return the entry by
+      // reference (the built-in memory storage does), so all subsequent in-place
+      // mutations below — freshness resets, the `status` attach, the SWR value
+      // refresh — must not corrupt the object still held in storage or let
+      // concurrent same-key calls overwrite each other's per-call fields.
+      entry = { ...entry };
     }
 
-    const ttl = (opts.maxAge ?? 0) * 1000;
+    // Per-entry TTL (set by the `getMaxAge` hook on the previous write) takes precedence over static options.
+    const readMaxAge = entry.maxAge ?? opts.maxAge;
+    const readStaleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
+
+    const ttl = (readMaxAge ?? 0) * 1000;
     if (ttl > 0) {
       entry.expires = Date.now() + ttl;
     }
 
     const staleTtl =
-      opts.swr && opts.staleMaxAge != null && opts.staleMaxAge >= 0
-        ? opts.staleMaxAge * 1000
+      opts.swr && readStaleMaxAge != null && readStaleMaxAge >= 0
+        ? readStaleMaxAge * 1000
         : undefined;
+
+    // A zero stale window means stale must never be served (e.g. upstream
+    // proxy-revalidate semantics): revalidate in the foreground instead.
+    const swr = opts.swr && staleTtl !== 0;
 
     // When staleMaxAge is set, an entry is completely dead after maxAge + staleMaxAge
     const isFullyExpired =
-      staleTtl !== undefined && ttl > 0 && Date.now() - (entry.mtime || 0) > ttl + staleTtl;
+      staleTtl !== undefined &&
+      readMaxAge != null &&
+      Date.now() - (entry.mtime || 0) > ttl + staleTtl;
+
+    // Computed once and reused for both the `expired` check and the `status`
+    // decision below (same entry state, so re-validating would just repeat work).
+    // `validate` may be async (e.g. checking the cached value against an external source),
+    // so await it here. A sync return is fine too — `await` on a non-promise is a no-op.
+    const _isValid = (await validate(entry)) !== false;
 
     const expired =
       shouldInvalidateCache ||
       entry.stale === true ||
       entry.integrity !== integrity ||
-      opts.maxAge === 0 ||
+      readMaxAge === 0 ||
       (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
-      validate(entry) === false;
+      !_isValid;
 
     // If fully expired beyond staleMaxAge, clear the stale value so SWR won't serve it
     if (isFullyExpired) {
@@ -116,6 +139,21 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       entry.mtime = undefined;
       entry.expires = undefined;
     }
+
+    // Determine how this call will be served (mirrors the serve decision below):
+    // - no usable cached value -> resolved fresh (miss)
+    // - fresh cached value -> hit
+    // - expired but served stale under SWR -> stale
+    // - a prior value existed but was expired/invalid and re-resolved in the
+    //   foreground (no stale served) -> revalidated
+    const status: CacheStatus =
+      entry.value === undefined
+        ? "miss"
+        : !expired
+          ? "hit"
+          : swr && _isValid
+            ? "stale"
+            : "revalidated";
 
     const _resolve = async () => {
       const isPending = pending[key];
@@ -152,28 +190,47 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         entry.integrity = integrity;
         entry.stale = undefined;
         delete pending[key];
-        if (validate(entry) !== false) {
+        // Derive per-entry lifetime from the resolved value, overriding static options for this write.
+        if (opts.getMaxAge) {
+          try {
+            const resolved = await opts.getMaxAge(entry);
+            // A bare number is shorthand for `{ maxAge }`.
+            const dynamic = typeof resolved === "number" ? { maxAge: resolved } : resolved;
+            // Clamp to a non-negative TTL: a value <= 0 means "don't cache" (re-resolve every
+            // access), never "cache forever as fresh". Non-finite (NaN) falls back to static options.
+            entry.maxAge = _clampTtl(dynamic?.maxAge);
+            entry.staleMaxAge = _clampTtl(dynamic?.staleMaxAge);
+          } catch (error) {
+            _onError("[cache] getMaxAge hook error.", error);
+          }
+        }
+        if ((await validate(entry)) !== false) {
+          // Per-entry TTL (from the `getMaxAge` hook) falls back to static options when not provided.
+          const writeMaxAge = entry.maxAge ?? opts.maxAge;
+          const writeStaleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
           let setOpts: { ttl?: number } | undefined;
-          if (opts.maxAge != null && opts.maxAge > 0) {
+          if (writeMaxAge != null && writeMaxAge > 0) {
             if (opts.swr) {
               // With SWR, storage TTL must cover maxAge + staleMaxAge window
-              if (opts.staleMaxAge != null && opts.staleMaxAge >= 0) {
-                setOpts = { ttl: opts.maxAge + opts.staleMaxAge };
+              if (writeStaleMaxAge != null && writeStaleMaxAge >= 0) {
+                setOpts = { ttl: writeMaxAge + writeStaleMaxAge };
               }
               // If staleMaxAge is not set, no storage TTL (entry lives until manually evicted)
             } else {
-              setOpts = { ttl: opts.maxAge };
+              setOpts = { ttl: writeMaxAge };
             }
           }
           // Multi-tier write: only write to tiers up to the one that matched.
           // If no tier had a hit (hitIndex === -1), write to all tiers.
           // If tier N matched, write to tiers 0..N (promote upward + refresh hit tier).
           const writeBases = hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
+          // `status` is a per-call field — never persist it to storage.
+          const { status: _status, ...toStore } = entry;
           const promise = (async () => {
             try {
               await Promise.all(
                 writeBases.map((b) =>
-                  useStorage().set(_buildCacheKey(key, { group, name }, b), entry, setOpts),
+                  useStorage().set(_buildCacheKey(key, { group, name }, b), toStore, setOpts),
                 ),
               );
             } catch (error) {
@@ -181,8 +238,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             }
           })();
           event?.req.waitUntil?.(promise);
-        } else {
-          // Revalidation produced an invalid result — evict stale entry from storage
+        } else if (hitIndex >= 0) {
+          // A prior cached entry existed but revalidation produced an invalid result —
+          // evict it so SWR doesn't keep serving the stale value. When there was no
+          // cache hit (hitIndex === -1) nothing is stored, so skip the redundant delete
+          // (e.g. a handler returning `Cache-Control: no-store`/`private` on every request).
           const evictPromise = _evictFromStorage(key, bases, group, name).catch((error) => {
             _onError("[cache] Cache eviction error.", error);
           });
@@ -199,7 +259,22 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       event?.req.waitUntil?.(_resolvePromise);
     }
 
-    if (opts.swr && validate(entry) !== false) {
+    // Attach the per-call `status` to `entry`. `entry` is a per-call clone (see the
+    // read path above), never the object a ref-sharing storage backend still holds,
+    // so this can't corrupt shared state or race with concurrent same-key calls. It's
+    // still marked NON-ENUMERABLE as defence-in-depth so it stays out of every
+    // persistence path (object spreads, JSON/structuredClone). Attaching to the live
+    // clone (rather than a fresh return-time copy) means a synchronous SWR
+    // revalidation that updates `entry.value` in a microtask is reflected in the
+    // returned value.
+    Object.defineProperty(entry, "status", {
+      value: status,
+      enumerable: false,
+      writable: true,
+      configurable: true,
+    });
+
+    if (swr && (await validate(entry)) !== false) {
       _resolvePromise.catch((error) => {
         _onError("[cache] SWR handler error.", error);
       });
@@ -357,6 +432,11 @@ function isHTTPEvent(input: unknown): input is HTTPEvent {
   return (input as any)?.req instanceof Request;
 }
 
+/** Normalizes a dynamic TTL: clamps negatives to 0, treats nullish/non-finite as "unset" (static fallback). */
+function _clampTtl(value: number | undefined): number | undefined {
+  return value == null || !Number.isFinite(value) ? undefined : Math.max(0, value);
+}
+
 function getKey(...args: unknown[]) {
   return args.length > 0 ? hash(args) : "";
 }
@@ -387,15 +467,18 @@ function _remainingTtl(
   entry: CacheEntry,
   opts: Pick<CacheOptions, "maxAge" | "swr" | "staleMaxAge">,
 ): { ttl: number } | undefined {
-  if (!entry.mtime || opts.maxAge == null || opts.maxAge <= 0) {
+  // Prefer the per-entry TTL persisted by `getMaxAge`, falling back to static options.
+  const maxAge = entry.maxAge ?? opts.maxAge;
+  const staleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
+  if (!entry.mtime || maxAge == null || maxAge <= 0) {
     return undefined;
   }
   // Mirrors the TTL window used on cache writes (see `get` in defineCachedFunction)
   const ttlWindow =
     opts.swr === false
-      ? opts.maxAge
-      : opts.staleMaxAge != null && opts.staleMaxAge >= 0
-        ? opts.maxAge + opts.staleMaxAge
+      ? maxAge
+      : staleMaxAge != null && staleMaxAge >= 0
+        ? maxAge + staleMaxAge
         : undefined;
   if (ttlWindow === undefined) {
     return undefined;

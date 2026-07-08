@@ -90,6 +90,72 @@ describe("cachedFunction", () => {
     expect(await fn()).toBe("transformed-raw");
   });
 
+  it("exposes cache status (hit/miss/stale) to transform", async () => {
+    const statuses: (string | undefined)[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(() => `v${++n}`, {
+      maxAge: 100,
+      getKey: () => "k",
+      transform: (entry) => {
+        statuses.push(entry.status);
+        return entry.value;
+      },
+    });
+
+    await fn(); // resolved fresh
+    await fn(); // served from cache
+    await fn.expire(); // mark stale for background refresh
+    await fn(); // served stale under SWR
+
+    expect(statuses).toEqual(["miss", "hit", "stale"]);
+  });
+
+  it("reports revalidated when an expired entry is re-resolved in the foreground (swr disabled)", async () => {
+    const statuses: (string | undefined)[] = [];
+    let n = 0;
+    const fn = defineCachedFunction(() => `v${++n}`, {
+      maxAge: 100,
+      swr: false,
+      getKey: () => "k",
+      transform: (entry) => {
+        statuses.push(entry.status);
+        return entry.value;
+      },
+    });
+
+    await fn(); // nothing cached -> miss
+    await fn(); // fresh cached value -> hit
+    await fn.expire(); // mark the existing entry stale
+    await fn(); // no SWR -> prior value re-resolved in foreground -> revalidated
+
+    expect(statuses).toEqual(["miss", "hit", "revalidated"]);
+  });
+
+  it("does not persist per-call status to storage (incl. on a hit)", async () => {
+    const fn = defineCachedFunction(() => "v", { maxAge: 100, getKey: () => "k" });
+    await fn(); // miss (writes entry)
+    await fn(); // hit — must not mutate the stored entry with `status`
+    const [key] = await resolveCacheKeys({ options: { getKey: () => "k" } });
+    const stored = (await useStorage().get(key!)) as Record<string, unknown>;
+    expect(Object.keys(stored)).not.toContain("status");
+  });
+
+  it("does not persist status through expireCache", async () => {
+    const fn = defineCachedFunction(() => "v", {
+      maxAge: 100,
+      staleMaxAge: 100,
+      swr: true,
+      getKey: () => "k",
+    });
+    await fn(); // miss
+    await fn(); // hit (sets per-call status on the returned entry)
+    await fn.expire();
+    const [key] = await resolveCacheKeys({ options: { getKey: () => "k" } });
+    const stored = (await useStorage().get(key!)) as Record<string, unknown>;
+    expect(stored.stale).toBe(true);
+    expect(Object.keys(stored)).not.toContain("status");
+  });
+
   it("handles resolver errors", async () => {
     const fn = defineCachedFunction(
       () => {
@@ -163,6 +229,72 @@ describe("cachedFunction", () => {
     expect(r1).toBe(1);
     const r2 = await fn();
     expect(r2).toBe(2);
+  });
+
+  it("supports asynchronous validate", async () => {
+    // Mirrors issue #32: validate needs to check the cached value against an
+    // external source (e.g. fetching a signed URL to confirm it is still valid).
+    let callCount = 0;
+    let remoteValid = true;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        validate: async (entry) => {
+          // Simulate an async check against a remote source
+          await new Promise((r) => setTimeout(r, 1));
+          return remoteValid && (entry.value ?? 0) > 0;
+        },
+      },
+    );
+
+    // First call resolves fresh (miss)
+    expect(await fn()).toBe(1);
+    // Cached value passes async validation -> served from cache
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+
+    // Remote now reports the cached value as invalid -> re-resolve
+    remoteValid = false;
+    expect(await fn()).toBe(2);
+    expect(callCount).toBe(2);
+  });
+
+  it("supports asynchronous validate with SWR", async () => {
+    // When async validate reports the cached value as invalid, the entry is
+    // treated as fully invalid: SWR does NOT serve the stale value (it can't be
+    // trusted), and the call re-resolves in the foreground instead.
+    let callCount = 0;
+    let remoteValid = true;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return `v${callCount}`;
+      },
+      {
+        maxAge: 1,
+        staleMaxAge: 10,
+        swr: true,
+        validate: async (entry) => {
+          await new Promise((r) => setTimeout(r, 1));
+          return remoteValid && entry.value !== undefined;
+        },
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    // Within maxAge, async validate passes -> cache hit
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Async validate now reports invalid -> re-resolve in foreground (no stale served)
+    remoteValid = false;
+    expect(await fn()).toBe("v2");
+    expect(callCount).toBe(2);
   });
 
   it("handles cache read errors gracefully", async () => {
@@ -619,6 +751,31 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(2);
   });
 
+  it("SWR with maxAge: 0 and staleMaxAge: 0 blocks revalidation instead of serving stale", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction<string, [any]>(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 20));
+        return `v${callCount}`;
+      },
+      { maxAge: 0, swr: true, staleMaxAge: 0, getKey: () => "k" },
+    );
+    // Event with waitUntil so the first entry is actually persisted before the 2nd read.
+    const makeEv = () => ({
+      req: Object.assign(new Request("http://localhost/"), { waitUntil: () => {} }),
+    });
+
+    expect(await fn(makeEv())).toBe("v1");
+    await new Promise((r) => setTimeout(r, 5));
+    // A zero stale window must revalidate in the foreground, never serve the stale value —
+    // previously the fully-expired check skipped maxAge: 0 (ttl === 0), so this returned the
+    // stale "v1" (with x-cache "STALE") instead of blocking for the fresh "v2".
+    const r2 = await fn(makeEv());
+    expect(r2).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
   it("waitUntil is used for SWR background revalidation", async () => {
     const waitUntilFn = vi.fn();
     let callCount = 0;
@@ -642,6 +799,176 @@ describe("cachedFunction", () => {
     await fn({ req: req2 });
 
     expect(waitUntilFn.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("getMaxAge (dynamic per-entry TTL)", () => {
+  it("derives maxAge from the resolved value for the freshness check", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        // First resolve is short-lived, later resolves long-lived
+        return { value: `v${callCount}`, expiresIn: callCount === 1 ? 0.01 : 10 };
+      },
+      {
+        swr: false,
+        getKey: () => "dyn-key",
+        // Number shorthand for maxAge
+        getMaxAge: (entry) => entry.value?.expiresIn,
+      },
+    );
+
+    expect((await fn()).value).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Within the per-entry maxAge (0.01s) — served from cache
+    expect((await fn()).value).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Wait past the first entry's short maxAge — re-resolves
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await fn()).value).toBe("v2");
+    expect(callCount).toBe(2);
+
+    // Second entry has a long maxAge — stays cached past the first entry's window
+    await new Promise((r) => setTimeout(r, 20));
+    expect((await fn()).value).toBe("v2");
+    expect(callCount).toBe(2);
+  });
+
+  it("persists the resolved TTL on the stored entry", async () => {
+    const fn = defineCachedFunction(() => ({ n: 1 }), {
+      maxAge: 5,
+      getKey: () => "persist-key",
+      getMaxAge: () => ({ maxAge: 42, staleMaxAge: 7 }),
+    });
+
+    await fn();
+
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.maxAge).toBe(42);
+    expect(entry.staleMaxAge).toBe(7);
+  });
+
+  it("falls back to static options when getMaxAge returns undefined", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        getKey: () => "fallback-key",
+        getMaxAge: () => undefined,
+      },
+    );
+
+    expect(await fn()).toBe(1);
+    // Static maxAge of 10s still applies — served from cache
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.maxAge).toBeUndefined();
+  });
+
+  it("uses the per-entry stale window for SWR", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        await new Promise((r) => setTimeout(r, 5));
+        return `v${callCount}`;
+      },
+      {
+        swr: true,
+        getKey: () => "swr-dyn-key",
+        getMaxAge: () => ({ maxAge: 0.01, staleMaxAge: 10 }),
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(1);
+
+    // Past per-entry maxAge but within staleMaxAge — serves stale, revalidates in background
+    await new Promise((r) => setTimeout(r, 15));
+    expect(await fn()).toBe("v1");
+    expect(callCount).toBe(2);
+  });
+
+  it("continues writing the entry when getMaxAge throws (reports via onError)", async () => {
+    const errors: unknown[] = [];
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        getKey: () => "throw-key",
+        getMaxAge: () => {
+          throw new Error("boom");
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+
+    expect(await fn()).toBe(1);
+    // getMaxAge threw, but the entry is still cached using static options
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+    expect(errors.length).toBe(1);
+  });
+
+  it("clamps a negative maxAge to 0 (re-resolves every access, never cached forever)", async () => {
+    let callCount = 0;
+    const fn = defineCachedFunction(
+      () => {
+        callCount++;
+        return callCount;
+      },
+      {
+        maxAge: 10,
+        swr: false,
+        getKey: () => "negative-key",
+        // A negative TTL (e.g. an already-expired token) must not pin the entry as fresh
+        getMaxAge: () => -5,
+      },
+    );
+
+    expect(await fn()).toBe(1);
+    expect(await fn()).toBe(2);
+    expect(callCount).toBe(2);
+
+    const keys = await fn.resolveKeys();
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.maxAge).toBe(0);
+  });
+
+  it("respects per-entry TTL when expiring via expireCache", async () => {
+    const options = {
+      swr: true,
+      getKey: () => "expire-dyn-key",
+      getMaxAge: () => ({ maxAge: 60, staleMaxAge: 120 }),
+    };
+    const fn = defineCachedFunction(() => "value", options);
+
+    await fn();
+    const keys = await fn.resolveKeys();
+    expect(((await useStorage().get(keys[0]!)) as any).stale).toBeUndefined();
+
+    await expireCache({ options, args: [] });
+    const entry = (await useStorage().get(keys[0]!)) as any;
+    expect(entry.stale).toBe(true);
+    // Entry value is preserved for SWR to keep serving
+    expect(entry.value).toBe("value");
   });
 });
 
@@ -686,6 +1013,60 @@ describe("storage", () => {
     const storage = createMemoryStorage();
     storage.set("nonexistent", null);
     expect(storage.get("nonexistent")).toBeNull();
+  });
+
+  it("evicts least-recently-used entries when maxSize is exceeded", () => {
+    const storage = createMemoryStorage({ maxSize: 2 });
+    storage.set("a", 1);
+    storage.set("b", 2);
+    storage.set("c", 3); // exceeds maxSize -> evicts "a" (oldest)
+    expect(storage.get("a")).toBeNull();
+    expect(storage.get("b")).toBe(2);
+    expect(storage.get("c")).toBe(3);
+  });
+
+  it("get marks an entry as recently used so it survives eviction", () => {
+    const storage = createMemoryStorage({ maxSize: 2 });
+    storage.set("a", 1);
+    storage.set("b", 2);
+    // Touch "a" so "b" becomes the least-recently-used.
+    expect(storage.get("a")).toBe(1);
+    storage.set("c", 3); // evicts "b"
+    expect(storage.get("a")).toBe(1);
+    expect(storage.get("b")).toBeNull();
+    expect(storage.get("c")).toBe(3);
+  });
+
+  it("re-setting an existing key refreshes its recency and does not grow the map", () => {
+    const storage = createMemoryStorage({ maxSize: 2 });
+    storage.set("a", 1);
+    storage.set("b", 2);
+    storage.set("a", 10); // update "a" -> now most-recent
+    storage.set("c", 3); // evicts "b"
+    expect(storage.get("a")).toBe(10);
+    expect(storage.get("b")).toBeNull();
+    expect(storage.get("c")).toBe(3);
+  });
+
+  it("applies a default maxSize when none is provided", () => {
+    const storage = createMemoryStorage();
+    for (let i = 0; i < 12_000; i++) {
+      storage.set(`key-${i}`, i);
+    }
+    // Oldest entries beyond the default ceiling (10 000) are evicted.
+    expect(storage.get("key-0")).toBeNull();
+    expect(storage.get("key-1999")).toBeNull();
+    expect(storage.get("key-2000")).toBe(2000);
+    expect(storage.get("key-11999")).toBe(11_999);
+  });
+
+  it("grows unbounded when maxSize is Infinity", () => {
+    const storage = createMemoryStorage({ maxSize: Number.POSITIVE_INFINITY });
+    for (let i = 0; i < 2000; i++) {
+      storage.set(`key-${i}`, i);
+    }
+    expect(storage.get("key-0")).toBe(0);
+    expect(storage.get("key-1999")).toBe(1999);
   });
 
   // Regression: nitro#2138 — expired cache entries never get flushed from memory.
@@ -753,6 +1134,70 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
   });
 
+  it("sets X-Cache header (MISS then HIT) when cacheStatusHeader is true", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: true,
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
+  it("supports a custom cacheStatusHeader name", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: "x-nitro-cache",
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(r1.headers.get("x-nitro-cache")).toBe("MISS");
+    expect(r2.headers.get("x-nitro-cache")).toBe("HIT");
+  });
+
+  it("sets the X-Cache header by default", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 100 });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
+  it("disables the cache-status header when cacheStatusHeader is false", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: false,
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("x-cache")).toBeNull();
+  });
+
+  it("propagates cache-status header on 304 responses", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 100,
+      cacheStatusHeader: true,
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const etag = r1.headers.get("etag")!;
+    const r2 = (await handler(makeEvent(path, { headers: { "if-none-match": etag } }))) as Response;
+
+    expect(r2.status).toBe(304);
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+  });
+
   it("bypasses cache for non-GET methods", async () => {
     let callCount = 0;
     const path = uniquePath();
@@ -814,6 +1259,113 @@ describe("defineCachedHandler", () => {
 
     const res = (await handler(makeEvent(path))) as Response;
     expect(res.headers.get("cache-control")).toBe("max-age=60");
+  });
+
+  it("does not clobber an explicit cache-control from the handler", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "cache-control": "public, max-age=600" } }),
+      { maxAge: 60, swr: true, staleMaxAge: 120 },
+    );
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-control")).toBe("public, max-age=600");
+  });
+
+  it("does not cache responses with Cache-Control: no-store", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "no-store" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(await r1.text()).toBe("ok");
+    expect(await r2.text()).toBe("ok");
+    expect(r1.headers.get("cache-control")).toBe("no-store");
+    // Never served from cache: the handler runs on every request.
+    expect(callCount).toBe(2);
+    expect(r2.headers.get("x-cache")).toBe("MISS");
+  });
+
+  it("does not write to storage (no redundant eviction) on a no-store miss", async () => {
+    const setSpy = vi.fn();
+    setStorage({ get: () => null, set: setSpy });
+
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "cache-control": "no-store" } }),
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(uniquePath()));
+
+    // Nothing was stored (rejected) and nothing was there to evict, so no write at all.
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not cache responses with Cache-Control: private", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "private, max-age=60" } });
+      },
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path));
+    await handler(makeEvent(path));
+
+    expect(callCount).toBe(2);
+  });
+
+  // Regression: a corrupt/partial stored entry whose `value` lacks a `headers`
+  // field must degrade to a cache miss, not throw from validate()'s cache-control
+  // check (which runs before the status/body guards).
+  it("degrades to a miss on a corrupt cache entry with no headers", async () => {
+    let callCount = 0;
+    setStorage({
+      get: () => ({ value: { status: 200 } }) as any,
+      set: () => {},
+    });
+
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const res = (await handler(makeEvent(uniquePath()))) as Response;
+    expect(await res.text()).toBe("ok");
+    expect(callCount).toBe(1);
+  });
+
+  it("still caches responses with a cacheable explicit cache-control", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("ok", { headers: { "cache-control": "public, max-age=60" } });
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    expect(callCount).toBe(1);
+    expect(r1.headers.get("x-cache")).toBe("MISS");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
   });
 
   it("auto-generates etag and last-modified", async () => {
@@ -1236,7 +1788,10 @@ describe("defineCachedHandler", () => {
       makeEvent(path, { headers: { "if-none-match": '"test-etag"' } }),
     )) as Response;
     expect(res.status).toBe(304);
-    expect(createResponse).toHaveBeenCalledWith(null, { status: 304 });
+    expect(createResponse).toHaveBeenCalledWith(null, {
+      status: 304,
+      headers: { "x-cache": "HIT" },
+    });
   });
 
   it("uses custom handleCacheHeaders hook", async () => {

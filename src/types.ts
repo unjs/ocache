@@ -25,6 +25,17 @@ export type EventHandler<E extends HTTPEvent = HTTPEvent> = (
 ) => unknown | Promise<unknown>;
 
 /**
+ * How a cached value was served on a given call.
+ *
+ * - `"hit"` — a fresh cached value was returned without re-resolving.
+ * - `"stale"` — a stale value was served while a background SWR refresh runs.
+ * - `"revalidated"` — a prior value existed but was expired/invalid, so it was
+ *   re-resolved in the foreground (no stale value served) before returning.
+ * - `"miss"` — the value was resolved fresh on this call (nothing was cached).
+ */
+export type CacheStatus = "hit" | "stale" | "revalidated" | "miss";
+
+/**
  * Stored cache entry wrapping a cached value with metadata.
  */
 export interface CacheEntry<T = any> {
@@ -38,6 +49,18 @@ export interface CacheEntry<T = any> {
   integrity?: string;
   /** When `true`, the entry is treated as expired on next access (set by `expireCache`). Cleared after a successful revalidation. */
   stale?: boolean;
+  /** Resolved per-entry `maxAge` (seconds) set by the `getMaxAge` hook. Overrides `CacheOptions.maxAge` for this entry's freshness check and storage TTL. */
+  maxAge?: number;
+  /** Resolved per-entry `staleMaxAge` (seconds) set by the `getMaxAge` hook. Overrides `CacheOptions.staleMaxAge` for this entry. */
+  staleMaxAge?: number;
+  /**
+   * How this value was served on the current call (`"hit"` / `"stale"` / `"revalidated"` / `"miss"`).
+   *
+   * Populated per-call on the entry passed to `transform` — it is **not** persisted
+   * to storage. Read it from `transform` for metrics/observability or to drive
+   * conditional logic. See {@link CacheStatus}.
+   */
+  status?: CacheStatus;
 }
 
 /**
@@ -48,10 +71,20 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   name?: string;
   /** Custom cache key generator. Receives the same arguments as the cached function. */
   getKey?: (...args: ArgsT) => string | Promise<string>;
-  /** Transform the cached entry before returning. Return value replaces the cached value. */
+  /**
+   * Transform the cached entry before returning. Return value replaces the cached value.
+   *
+   * The passed entry carries `entry.status` (`"hit"` / `"stale"` / `"revalidated"` / `"miss"`) describing
+   * how the value was served on this call — useful for metrics or conditional logic.
+   */
   transform?: (entry: CacheEntry<T>, ...args: ArgsT) => any;
-  /** Validate a cache entry. Return `false` to treat the entry as invalid and re-resolve. */
-  validate?: (entry: CacheEntry<T>, ...args: ArgsT) => boolean;
+  /**
+   * Validate a cache entry. Return `false` (or a Promise resolving to `false`) to treat
+   * the entry as invalid and re-resolve. Asynchronous validation is supported for cases
+   * that need to check the cached value against an external source (e.g. fetching a
+   * signed URL to confirm it is still valid).
+   */
+  validate?: (entry: CacheEntry<T>, ...args: ArgsT) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is invalidated and the function is re-invoked. */
   shouldInvalidateCache?: (...args: ArgsT) => boolean | Promise<boolean>;
   /** When returns `true`, the cache is bypassed entirely and the function is called directly. */
@@ -64,8 +97,31 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   maxAge?: number;
   /** Enable stale-while-revalidate behavior. When `true`, returns stale cache while refreshing in the background. Defaults to `true`. */
   swr?: boolean;
-  /** Maximum number of seconds a stale entry can be served while revalidating. */
+  /** Maximum number of seconds a stale entry can be served while revalidating. `0` means stale is never served — once expired, revalidation blocks the request. */
   staleMaxAge?: number;
+  /**
+   * Derive the per-entry cache lifetime from the resolved value. Runs after the resolver and before
+   * the entry is persisted. Return a number (seconds) as shorthand for `maxAge`, or an object to also
+   * override `staleMaxAge`. The resolved values override the static options for that entry and drive
+   * both the read freshness check and the storage TTL. Return `undefined` (or omit a field) to fall
+   * back to the static option. A resolved value `<= 0` disables caching for that entry (re-resolves
+   * on every access); negatives are clamped to `0` rather than treated as "cache forever".
+   *
+   * @example
+   * ```ts
+   * // Cache an OAuth token for exactly its `expires_in`
+   * getMaxAge: (entry) => entry.value?.expires_in,
+   * // Override both the fresh and stale windows
+   * getMaxAge: (entry) => ({ maxAge: 60, staleMaxAge: 300 }),
+   * ```
+   */
+  getMaxAge?: (
+    entry: CacheEntry<T>,
+  ) =>
+    | number
+    | { maxAge?: number; staleMaxAge?: number }
+    | undefined
+    | Promise<number | { maxAge?: number; staleMaxAge?: number } | undefined>;
   /** Base path prefix(es) for cache keys. When an array, reads try each prefix in order (multi-tier) and writes go to all prefixes. Defaults to `"/cache"`. */
   base?: string | string[];
   /** Optional error handler called for all cache-related errors (read, write, SWR, malformed data). */
@@ -119,6 +175,17 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * URL the handler sees.
    */
   variesQuery?: string[] | readonly string[];
+
+  /**
+   * Add a cache-status response header (CDN-style `X-Cache: HIT | STALE | REVALIDATED | MISS`).
+   *
+   * - `true` (default) — sets the `X-Cache` header.
+   * - a string — sets a custom header name (e.g. `"x-nitro-cache"`).
+   * - `false` — no header is set.
+   *
+   * Has no effect in `headersOnly` mode (no value is cached there).
+   */
+  cacheStatusHeader?: boolean | string;
 
   /**
    * Convert handler return value to a Response.

@@ -39,6 +39,7 @@ const cached = defineCachedFunction(fn, {
   maxAge: 10, // TTL in seconds (default: 1)
   swr: true, // Stale-while-revalidate (default: true)
   staleMaxAge: 60, // Max seconds to serve stale content
+  getMaxAge: (entry) => entry.value?.expires_in, // Per-entry TTL from the resolved value
   base: "/cache", // Base prefix for cache keys (string or string[] for multi-tier)
   group: "my-group", // Cache key group (default: "functions")
   getKey: (...args) => "custom-key", // Custom cache key generator
@@ -48,6 +49,20 @@ const cached = defineCachedFunction(fn, {
   transform: (entry) => entry.value, // Transform before returning
   onError: (error) => console.error(error), // Error handler
 });
+```
+
+#### Dynamic TTL
+
+Some cached values carry their own expiry — an OAuth token with `expires_in`, an upstream response with `Cache-Control: max-age`. Use `getMaxAge` to derive the lifetime from the resolved value instead of a fixed constant. It runs after the resolver and returns either a number (seconds, shorthand for `maxAge`) or `{ maxAge?, staleMaxAge? }` to also override the stale window. The resolved values override the static options for that entry and are used for both the freshness check and the storage TTL. Return `undefined` (or omit a field) to fall back to the static option.
+
+```ts
+const getToken = defineCachedFunction(
+  () => fetchToken(), // resolves { access_token, expires_in }
+  {
+    // Cache each token for exactly its own lifetime (minus a small safety margin)
+    getMaxAge: (entry) => Math.max(1, (entry.value?.expires_in ?? 60) - 5),
+  },
+);
 ```
 
 ### Caching HTTP Handlers
@@ -97,6 +112,16 @@ const handler = defineCachedHandler(myHandler, {
   maxAge: 60,
 });
 ```
+
+#### Private / non-cacheable responses
+
+`defineCachedHandler` honors an explicit `Cache-Control` on the response:
+
+- If the handler sets `Cache-Control: no-store` or `private`, the response is returned to the caller but never written to the cache — the handler runs on every request.
+- If the handler sets any other `Cache-Control`, it is preserved verbatim. The synthesized `s-maxage` / `stale-while-revalidate` / `max-age` directives are only added when the handler didn't set a `Cache-Control` of its own.
+
+> [!NOTE]
+> This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
 
 ### Cache Invalidation
 
@@ -202,6 +227,17 @@ const redisStorage: StorageInterface = {
 setStorage(redisStorage);
 ```
 
+The built-in memory storage keeps at most `10 000` entries by default, evicting the least-recently-used entries once the ceiling is exceeded (LRU). Pass `maxSize` to change the ceiling, or `Infinity` to disable it and grow unbounded:
+
+```ts
+import { createMemoryStorage, setStorage } from "ocache";
+
+setStorage(createMemoryStorage({ maxSize: 10_000 }));
+
+// Opt out of the ceiling entirely (previous unbounded behavior)
+setStorage(createMemoryStorage({ maxSize: Infinity }));
+```
+
 ## API
 
 <!-- automd:docs4ts -->
@@ -216,13 +252,29 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 
 ---
 
+### `CacheStatus`
+
+```ts
+type CacheStatus = "hit" | "stale" | "revalidated" | "miss";
+```
+
+How a cached value was served on a given call.
+
+- `"hit"` — a fresh cached value was returned without re-resolving.
+- `"stale"` — a stale value was served while a background SWR refresh runs.
+- `"revalidated"` — a prior value existed but was expired/invalid, so it was
+  re-resolved in the foreground (no stale value served) before returning.
+- `"miss"` — the value was resolved fresh on this call (nothing was cached).
+
+---
+
 ### `createMemoryStorage`
 
 ```ts
-function createMemoryStorage(): StorageInterface;
+function createMemoryStorage(opts: MemoryStorageOptions =
 ```
 
-Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds).
+Creates an in-memory storage backed by a `Map` with optional TTL support (in seconds) and LRU eviction.
 
 ---
 

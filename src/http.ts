@@ -16,6 +16,7 @@ function defaultCacheOptions() {
     base: "/cache",
     swr: true,
     maxAge: 1,
+    cacheStatusHeader: true,
   } as const;
 }
 
@@ -68,8 +69,32 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const _handleCacheHeaders = opts.handleCacheHeaders || _defaultHandleCacheHeaders;
 
+  // CDN-style cache-status header (X-Cache: HIT | MISS | STALE)
+  const _statusHeader =
+    opts.cacheStatusHeader === true
+      ? "x-cache"
+      : typeof opts.cacheStatusHeader === "string" && opts.cacheStatusHeader
+        ? opts.cacheStatusHeader.toLowerCase()
+        : undefined;
+
   const _opts: CacheOptions<ResponseCacheEntry> = {
     ...opts,
+    // Inject the cache-status header into a cloned entry value (never mutating the
+    // stored entry) so it flows through to the final Response headers.
+    transform: _statusHeader
+      ? (entry) => {
+          if (!entry.value) {
+            return;
+          }
+          return {
+            ...entry.value,
+            headers: {
+              ...entry.value.headers,
+              [_statusHeader]: String(entry.status).toUpperCase(),
+            },
+          };
+        }
+      : undefined,
     shouldBypassCache: (event) => {
       return event.req.method !== "GET" && event.req.method !== "HEAD";
     },
@@ -98,6 +123,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     },
     validate: (entry) => {
       if (!entry.value) {
+        return false;
+      }
+      // Honor an explicit `Cache-Control: no-store` / `private` on the response — never cache it.
+      if (_forbidsSharedCaching(entry.value.headers?.["cache-control"])) {
         return false;
       }
       if (entry.value.status >= 400) {
@@ -167,22 +196,27 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       res.headers.set("last-modified", new Date().toUTCString());
     }
 
-    const cacheControl = [];
-    if (opts.swr) {
-      if (opts.maxAge != null) {
-        cacheControl.push(`s-maxage=${opts.maxAge}`);
+    // Only synthesize a cache-control header when the handler did not set one
+    // explicitly — never clobber an explicit cache-control with our SWR/s-maxage
+    // directives (mirrors the etag / last-modified "preserve if present" behavior above).
+    if (!res.headers.has("cache-control")) {
+      const cacheControl = [];
+      if (opts.swr) {
+        if (opts.maxAge != null) {
+          cacheControl.push(`s-maxage=${opts.maxAge}`);
+        }
+        if (opts.staleMaxAge != null) {
+          cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
+        } else {
+          cacheControl.push("stale-while-revalidate");
+        }
+      } else if (opts.maxAge) {
+        // For non-SWR, set max-age directly
+        cacheControl.push(`max-age=${opts.maxAge}`);
       }
-      if (opts.staleMaxAge != null) {
-        cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
-      } else {
-        cacheControl.push("stale-while-revalidate");
+      if (cacheControl.length > 0) {
+        res.headers.set("cache-control", cacheControl.join(", "));
       }
-    } else if (opts.maxAge) {
-      // For non-SWR, set max-age directly
-      cacheControl.push(`max-age=${opts.maxAge}`);
-    }
-    if (cacheControl.length > 0) {
-      res.headers.set("cache-control", cacheControl.join(", "));
     }
 
     const cacheEntry: ResponseCacheEntry = {
@@ -215,7 +249,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         maxAge: opts.maxAge,
       })
     ) {
-      return _createResponse(null, { status: 304 });
+      const statusValue = _statusHeader
+        ? (response.headers[_statusHeader] as string | undefined)
+        : undefined;
+      return _createResponse(null, {
+        status: 304,
+        headers: statusValue === undefined ? undefined : { [_statusHeader!]: statusValue },
+      });
     }
 
     // Send Response
@@ -243,6 +283,20 @@ function _filterSearch(url: URL, names: string[]): string {
   }
   const query = filtered.toString();
   return query ? `?${query}` : "";
+}
+
+/**
+ * Whether a `Cache-Control` header value explicitly forbids storing the response in a
+ * shared cache — `no-store` (never store anywhere) or `private` (not in a shared cache).
+ */
+function _forbidsSharedCaching(cacheControl: unknown): boolean {
+  if (typeof cacheControl !== "string" || !cacheControl) {
+    return false;
+  }
+  return cacheControl.split(",").some((directive) => {
+    const name = directive.trim().split("=")[0]!.toLowerCase();
+    return name === "no-store" || name === "private";
+  });
 }
 
 /** Strips storage-location fields from opts so integrity only reflects the cached computation. */
