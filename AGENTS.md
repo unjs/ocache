@@ -1,6 +1,6 @@
 # ocache
 
-Standalone caching utilities extracted from [nitro](https://github.com/nitrojs/nitro). Zero framework dependencies — works with any runtime that has standard `Request`/`Response`.
+Composable caching primitives. works with any runtime that has standard `Request`/`Response`.
 
 ## Project Structure
 

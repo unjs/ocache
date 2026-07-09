@@ -7,6 +7,19 @@
 
 <!-- /automd -->
 
+Composable caching primitives with TTL, stale-while-revalidate, and HTTP response caching. Zero framework dependencies — works with any runtime that has standard `Request`/`Response`.
+
+> [!TIP]
+> 📖 Head to the [documentation](https://ocache.unjs.io/guide) to learn more.
+
+## Features
+
+- 🗃️ **[Function caching](https://ocache.unjs.io/guide/functions)** — wrap any function with TTL, stale-while-revalidate, and request deduplication.
+- 🌐 **[HTTP response caching](https://ocache.unjs.io/guide/handler)** — automatic `etag`, `last-modified`, and `304 Not Modified` support.
+- 🔑 **[Smart cache keys](https://ocache.unjs.io/guide/query-params)** — derived from arguments or request URL, with per-header and per-query variance.
+- 🔌 **[Pluggable storage](https://ocache.unjs.io/guide/storage)** — bring your own backend via a minimal `get`/`set` interface.
+- ♻️ **[Invalidation & expiration](https://ocache.unjs.io/guide/invalidation)** — remove or mark entries stale on demand, with SWR background refresh.
+
 ## Usage
 
 ### Caching Functions
@@ -31,56 +44,8 @@ const cachedFetch = defineCachedFunction(
 const data = await cachedFetch("https://api.example.com/data");
 ```
 
-#### Options
-
-```ts
-const cached = defineCachedFunction(fn, {
-  name: "my-fn", // Cache key name (defaults to function name)
-  maxAge: 10, // TTL in seconds (default: 1)
-  swr: false, // Stale-while-revalidate (default: false — opt in to serve stale)
-  staleMaxAge: 60, // Max seconds to serve stale content
-  getMaxAge: (entry) => entry.value?.expires_in, // Per-entry TTL from the resolved value
-  base: "/cache", // Base prefix for cache keys (string or string[] for multi-tier)
-  group: "my-group", // Cache key group (default: "functions")
-  getKey: (...args) => "custom-key", // Custom cache key generator
-  shouldBypassCache: (...args) => false, // Skip cache entirely when true
-  shouldInvalidateCache: (...args) => false, // Force refresh when true
-  validate: (entry) => entry.value !== undefined, // Custom validation
-  serialize: (entry) => entry.value, // Prepare value for storage (transform restores it on read)
-  transform: (entry) => entry.value, // Transform before returning
-  onError: (error) => console.error(error), // Error handler
-});
-```
-
-#### Dynamic TTL
-
-Some cached values carry their own expiry — an OAuth token with `expires_in`, an upstream response with `Cache-Control: max-age`. Use `getMaxAge` to derive the lifetime from the resolved value instead of a fixed constant. It runs after the resolver and returns either a number (seconds, shorthand for `maxAge`) or `{ maxAge?, staleMaxAge? }` to also override the stale window. The resolved values override the static options for that entry and are used for both the freshness check and the storage TTL. Return `undefined` (or omit a field) to fall back to the static option.
-
-```ts
-const getToken = defineCachedFunction(
-  () => fetchToken(), // resolves { access_token, expires_in }
-  {
-    // Cache each token for exactly its own lifetime (minus a small safety margin)
-    getMaxAge: (entry) => Math.max(1, (entry.value?.expires_in ?? 60) - 5),
-  },
-);
-```
-
-#### Custom Serialization
-
-Some resolver outputs can't be persisted as-is — a `ReadableStream`, a class instance. Use `serialize` to convert the value to a storable form on write, and `transform` to reconstruct the usable value on read. `serialize` runs exactly once per resolution, right after the resolver (and after `getMaxAge`, so that hook still sees the raw value) — shared across concurrent deduplicated calls, so consuming a one-shot source like a stream is safe.
-
-```ts
-const getReport = defineCachedFunction(
-  () => generateReportStream(), // resolves a one-shot ReadableStream
-  {
-    // Persist the stream as a string...
-    serialize: (entry) => streamToString(entry.value),
-    // ...and recreate a fresh stream on every read.
-    transform: (entry) => stringToStream(entry.value),
-  },
-);
-```
+> [!NOTE]
+> Learn more in the [Caching Functions](https://ocache.unjs.io/guide/functions) guide, and see [Invalidation & Expiration](https://ocache.unjs.io/guide/invalidation) and [Storage](https://ocache.unjs.io/guide/storage).
 
 ### Caching HTTP Handlers
 
@@ -108,257 +73,8 @@ const handler = defineCachedHandler(
 );
 ```
 
-#### Query Parameters
-
-By default the full query string varies the cache key, so `?color=red` and `?color=red&utm=x` are cached separately and unknown params can bust the cache. Set `allowQuery` to an allowlist of param names so only those affect the key — all other params are ignored. Ignored params are also stripped from the URL the handler receives (like non-`varies` headers), so a handler can never accidentally produce output that depends on a param outside the key. Param order is normalized, and repeated (array) params like `?color=red&color=blue` are matched regardless of order. Passing an empty array (`allowQuery: []`) varies by nothing — every query shares one entry. If you set a custom `getKey`, it controls the key entirely and `allowQuery` no longer affects it, but non-allowlisted params are still stripped from the URL the handler receives:
-
-```ts
-const handler = defineCachedHandler(myHandler, {
-  maxAge: 300,
-  allowQuery: ["color"], // ?color=red&lang=en and ?color=red&lang=de share one entry
-});
-```
-
-#### Cookies
-
-**By default no cookies participate in caching, in both directions.** This is a secure default: the `Cookie` request header is stripped before the handler runs (so it can never produce cookie-dependent output that gets cached and served to other users), cookies never vary the cache key, and any `Set-Cookie` the handler sets is stripped from the response before it is cached or returned — mirroring how shared caches (CDNs, Varnish) drop `Set-Cookie` on cacheable responses. This prevents a per-request cookie (such as a session id) from ever reaching another user, whether via a later cache hit or a concurrent request coalesced onto the same resolution. The rest of the response is still cached normally. Stored entries carrying a disallowed `Set-Cookie` (e.g. cached before this behavior existed) are likewise rejected on read instead of replayed.
-
-This only applies to cacheable requests (`GET`/`HEAD`). Methods that bypass caching entirely (e.g. `POST`) reach the handler with their request untouched — cookies, headers, query, and body included — and their `Set-Cookie` is passed through.
-
-Set `allowCookies` to an allowlist of cookie names to opt specific cookies back in. Only the listed cookies survive in the `Cookie` header the handler sees, and their name/value pairs vary the cache key — sorted and order-independent, like `allowQuery`, so only the relevant cookie subset is hashed rather than the entire raw `Cookie` header. On the response side, only allowlisted `Set-Cookie`s survive; any others are stripped and the rest of the response is still cached. Cookie names are case-sensitive. `allowCookies` supersedes `varies: ["cookie"]`.
-
-```ts
-const handler = defineCachedHandler(myHandler, {
-  maxAge: 300,
-  allowCookies: ["theme"], // theme=dark and theme=light cache separately; sid is ignored
-});
-```
-
-Two caveats:
-
-- **Custom `getKey`.** As with `allowQuery`, a custom `getKey` controls the cache key entirely, so allowlisted cookies no longer vary it automatically — if your handler's output depends on a cookie, incorporate it into `getKey` yourself (the handler-visible `Cookie` header is still filtered to the allowlist regardless).
-- **Allowlisted cookies are shared — keep them cache-safe.** An allowlisted cookie participates in caching: it varies the key, and its `Set-Cookie` is cached and replayed to every caller that resolves to the same key (concurrent requests are coalesced into one handler call and share its response). It is your responsibility to only allowlist cookies whose value is safe to share across the users that share a cache key — a `theme`/`locale` preference that is _part of_ the key. **Never allowlist a per-user secret such as a session id**: coalescing plus caching would share that one value across users. A handler that _mints_ a per-request cookie (e.g. initializing an anonymous session with a fresh `Set-Cookie`) must give it a user-specific `getKey`/`varies` so each user keys to a distinct entry — otherwise don't cache it. (With no `allowCookies`, such a cookie is simply stripped, so the default never leaks; this caveat applies only once you opt a cookie back in.)
-
-#### Headers-only Mode
-
-Use `headersOnly` to handle conditional requests without caching the full response:
-
-```ts
-const handler = defineCachedHandler(myHandler, {
-  headersOnly: true,
-  maxAge: 60,
-});
-```
-
-#### Private / non-cacheable responses
-
-`defineCachedHandler` honors an explicit `Cache-Control` on the response:
-
-- If the handler sets `Cache-Control: no-store` or `private`, the response is returned to the caller but never written to the cache — the handler runs on every request.
-- If the handler sets any other `Cache-Control`, it is preserved verbatim. The synthesized `s-maxage` / `stale-while-revalidate` / `max-age` directives are only added when the handler didn't set a `Cache-Control` of its own.
-
 > [!NOTE]
-> This only governs what is **stored**. Concurrent requests are still coalesced by cache key, so per-user responses must be keyed correctly (e.g. via `varies`) — `no-store` / `private` prevents caching, it does not by itself partition the cache key.
-
-#### Server-only caching (`sendCacheControl`)
-
-Sometimes you want to cache a response **in storage** (to save re-computing it) while telling clients and CDNs _not_ to cache it — for example a personalized page that is cheap to serve from your own cache but must always be revalidated by the browser. Reaching for `Cache-Control: no-store`/`private` doesn't work here: those also disqualify the response from storage caching.
-
-Set `sendCacheControl: false` to decouple the two. The response is still stored and served from cache (SWR, `etag`, and `last-modified` are unaffected), but no `Cache-Control` header is synthesized:
-
-```ts
-const handler = defineCachedHandler(myHandler, {
-  maxAge: 60,
-  swr: true,
-  sendCacheControl: false, // stored & served from cache, but no Cache-Control sent downstream
-});
-```
-
-This only governs ocache's own synthesis — a `Cache-Control` the handler sets explicitly is still preserved and sent.
-
-#### Custom cache eligibility (`shouldCache`)
-
-The built-in response validation already rejects `4xx`/`5xx` statuses, `Cache-Control: no-store`/`private`, empty bodies, and responses missing `etag`/`last-modified`. Use `shouldCache` to add your own rejection rule on top — for example to keep `3xx` redirects out of the cache:
-
-```ts
-const handler = defineCachedHandler(myHandler, {
-  maxAge: 60,
-  // Return false to skip caching this response (it is still returned to the caller).
-  shouldCache: (res) => res.status < 300 || res.status >= 400,
-});
-```
-
-`shouldCache` receives the serialized response entry, may be async, and is **ANDed** with the built-in checks — it can only narrow what gets cached, never force-cache a response the built-ins reject. It gates both storing a fresh response and serving a stored one, and a throwing hook fails closed (treated as non-cacheable) and is reported via `onError`.
-
-#### Incremental Static Regeneration (ISR)
-
-you can reproduce a similar ISR behavior with `defineCachedHandler`: serve a cached page instantly, regenerate it in the background after it goes stale, and keep serving the last-good version until the refresh lands:
-
-```ts
-const page = defineCachedHandler(
-  async (event) => {
-    const html = await renderPage(event.url ?? new URL(event.req.url));
-    return new Response(html, { headers: { "content-type": "text/html" } });
-  },
-  {
-    swr: true, // serve stale instantly, refresh in the background
-    maxAge: 60, // "revalidate" window: fresh for 60s, then refresh on next request
-    // no staleMaxAge → stale is served indefinitely until the refresh succeeds
-  },
-);
-```
-
-The two options that make it ISR-like:
-
-- **`swr: true`** turns on stale-while-revalidate: once an entry is older than `maxAge`, the next request gets the stale page immediately while a fresh render runs in the background.
-- **Omit `staleMaxAge`.** This is the important part. Leaving it unset means there's no point at which the entry becomes "too old to serve" — the last successful render is served forever until a refresh replaces it, exactly like ISR. (If instead you _set_ `staleMaxAge`, you get a hard cutoff: after `maxAge + staleMaxAge` the entry is dropped and the next request blocks on a fresh render.)
-
-With this config the handler also emits `Cache-Control: s-maxage=60, stale-while-revalidate`, so any shared/CDN cache in front of it revalidates on the same schedule.
-
-**On-demand revalidation** (the equivalent of `revalidatePath` / `revalidateTag`) uses the methods on the returned handler:
-
-```ts
-await page.expire(event); // ISR-style: serve the stale page once more, refresh in the background
-await page.invalidate(event); // hard purge: next request blocks on a fresh render
-```
-
-Prefer `.expire()` for the ISR feel — there's no blocking gap for visitors. Reach for `.invalidate()` only when the next reader must get a guaranteed-fresh render.
-
-**Per-route revalidate windows.** If different pages need different refresh intervals (like Next's per-fetch `revalidate`), use `getMaxAge` to derive the window from the response — for example an `x-revalidate` header your handler sets. `entry.value` is the standard `Response`:
-
-```ts
-const page = defineCachedHandler(
-  async (event) => {
-    const url = event.url ?? new URL(event.req.url);
-    const { html, revalidate } = await renderPage(url);
-    return new Response(html, {
-      headers: { "content-type": "text/html", "x-revalidate": String(revalidate) },
-    });
-  },
-  {
-    swr: true,
-    getMaxAge: (entry) => Number(entry.value.headers.get("x-revalidate")) || 60,
-  },
-);
-```
-
-> [!NOTE]
-> Two things differ from CDN managed ISR. **(1) Background refresh is coalesced per instance**, not globally — across multiple servers/serverless instances the origin can see one refresh per instance. Add a distributed lock in your [custom storage](#custom-storage) if regeneration is expensive. **(2) Entries never auto-expire** with `staleMaxAge` omitted, so storage grows until you `.invalidate()` — or set a large `staleMaxAge` to trade exact ISR semantics for eventual cleanup.
-
-### Cache Invalidation
-
-Cached functions have an `.invalidate()` method that removes cached entries across all base prefixes:
-
-```ts
-import { defineCachedFunction } from "ocache";
-
-const getUser = defineCachedFunction(async (id: string) => db.users.find(id), {
-  name: "getUser",
-  maxAge: 60,
-  getKey: (id: string) => id,
-});
-
-const user = await getUser("user-123");
-
-// Invalidate a specific entry
-await getUser.invalidate("user-123");
-
-// Next call will re-invoke the function
-const freshUser = await getUser("user-123");
-```
-
-You can also use the standalone `invalidateCache()` when you don't have a reference to the cached function — just pass the same options:
-
-```ts
-import { invalidateCache } from "ocache";
-
-await invalidateCache({
-  options: { name: "getUser", getKey: (id: string) => id },
-  args: ["user-123"],
-});
-```
-
-For advanced use cases, `.resolveKeys()` returns the raw storage keys:
-
-```ts
-const keys = await getUser.resolveKeys("user-123");
-// ["/cache:functions:getUser:user-123.json"]
-```
-
-### Cache Expiration (SWR refresh)
-
-While `.invalidate()` removes an entry entirely (the next call must wait for a fresh value), `.expire()` only marks it as stale. With SWR enabled, stale values keep being served — still bounded by the originally configured `staleMaxAge` window — and the next access triggers a background refresh:
-
-```ts
-// Mark the entry stale: next call serves the stale value and refetches in the background
-await getUser.expire("user-123");
-```
-
-The standalone `expireCache()` works like `invalidateCache()` — pass the same `maxAge` / `swr` / `staleMaxAge` options you cache with so the remaining storage TTL is preserved:
-
-```ts
-import { expireCache } from "ocache";
-
-await expireCache({
-  options: { name: "getUser", getKey: (id: string) => id, maxAge: 60, staleMaxAge: 300 },
-  args: ["user-123"],
-});
-```
-
-### Multi-tier Caching
-
-Use an array of `base` prefixes to enable multi-tier caching. On read, each prefix is tried in order and the first hit is used. On write, the entry is written to all prefixes:
-
-```ts
-const cachedFetch = defineCachedFunction(
-  async (url: string) => {
-    const res = await fetch(url);
-    return res.json();
-  },
-  {
-    maxAge: 60,
-    base: ["/tmp", "/cache"],
-  },
-);
-```
-
-This is useful for layered cache setups (e.g., fast local cache + shared remote cache) where you want reads to prefer the nearest tier while keeping all tiers populated on writes.
-
-### Custom Storage
-
-By default, ocache uses an in-memory `Map`-based storage. You can provide a custom storage implementation:
-
-```ts
-import { setStorage } from "ocache";
-import type { StorageInterface } from "ocache";
-
-const redisStorage: StorageInterface = {
-  get: async (key) => {
-    return JSON.parse(await redis.get(key));
-  },
-  set: async (key, value, opts) => {
-    // Setting null/undefined deletes the entry (used for cache invalidation)
-    if (value === null || value === undefined) {
-      await redis.del(key);
-      return;
-    }
-    await redis.set(key, JSON.stringify(value), opts?.ttl ? { EX: opts.ttl } : undefined);
-  },
-};
-
-setStorage(redisStorage);
-```
-
-The built-in memory storage keeps at most `10 000` entries by default, evicting the least-recently-used entries once the ceiling is exceeded (LRU). Pass `maxSize` to change the ceiling, or `Infinity` to disable it and grow unbounded:
-
-```ts
-import { createMemoryStorage, setStorage } from "ocache";
-
-setStorage(createMemoryStorage({ maxSize: 10_000 }));
-
-// Opt out of the ceiling entirely (previous unbounded behavior)
-setStorage(createMemoryStorage({ maxSize: Infinity }));
-```
+> Learn more in the [Caching HTTP Handlers](https://ocache.unjs.io/guide/handler) guide, and see [Query Parameters](https://ocache.unjs.io/guide/query-params), [Cookies](https://ocache.unjs.io/guide/cookies), [Cache-Control & Eligibility](https://ocache.unjs.io/guide/cache-control), and [Incremental Static Regeneration](https://ocache.unjs.io/guide/isr).
 
 ## API
 
