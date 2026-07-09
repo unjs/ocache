@@ -2191,6 +2191,67 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("vary")).toBe("User-Agent, *");
   });
 
+  it("emits a Cache-Tag header from the opt-in tags option", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      tags: ["products", "product:123"],
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-tag")).toBe("products, product:123");
+  });
+
+  it("does not set Cache-Tag when the tags option is omitted", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-tag")).toBeNull();
+  });
+
+  it("does not set Cache-Tag for an empty or whitespace-only tags list", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      tags: ["", "  ", "product:123", "  ", ""],
+    });
+
+    // Blank/whitespace entries are trimmed + deduped out; only the real tag survives.
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-tag")).toBe("product:123");
+  });
+
+  it("does not overwrite an explicit Cache-Tag set by the handler", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () =>
+        new Response("ok", {
+          headers: { "cache-tag": "handler-tag" },
+        }),
+      { maxAge: 10, tags: ["products", "product:123"] },
+    );
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(res.headers.get("cache-tag")).toBe("handler-tag");
+  });
+
+  it("replays the Cache-Tag on a cache hit (stored, not re-synthesized)", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      tags: ["products", "product:123"],
+    });
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // Both the miss and the hit carry the tag — it was persisted in the
+    // serialized entry, not re-derived (handler runs once).
+    expect(r1.headers.get("cache-tag")).toBe("products, product:123");
+    expect(r2.headers.get("cache-tag")).toBe("products, product:123");
+  });
+
   it("echoes the Vary header on a 304 response", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {

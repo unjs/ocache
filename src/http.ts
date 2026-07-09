@@ -62,6 +62,12 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     ? [...new Set(opts.allowQuery.filter(Boolean))]
     : undefined;
 
+  // Cache tags advertised via the `Cache-Tag` response header (e.g. for
+  // Cloudflare Workers Cache to index and purge. Trim + dedup; an
+  // empty (or whitespace-only) list normalizes to "no tags" (no header set).
+  const _tags = [...new Set((opts.tags ?? []).map((t) => t?.trim()).filter(Boolean))];
+  const tagList = _tags.length > 0 ? _tags : undefined;
+
   // Non-GET/HEAD requests skip the cache entirely. Shared between the
   // `shouldBypassCache` option and the resolver so the request-narrowing
   // step below can't disagree with the bypass decision. This is the built-in
@@ -187,6 +193,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // synthesis above).
       if (variableHeaderNames.length > 0) {
         _appendVary(res.headers, variableHeaderNames);
+      }
+
+      // Advertise cache tags via `Cache-Tag` so a downstream cache (e.g.
+      // Cloudflare Workers Cache) can index and purge them. Mirrors the
+      // "preserve if present" behavior of etag / last-modified / cache-control
+      // above: an explicit `Cache-Tag` the handler set is left untouched;
+      // only when absent do we synthesize one from the opt-in `tags` option.
+      // `tags` is purely advisory — ocache does no tag-based indexing or
+      // invalidation of its own storage; the consumer is expected to purge
+      // (e.g. `ctx.cache.purge({ tags: [...] })` on Cloudflare Workers Cache).
+      if (tagList && !res.headers.has("cache-tag")) {
+        res.headers.set("cache-tag", tagList.join(", "));
       }
 
       // Strip every Set-Cookie the allowlist doesn't cover BEFORE the headers are
