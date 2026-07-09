@@ -2995,6 +2995,41 @@ describe("defineCachedHandler", () => {
     // Background revalidation eventually re-invokes the handler.
     await vi.waitFor(() => expect(callCount).toBe(2));
   });
+
+  // --- issue #73 ---
+
+  it("strips transport headers (content-encoding/length/transfer-encoding) from cached responses (issue #73)", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () =>
+        // The body is already decoded/buffered by `serialize`, so replaying the upstream
+        // transport headers (a `content-encoding: gzip` against a decompressed body, or a
+        // stale `content-length`) desyncs them from the stored body — clients get malformed
+        // data. They must be stripped before the entry is built.
+        new Response("decoded body", {
+          headers: {
+            "content-encoding": "gzip",
+            "content-length": "9999",
+            "transfer-encoding": "chunked",
+            "content-type": "text/plain",
+          },
+        }),
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response; // miss
+    const r2 = (await handler(makeEvent(path))) as Response; // hit
+
+    for (const res of [r1, r2]) {
+      expect(res.headers.get("content-encoding")).toBeNull();
+      expect(res.headers.get("transfer-encoding")).toBeNull();
+      // A content-length, if the runtime re-adds one, must reflect the real body, not 9999.
+      expect(res.headers.get("content-length")).not.toBe("9999");
+      // Non-transport headers are preserved.
+      expect(res.headers.get("content-type")).toBe("text/plain");
+    }
+    expect(await r2.text()).toBe("decoded body");
+  });
 });
 
 describe("resolveCacheKeys", () => {
