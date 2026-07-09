@@ -213,6 +213,17 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         res.headers.delete("set-cookie");
       }
 
+      // Strip transport headers before storing. The body has already been fully read and
+      // decoded into `bytes`, so a stored `content-encoding` (e.g. `gzip`) would describe
+      // an encoding the cached body no longer has, and a `content-length`/`transfer-encoding`
+      // would describe the original wire framing, not the re-buffered body — replaying any
+      // of them on a cache hit desyncs the headers from the body and yields malformed
+      // responses (nitro#2109). The runtime recomputes `content-length` from the served
+      // body on read.
+      for (const header of _transportHeaders) {
+        res.headers.delete(header);
+      }
+
       const cacheEntry: ResponseCacheEntry = {
         status: res.status,
         statusText: res.statusText,
@@ -458,6 +469,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 }
 
 // --- Internal helpers ---
+
+// Transport/framing headers stripped from a cached entry: the body is stored fully
+// decoded and re-buffered, so these no longer describe it (see `serialize`).
+const _transportHeaders = ["content-encoding", "content-length", "transfer-encoding"];
 
 // Fatal decoder so invalid UTF-8 throws (→ binary) instead of substituting replacement
 // characters. `ignoreBOM` keeps a leading BOM in the string so it re-encodes byte-for-byte,
