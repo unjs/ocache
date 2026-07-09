@@ -351,4 +351,31 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * ```
    */
   shouldCache?: (entry: ResponseCacheEntry) => boolean | Promise<boolean>;
+
+  /**
+   * Cache tags to advertise on the cached response.
+   *
+   * Opt-in, ergonomic sugar for the `Cache-Tag` response header. When set
+   * to a non-empty list of tags, ocache joins them with `", "` and sets
+   * `Cache-Tag` on the response — so a consumer such as Cloudflare Workers
+   * Cache indexes them and serves `purge({ tags: [...] })` itself. Mirrors the
+   * existing "preserve if already present" behavior of `etag` /
+   * `last-modified` / `cache-control`: an explicit `Cache-Tag` set by the
+   * handler is left untouched and not overwritten.
+   *
+   * The header is purely advisory from ocache's point of view — ocache does
+   * no tag-based indexing or invalidation of its own storage. Omit the option
+   * (or pass an empty / whitespace-only list) to set no `Cache-Tag` at all.
+   *
+   * @example
+   * ```ts
+   * // Advertise tags so Cloudflare Workers Cache indexes them; the edge
+   * // then serves ctx.cache.purge({ tags: ["product:123"] }).
+   * const handler = defineCachedHandler(
+   *   () => new Response("product page", { status: 200 }),
+   *   { maxAge: 60, tags: ["products", "product:123"] },
+   * );
+   * ```
+   */
+  tags?: string[] | readonly string[];
 }
