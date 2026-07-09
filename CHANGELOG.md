@@ -1,6 +1,72 @@
 # Changelog
 
 
+## v0.2.0
+
+[compare changes](https://github.com/unjs/ocache/compare/v0.1.5...v0.2.0)
+
+### 🚀 Enhancements
+
+- **storage:** Bound memory storage with optional maxSize + LRU eviction ([#38](https://github.com/unjs/ocache/pull/38))
+- **cache:** Support dynamic per-entry TTL via `getMaxAge` hook ([#39](https://github.com/unjs/ocache/pull/39))
+- Per-call cache status and `x-cache` response header ([#40](https://github.com/unjs/ocache/pull/40))
+- **cache:** Support asynchronous validate option ([#44](https://github.com/unjs/ocache/pull/44))
+- **cache:** ⚠️  Pass call args to `validate` ([#46](https://github.com/unjs/ocache/pull/46))
+- **http:** Support `allowQuery` to filter query params ([#14](https://github.com/unjs/ocache/pull/14), [#29](https://github.com/unjs/ocache/pull/29))
+- **http:** Support `shouldCache` to reject responses from caching ([#48](https://github.com/unjs/ocache/pull/48), [#55](https://github.com/unjs/ocache/pull/55))
+- **http:** Emit `Vary` response header for `varies` ([#56](https://github.com/unjs/ocache/pull/56))
+- **http:** ⚠️  `allowCookies` and disallow cookies from caching by default ([#58](https://github.com/unjs/ocache/pull/58))
+- **cache:** Add write-time `serialize` hook ([#59](https://github.com/unjs/ocache/pull/59))
+- **http:** Support binary response bodies ([#66](https://github.com/unjs/ocache/pull/66))
+- **http:** Add `sendCacheControl` for server-only caching ([#49](https://github.com/unjs/ocache/pull/49), [#67](https://github.com/unjs/ocache/pull/67))
+- **http:** Expose `.expire`/`.invalidate`/`.resolveKeys` on cached handlers ([#72](https://github.com/unjs/ocache/pull/72))
+
+### 🩹 Fixes
+
+- **http:** Honor explicit Cache-Control no-store/private ([#42](https://github.com/unjs/ocache/pull/42))
+- **cache:** ⚠️  Never serve stale with `staleMaxAge: 0` ([#45](https://github.com/unjs/ocache/pull/45))
+- **http:** Keep custom cache keys collision-free ([#60](https://github.com/unjs/ocache/pull/60))
+- Leftovers from #58 ([#58](https://github.com/unjs/ocache/issues/58))
+- **http:** Respect user-supplied `shouldBypassCache` ([#50](https://github.com/unjs/ocache/pull/50), [#62](https://github.com/unjs/ocache/pull/62))
+- **cache:** ⚠️  Use `fn.name` for cache key when `name` option is omitted ([#63](https://github.com/unjs/ocache/pull/63))
+- **http:** ⚠️  Strip non-allowlisted Set-Cookie instead of blocking storage ([#61](https://github.com/unjs/ocache/pull/61), [#68](https://github.com/unjs/ocache/pull/68))
+- **http:** Strip transport headers from cached responses ([#74](https://github.com/unjs/ocache/pull/74))
+
+### 💅 Refactors
+
+- ⚠️  Disable `swr` by default ([#57](https://github.com/unjs/ocache/pull/57))
+- **http:** ⚠️  Build `ResponseCacheEntry` in `serialize`; pass bypassed responses through untouched ([#65](https://github.com/unjs/ocache/pull/65))
+
+### 📖 Documentation
+
+- Add ISR caching section to README ([83f8091](https://github.com/unjs/ocache/commit/83f8091))
+- Set up docs website ([#69](https://github.com/unjs/ocache/pull/69))
+- Note sendCacheControl/ISR purge caveats ([4ffe207](https://github.com/unjs/ocache/commit/4ffe207))
+
+### 🏡 Chore
+
+- Update deps ([ddd1196](https://github.com/unjs/ocache/commit/ddd1196))
+- Update deps ([aa5a4b6](https://github.com/unjs/ocache/commit/aa5a4b6))
+- Remove plan.md ([956f513](https://github.com/unjs/ocache/commit/956f513))
+- Update docs ([ab46d29](https://github.com/unjs/ocache/commit/ab46d29))
+
+#### ⚠️ Breaking Changes
+
+- **cache:** ⚠️  Pass call args to `validate` ([#46](https://github.com/unjs/ocache/pull/46))
+- **http:** ⚠️  `allowCookies` and disallow cookies from caching by default ([#58](https://github.com/unjs/ocache/pull/58))
+- **cache:** ⚠️  Never serve stale with `staleMaxAge: 0` ([#45](https://github.com/unjs/ocache/pull/45))
+- **cache:** ⚠️  Use `fn.name` for cache key when `name` option is omitted ([#63](https://github.com/unjs/ocache/pull/63))
+- **http:** ⚠️  Strip non-allowlisted Set-Cookie instead of blocking storage ([#61](https://github.com/unjs/ocache/pull/61), [#68](https://github.com/unjs/ocache/pull/68))
+- ⚠️  Disable `swr` by default ([#57](https://github.com/unjs/ocache/pull/57))
+- **http:** ⚠️  Build `ResponseCacheEntry` in `serialize`; pass bypassed responses through untouched ([#65](https://github.com/unjs/ocache/pull/65))
+
+### ❤️ Contributors
+
+- Pooya Parsa ([@pi0](https://github.com/pi0))
+- Pi0x <x@pi0.io>
+- Raminjafary ([@raminjafary](https://github.com/raminjafary))
+- Logosww ([@Logosww](https://github.com/Logosww))
+
 ## v0.1.5
 
 [compare changes](https://github.com/unjs/ocache/compare/v0.1.4...v0.1.5)

@@ -1,6 +1,6 @@
 {
   "name": "ocache",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "Composable caching primitives with TTL, SWR, and HTTP response caching",
   "license": "MIT",
   "repository": "unjs/ocache",
