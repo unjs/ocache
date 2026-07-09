@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://unpkg.com/undocs/schema/config.json
+name: ocache
+url: https://ocache.unjs.io
+shortDescription: Composable caching primitives
+description: Composable caching primitives for functions and HTTP responses — TTL, stale-while-revalidate, and request deduplication, in any runtime.
+
+themeColor: cyan
+automd: true
+
+github: unjs/ocache
+
+# No blog section yet — redirect the built-in /blog route so it isn't
+# prerendered into a 404.
+redirects:
+  "/blog": "/guide"

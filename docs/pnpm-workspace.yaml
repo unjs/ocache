@@ -1,0 +1,9 @@
+packages: []
+shamefullyHoist: true
+onlyBuiltDependencies:
+  - esbuild
+  - "@parcel/watcher"
+allowBuilds:
+  esbuild: true
+  "@parcel/watcher": true
+  vue-demi: false
