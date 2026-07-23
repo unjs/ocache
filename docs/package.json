@@ -9,5 +9,5 @@
     "docs4ts": "^0.0.4",
     "undocs": "^0.4.16"
   },
-  "packageManager": "pnpm@11.10.0"
+  "packageManager": "pnpm@11.15.1"
 }
