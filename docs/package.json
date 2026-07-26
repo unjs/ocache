@@ -7,7 +7,7 @@
   },
   "devDependencies": {
     "docs4ts": "^0.0.4",
-    "undocs": "^0.4.16"
+    "undocs": "^0.4.17"
   },
-  "packageManager": "pnpm@11.10.0"
+  "packageManager": "pnpm@11.17.0"
 }
