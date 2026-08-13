@@ -610,8 +610,28 @@ function buildCacheKey(
   base: string,
 ): string {
   const group = opts.group || "functions";
-  const name = opts.name || "_";
+  // Escaped like every other segment: `name` is the one that used to reach the key raw, and it
+  // stopped being a controlled alphabet once it started coming from `fn.name` (see `resolveName`).
+  const name = escapeKeySegment(opts.name || "_");
   return [base, group, name, key + ".json"].filter(Boolean).join(":").replace(/:\/$/, ":index");
+}
+
+// A storage-safe segment of the `:`-joined key. Non-word characters are dropped, which is lossy,
+// so a segment the escape changed also carries a hash of the raw value: `.` occurs only in that
+// hashed form, so the two forms can never overlap and two raws that escape alike (`a:bc` /
+// `ab:c`) stay distinct. Ordinary identifier characters come back byte-identical, so escaping
+// this late costs no existing entry its key. Shared by the `name` segment here and a custom
+// `getKey` in `http/key.ts`, which needs the same treatment for the same reason. Commented with
+// `//`, not JSDoc, so docs4ts keeps it out of the API docs.
+export function escapeKeySegment(raw: string): string {
+  const escaped = escapeKey(raw);
+  return escaped === raw ? escaped : `${escaped.slice(0, 64)}.${hash(raw)}`;
+}
+
+// Drops everything outside `[A-Za-z0-9_]` from a key segment. Lossy on purpose — see
+// `escapeKeySegment`, which is what callers composing a `:`-joined key should reach for.
+export function escapeKey(key: string | string[]): string {
+  return String(key).replace(/\W/g, "");
 }
 
 function normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {

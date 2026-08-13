@@ -45,13 +45,21 @@ import { rolldown } from "rolldown";
 // actually downloaded are `min`/`minGzip`; keep those tight and let `raw` follow — 48_000
 // left it at 99% used, which is a tripwire on the next JSDoc paragraph, not a ceiling.
 //
-// All six sit at 95-97% of budget after the compact digest landed (finding 18.2), which is
-// the intended shape: enough room for a paragraph of rationale, not enough for a dependency.
-// `node` sits ~1 kB gzip under `neutral` for exactly one reason and it should stay that way:
-// it ships no SHA-256. Its `raw` budget is the *tighter* of the two — same code, less of it.
+// All six sit at ~95% of budget — a deliberate ~5% of slack, not an accident of rounding. Less
+// than that and the next documented predicate trips a ceiling instead of a review; more and the
+// probe stops being a tripwire. `node` sits ~1 kB gzip under `neutral` for exactly one reason
+// and it should stay that way: it ships no SHA-256 (see `src/hash.ts`).
+//
+// The slack is sized against the next feature in the queue, not chosen in the abstract:
+// `maxBodySize` (#84) costs ~2.0 kB raw / ~950 min / ~340 gzip, and the `neutral` ceilings admit
+// it — which is only fair, since with the compact digest in place that whole feature still lands
+// *below* what `main` shipped before it (19,662 min against main's 20,162). The `node` ceilings
+// do **not** admit it, by ~110 min / ~20 gzip, and that is the honest number: finding 18.2 frees
+// no Node bytes at all, because Node never paid for the JS digest in the first place. A Node
+// budget raise is #84's own to justify; this probe should not pre-authorize it.
 const BUDGETS = {
-  neutral: { raw: 50_000, min: 19_500, minGzip: 7800 },
-  node: { raw: 47_500, min: 18_000, minGzip: 6800 },
+  neutral: { raw: 51_000, min: 19_700, minGzip: 7850 },
+  node: { raw: 48_300, min: 18_100, minGzip: 6820 },
 } as const;
 
 type Sizes = { raw: number; min: number; minGzip: number };

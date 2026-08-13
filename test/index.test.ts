@@ -929,7 +929,9 @@ describe("cache key name resolution (#53)", () => {
   it("anonymous function falls back to a stable hash of its source", async () => {
     const fn = defineCachedFunction(async () => 1);
     const key = (await fn.resolveKeys())[0]!;
-    expect(key).toMatch(/^\/cache:functions:anon_[\w-]{16}:\.json$/);
+    // ohash's alphabet includes `-`, which the key escape drops — so a slice carrying one
+    // takes the escaped-plus-hash form (see "cache key name escaping"). Both are accepted.
+    expect(key).toMatch(/^\/cache:functions:anon_\w{1,16}(\.[\w-]+)?:\.json$/);
     // Stable across separate definitions of the identical function source.
     const same = defineCachedFunction(async () => 1);
     expect((await same.resolveKeys())[0]).toBe(key);
@@ -987,7 +989,7 @@ describe("handler cache key name resolution", () => {
     const acmeKey = (await acme.resolveKeys(handlerEvent("/dashboard")))[0]!;
     const globexKey = (await globex.resolveKeys(handlerEvent("/dashboard")))[0]!;
     expect(acmeKey).not.toBe(globexKey);
-    expect(acmeKey).toMatch(/^\/cache:handlers:anon_[\w-]{16}:dashboard\./);
+    expect(acmeKey).toMatch(/^\/cache:handlers:anon_\w{1,16}(\.[\w-]+)?:dashboard\./);
 
     // …and they never serve each other's responses, in either order.
     expect(await ((await acme(handlerEvent("/dashboard"))) as Response).text()).toBe("tenant=ACME");
@@ -1068,6 +1070,136 @@ describe("handler cache key name resolution", () => {
     expect(await ((await globex2(handlerEvent("/dash2"))) as Response).text()).toBe(
       "tenant=GLOBEX",
     );
+  });
+});
+
+// `buildCacheKey` joins `[base, group, name, key]` with `:` and used to escape everything but
+// `name` — harmless while every handler keyed as the literal `_`, but `name` now comes from
+// `fn.name`, which is not a controlled alphabet (`named.bind(null)` alone yields `bound named`).
+// An unescaped `:` in it could rebuild another handler's `HEAD:` variant key verbatim.
+describe("cache key name escaping", () => {
+  const handlerEvent = (path: string, method = "GET") => ({
+    req: new Request(`http://localhost${path}`, { method }),
+  });
+
+  it("leaves an ordinary identifier name byte-identical", async () => {
+    // The whole point of escaping this late: no existing entry moves unless its name actually
+    // carries an escapable character.
+    const fn = defineCachedFunction(async function getUser() {
+      return "u";
+    });
+    expect((await fn.resolveKeys())[0]).toBe("/cache:functions:getUser:.json");
+
+    const named = defineCachedFunction(() => "v", { name: "my_fn_2", getKey: () => "k" });
+    expect((await named.resolveKeys())[0]).toBe("/cache:functions:my_fn_2:k.json");
+  });
+
+  it("keeps a `:` in the name out of the key's segment structure", async () => {
+    const fn = defineCachedFunction(() => "v", { name: "a:b", getKey: () => "k", maxAge: 60 });
+    const key = (await fn.resolveKeys())[0]!;
+    // base : group : name : key — exactly four segments, whatever the name contained.
+    expect(key.split(":")).toHaveLength(4);
+    expect(key).toMatch(/^\/cache:functions:ab\.[\w-]+:k\.json$/);
+  });
+
+  it("keeps a space in the name (a bound function) out of the key", async () => {
+    function render() {
+      return "v";
+    }
+    const fn = defineCachedFunction(render.bind(null), { getKey: () => "k" });
+    const key = (await fn.resolveKeys())[0]!;
+    expect(key.split(":")).toHaveLength(4);
+    expect(key).not.toContain(" ");
+    expect(key).toMatch(/^\/cache:functions:boundrender\.[\w-]+:k\.json$/);
+  });
+
+  it("round-trips an escaped name through resolveKeys/invalidate/expire", async () => {
+    const storage = createMemoryStorage();
+    let calls = 0;
+    const opts = { name: "a:b c", getKey: () => "k", maxAge: 60, storage };
+    const fn = _defineCachedFunction(() => `v${++calls}`, opts);
+
+    expect(await fn()).toBe("v1");
+    expect(await fn()).toBe("v1");
+
+    // The key the write path used is the key the helpers reconstruct.
+    const key = (await fn.resolveKeys())[0]!;
+    expect(await storage.get(key)).toMatchObject({ value: "v1" });
+    expect((await resolveCacheKeys({ options: opts }))[0]).toBe(key);
+
+    await fn.expire();
+    expect(await storage.get(key)).toMatchObject({ value: "v1", stale: true });
+    expect(await fn()).toBe("v2");
+
+    await fn.invalidate();
+    expect(await storage.get(key)).toBeNull();
+    expect(await fn()).toBe("v3");
+
+    // …and so does the standalone helper, handed the same name.
+    await invalidateCache({ options: opts });
+    expect(await storage.get(key)).toBeNull();
+    expect(await fn()).toBe("v4");
+  });
+
+  it("does not collide two names differing only in where the escapable character sits", async () => {
+    const storage = createMemoryStorage();
+    const ab = _defineCachedFunction(() => "A", { name: "a:bc", getKey: () => "k", storage });
+    const bc = _defineCachedFunction(() => "B", { name: "ab:c", getKey: () => "k", storage });
+
+    expect((await ab.resolveKeys())[0]).not.toBe((await bc.resolveKeys())[0]);
+    expect(await ab()).toBe("A");
+    expect(await bc()).toBe("B");
+    expect(await ab()).toBe("A");
+  });
+
+  // The sharp case: pre-fix, a handler named `page:HEAD` built exactly the key a `page`
+  // handler's HEAD variant writes — `/cache:handlers:page:HEAD:<resource>.json` — so one
+  // anonymous HEAD seeded the other handler's GET entry (h3#1524 finding #3, one segment over).
+  it("cannot forge another handler's HEAD variant key from the name", async () => {
+    const storage = createMemoryStorage();
+    const trap = _defineCachedHandler(() => new Response("trap"), {
+      maxAge: 60,
+      name: "page:HEAD",
+      storage,
+    });
+    const page = _defineCachedHandler(() => new Response("page"), {
+      maxAge: 60,
+      name: "page",
+      storage,
+    });
+
+    const [pageGet, pageHead] = await page.resolveKeys(handlerEvent("/x"));
+    const trapGet = (await trap.resolveKeys(handlerEvent("/x")))[0]!;
+    // The key the trap's name spelled out verbatim before it was escaped.
+    expect(pageHead).toBe(pageGet!.replace("/cache:handlers:page:", "/cache:handlers:page:HEAD:"));
+    expect(trapGet).not.toBe(pageHead);
+    expect(trapGet).not.toBe(pageGet);
+
+    // Neither serves the other, in either order.
+    await page(handlerEvent("/x", "HEAD"));
+    expect(await ((await trap(handlerEvent("/x"))) as Response).text()).toBe("trap");
+    expect(await ((await page(handlerEvent("/x"))) as Response).text()).toBe("page");
+  });
+
+  it("round-trips an escaped handler name through the revalidation helpers", async () => {
+    const storage = createMemoryStorage();
+    let calls = 0;
+    const handler = _defineCachedHandler(() => new Response(`call-${++calls}`), {
+      maxAge: 60,
+      name: "tenant a:b",
+      storage,
+    });
+
+    expect(await ((await handler(handlerEvent("/r"))) as Response).text()).toBe("call-1");
+    expect(await ((await handler(handlerEvent("/r"))) as Response).text()).toBe("call-1");
+
+    const keys = await handler.resolveKeys(handlerEvent("/r"));
+    expect(keys[0]).toMatch(/^\/cache:handlers:tenantab\.[\w-]+:r\./);
+    expect(await storage.get(keys[0]!)).toBeTruthy();
+
+    await handler.invalidate(handlerEvent("/r"));
+    expect(await storage.get(keys[0]!)).toBeNull();
+    expect(await ((await handler(handlerEvent("/r"))) as Response).text()).toBe("call-2");
   });
 });
 
@@ -2510,9 +2642,14 @@ describe("defineCachedHandler", () => {
   }
   // The `HEAD:` component is inserted right after the name segment. That segment is the
   // resolved handler name (`fn.name` / `anon_<hash>` — see "handler cache key name
-  // resolution (#53)"), not the old shared `_` literal, so match it structurally.
+  // resolution (#53)"), not the old shared `_` literal, so match it structurally. `[^:]+` is
+  // exact rather than merely usual: `buildCacheKey` escapes the name, so that segment can
+  // never itself contain a `:` (see "cache key name escaping").
   function headVariantKey(getKey: string) {
-    return getKey.replace(/^(\/cache:handlers:[^:]+:)/, "$1HEAD:");
+    const key = getKey.replace(/^(\/cache:handlers:[^:]+:)/, "$1HEAD:");
+    // Guard against the helper silently matching nothing and asserting a no-op.
+    expect(key).not.toBe(getKey);
+    return key;
   }
 
   it("caches GET responses", async () => {
@@ -5006,6 +5143,49 @@ describe("defineCachedHandler", () => {
     // Downstream caches are told about the dimension too.
     const vary = a1.headers.get("vary")!.toLowerCase();
     expect(vary.split(",").map((v) => v.trim())).toEqual(["authorization", "proxy-authorization"]);
+  });
+
+  // The documented "private response" recipe (docs/1.guide/8.cache-control.md): the
+  // `Cache-Control: private` opt-out is only meaningful if the handler could identify the user
+  // in the first place, which under the credential defaults takes `allowAuthorization`. Pins
+  // the two halves working *together* — credential visible, personalized response never stored,
+  // anonymous rendering still cached under its own key.
+  it("allowAuthorization + Cache-Control: private serves per-user without storing it", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        const user = event.req.headers.get("authorization");
+        return user
+          ? new Response(`dashboard for ${user} (call ${callCount})`, {
+              headers: { "cache-control": "private" },
+            })
+          : new Response(`public (call ${callCount})`);
+      },
+      { maxAge: 10, allowAuthorization: true },
+    );
+
+    const auth = (user: string) => makeEvent(path, { headers: { authorization: user } });
+    const alice1 = (await handler(auth("alice"))) as Response;
+    const alice2 = (await handler(auth("alice"))) as Response;
+    const bob = (await handler(auth("bob"))) as Response;
+
+    // The credential reaches the handler, and the opt-out keeps every rendering out of
+    // storage — so even the same user re-runs it rather than replaying a stored body.
+    expect(await alice1.text()).toBe("dashboard for alice (call 1)");
+    expect(await alice2.text()).toBe("dashboard for alice (call 2)");
+    expect(await bob.text()).toBe("dashboard for bob (call 3)");
+    // The directive is returned to the caller untouched.
+    expect(alice1.headers.get("cache-control")).toBe("private");
+
+    // The anonymous branch sets no opt-out, so it caches under its own (credential-free) key.
+    const anon1 = (await handler(makeEvent(path))) as Response;
+    const anon2 = (await handler(makeEvent(path))) as Response;
+    expect(await anon1.text()).toBe("public (call 4)");
+    expect(await anon2.text()).toBe("public (call 4)");
+    expect(anon2.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(4);
   });
 
   it("treats varies: ['authorization'] as an opt-in (no double vary entry)", async () => {
