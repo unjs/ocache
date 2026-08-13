@@ -45,10 +45,56 @@ the old always-serialize path.
 
 ## What the handler sees
 
+The header filter is an **allowlist**, the rule stated literally: a header reaches the handler
+only if it is in `keyHeaderNames`, is `cookie` (its own three-way branch below), or is in
+`safeHeaderNames`. Everything else is stripped on cacheable calls.
+
 `varies` headers are **forwarded** — their values are part of the key, so reading them is safe
 and is the point of declaring them. They used to be the only headers filtered _out_, which meant
 `varies: ["accept-language"]` produced correct per-language keys and `Vary` while every entry
 held the _default_ rendering (breaking behavior change).
+
+Everything undeclared used to be forwarded too, and the strip was a by-name patch for
+`authorization`/`proxy-authorization`/`cookie` — three instances of a general gap the rule had
+asserted since the initial commit but nothing implemented. Any other header a handler read was
+rendered into an entry no key distinguished: a MISS carrying `x-api-key: alice` stored alice's
+tenant page under the shared key, advertised it with a synthesized `max-age=N` and **no `Vary`**,
+and replayed it to every later caller — the credential failure mode exactly, minus the name.
+`x-forwarded-host` is the same h3#1524 cross-tenant collision by another route (behind a proxy
+the authority in the key is the internal one, identical for both tenants). `origin` echoed into a
+cached CORS header, `accept`/`accept-language` driving negotiation, `x-forwarded-proto` building
+absolute links — all the same shape.
+
+Breaking, and broadly: a handler reading a header it has not declared now gets `null` and renders
+the default variant for everyone. The fix is to declare it in `varies` (keyed, visible,
+advertised) or to keep those requests out of the cache with `shouldBypassCache`. It fails closed —
+one shared rendering rather than one caller's rendering shared — which is the direction the
+credential default already chose.
+
+This is the request-side twin of `hasUnkeyedVary` (`.agents/http/response.md`): the response side
+refuses to _store_ a response that varies on an unkeyed header, the request side refuses to
+_show_ the handler that header at all. A route misconfigured in both directions now hits both.
+
+### `safeHeaderNames`
+
+The exemptions (`filters.ts`, beside the cookie/query filters so no module derives its own list).
+Each is there because it cannot vary a rendering _and_ because `varies` is no escape hatch for it:
+
+- **`host`** — already covered, by the URL authority `resolveKey` hashes.
+- **`if-none-match` / `if-modified-since`** — `defaultHandleCacheHeaders` reads them off
+  `event.req` in `http/index.ts` **after** narrowing has swapped it, so stripping them left 304s
+  working on a HIT and silently never firing on a MISS. Safe to forward: the only responses a
+  handler can derive from them (304, 412) are off `cacheableStatuses`, so nothing built from them
+  is ever stored.
+- **`traceparent`, `tracestate`, `x-request-id`, `x-correlation-id`** — carried for logging and
+  trace propagation, and per-request-unique by construction: putting one in `varies` would mean
+  one entry per request, so there is no configuration that makes them keyed. A handler rendering
+  from one is producing something no key could cover in the first place.
+
+Deliberately **not** exempt: `user-agent` (device/bot branching is the most common real rendering
+input there is) and `baggage` (OTel's is designed for application code to read — tenant id,
+feature flags — unlike the opaque `traceparent`/`tracestate` pair). Both are declared in `varies`
+like any other varying header.
 
 ### Cookies (request side)
 
@@ -79,7 +125,8 @@ The three-way branch lives in the narrowing block: allowlist → filtered subset
 
 By default `authorization`/`proxy-authorization` do not participate in caching (same rigor as
 cookies) — both stripped from the handler-visible request on cacheable calls, so a handler cannot
-render per-user content from a credential that isn't in the key. Previously they were forwarded
+render per-user content from a credential that isn't in the key. No special case any more: they
+are undeclared headers, and the allowlist above covers them. Previously they were forwarded
 but never keyed, so a token-authenticated route failed **open**: the first caller's private
 response was stored under the anonymous key, replayed to everyone, and advertised
 `max-age=N, s-maxage=N` for shared CDNs. Cookie-authenticated routes already failed safe — that

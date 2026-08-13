@@ -48,7 +48,9 @@ Breaking one of these is how nearly every finding in the deep dives happened.
 
 - **A handler may read exactly what the key covers.** `keyHeaderNames` drives both narrowing
   (`request.ts`) and key composition (`key.ts`); the allowlist subsets are computed once in
-  `filters.ts` so neither side derives its own.
+  `filters.ts` so neither side derives its own. Narrowing is an allowlist — undeclared headers
+  are stripped; the only exemptions are `filters.ts`'s `safeHeaderNames`, and adding one is a
+  claim that no key could ever cover it.
 - **The storage decision and the advertisement share predicates.** `isCacheableStatus`,
   `hasVaryWildcard`, `hasUnkeyedVary` are read by `validate.ts` (may we store it?) and `entry.ts`
   (may we advertise a lifetime?). Never re-implement one at a call site.

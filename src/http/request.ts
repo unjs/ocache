@@ -5,8 +5,7 @@
 // from an input that never reaches the key. Filters live in `filters.ts`.
 
 import type { HandlerConfig } from "./config.ts";
-import { authHeaderNames } from "./config.ts";
-import { filterCookie, filteredSearch } from "./filters.ts";
+import { filterCookie, filteredSearch, safeHeaderNames } from "./filters.ts";
 import { cacheableMethods } from "./key.ts";
 
 import type { HTTPEvent } from "../types.ts";
@@ -44,15 +43,20 @@ export function narrowRequest<E extends HTTPEvent>(
 
   const { keyHeaderNames, allowedCookieNames, allowedQueryNames } = config;
 
-  // Everything else — `varies` headers included — is forwarded: those values are in the key.
+  // An ALLOWLIST, the rule stated literally: not in `keyHeaderNames` ⇒ can't vary the key ⇒
+  // must not be seen. The key list, never `Vary` (`allowCookies` differs between the two).
+  // `varies` headers are therefore forwarded — that is the point of declaring them — as are
+  // the `safeHeaderNames` that provably cannot vary a rendering. Everything else is dropped:
+  // forwarding it let a handler render from an input no key covered, so the first caller's
+  // `x-api-key`/`x-forwarded-host` rendering was replayed to every later caller, under a
+  // synthesized `max-age` and with no `Vary` to warn a shared cache off it. The credential
+  // strip was this rule applied to two names by hand.
   const filteredHeaders = [...event.req.headers.entries()].flatMap(([key, value]) => {
     const name = key.toLowerCase();
-    // Not in `keyHeaderNames` ⇒ can't vary the key ⇒ must not be seen. Key list, never `Vary`.
-    if (authHeaderNames.includes(name) && !keyHeaderNames.includes(name)) {
-      return [];
-    }
     if (name !== "cookie") {
-      return [[key, value] as [string, string]];
+      return keyHeaderNames.includes(name) || safeHeaderNames.includes(name)
+        ? [[key, value] as [string, string]]
+        : [];
     }
     // Same rule, three-way: `allowCookies` → the subset the key hashes; else `cookie` in
     // `keyHeaderNames` → the raw header, itself the key component; else stripped (secure default).

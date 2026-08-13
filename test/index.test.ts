@@ -3821,10 +3821,15 @@ describe("defineCachedHandler", () => {
       expect(result.vary).toBe("Accept-Language");
     });
 
-    it("renders per language when the handler declares Vary: Accept-Language", async () => {
+    it("re-runs the handler per request when it declares Vary: Accept-Language", async () => {
       // The finding's exact scenario: `en` rendered, then `de` got `x-cache: HIT` with the
       // English body. Failing closed costs the hit rate on this (misconfigured) route and
-      // gives every language its own rendering again.
+      // gives every request its own resolution again.
+      //
+      // The route is misconfigured in *both* directions — the handler varies on a header the
+      // cache was never told about — so narrowing now hides `accept-language` too and both
+      // callers get the default rendering. Declaring `varies: ["accept-language"]` fixes both
+      // halves at once: the header reaches the handler, keys the entry and is advertised.
       let callCount = 0;
       const path = uniquePath();
       const handler = defineCachedHandler(
@@ -3844,8 +3849,10 @@ describe("defineCachedHandler", () => {
         makeEvent(path, { headers: { "accept-language": "de" } }),
       )) as Response;
 
-      expect(await en.text()).toBe("lang=en");
-      expect(await de.text()).toBe("lang=de");
+      expect(await en.text()).toBe("lang=none");
+      expect(await de.text()).toBe("lang=none");
+      // The finding's invariant, unchanged: the second caller is served the handler, not a
+      // stored entry — so a route that *does* vary its rendering can never leak across it.
       expect(de.headers.get("x-cache")).toBe("MISS");
       expect(callCount).toBe(2);
       // And nothing under the key either variant reads.
@@ -5262,6 +5269,180 @@ describe("defineCachedHandler", () => {
     expect(seen).toEqual(["Bearer alice"]);
   });
 
+  // --- Narrowing is an allowlist: a handler may read exactly what the key covers ---
+  //
+  // It used to strip `authorization`/`proxy-authorization`/`cookie` and forward every other
+  // header, while the key covers only `keyHeaderNames`. Any undeclared header the handler read
+  // was therefore rendered into an entry nothing distinguished: a MISS carrying the header
+  // followed by a request without it replayed the first caller's rendering, under a synthesized
+  // `max-age` and with no `Vary` to warn a shared cache off it. The credential strip was this
+  // same rule applied to two names by hand.
+
+  it("hides an undeclared header and cannot replay one caller's rendering to the next", async () => {
+    let callCount = 0;
+    const seen: (string | null)[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        const tenant = event.req.headers.get("x-api-key");
+        seen.push(tenant);
+        return new Response(`tenant:${tenant ?? "anonymous"}`);
+      },
+      { maxAge: 10 },
+    );
+
+    const first = (await handler(
+      makeEvent(path, { headers: { "x-api-key": "alice-secret" } }),
+    )) as Response;
+    const second = (await handler(makeEvent(path))) as Response;
+
+    // Undeclared ⇒ outside the key ⇒ invisible, so the entry can only ever hold the one
+    // rendering every caller on that key is entitled to.
+    expect(seen).toEqual([null]);
+    expect(await first.text()).toBe("tenant:anonymous");
+    expect(await second.text()).toBe("tenant:anonymous");
+    expect(second.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(1);
+  });
+
+  it("hides x-forwarded-host, which the URL authority in the key never covered", async () => {
+    const seen: (string | null)[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        const host = event.req.headers.get("x-forwarded-host");
+        seen.push(host);
+        return new Response(`site:${host ?? "canonical"}`);
+      },
+      { maxAge: 10 },
+    );
+
+    // Behind a proxy the key's authority is the *internal* one, identical for both tenants —
+    // so a visible `x-forwarded-host` is the h3#1524 cross-tenant replay by another route.
+    const a = (await handler(
+      makeEvent(path, { headers: { "x-forwarded-host": "a.example" } }),
+    )) as Response;
+    const b = (await handler(
+      makeEvent(path, { headers: { "x-forwarded-host": "b.example" } }),
+    )) as Response;
+
+    expect(seen).toEqual([null]);
+    expect(await a.text()).toBe("site:canonical");
+    expect(await b.text()).toBe("site:canonical");
+  });
+
+  it("forwards host and the propagation headers, but not user-agent or baggage", async () => {
+    const seen: Array<Record<string, string | null>> = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        const get = (name: string) => event.req.headers.get(name);
+        seen.push({
+          host: get("host"),
+          traceparent: get("traceparent"),
+          requestId: get("x-request-id"),
+          userAgent: get("user-agent"),
+          baggage: get("baggage"),
+        });
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    await handler(
+      makeEvent(path, {
+        headers: {
+          host: "localhost",
+          traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+          "x-request-id": "req-1",
+          "user-agent": "curl/8",
+          baggage: "tenant=acme",
+        },
+      }),
+    );
+
+    // `host` is already keyed (the URL authority) and the trace pair is per-request plumbing
+    // no key could cover; `user-agent` (device branching) and `baggage` (OTel's app-readable
+    // tenant/flag context) are rendering inputs, so they follow the general rule.
+    expect(seen).toEqual([
+      {
+        host: "localhost",
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        requestId: "req-1",
+        userAgent: null,
+        baggage: null,
+      },
+    ]);
+  });
+
+  it("restores a stripped header through varies (the documented escape hatch)", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        return new Response(`ua:${event.req.headers.get("user-agent") ?? "unknown"}`);
+      },
+      { maxAge: 10, varies: ["user-agent"] },
+    );
+
+    const ua = (agent: string) => makeEvent(path, { headers: { "user-agent": agent } });
+    const mobile = (await handler(ua("phone"))) as Response;
+    const desktop = (await handler(ua("laptop"))) as Response;
+
+    // Declared ⇒ keyed ⇒ visible, and each value gets its own entry and its own `Vary`.
+    expect(await mobile.text()).toBe("ua:phone");
+    expect(await desktop.text()).toBe("ua:laptop");
+    expect(callCount).toBe(2);
+    expect(mobile.headers.get("vary")).toBe("user-agent");
+  });
+
+  it("keeps the conditional headers visible, so a MISS can still answer 304", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response("body", { headers: { etag: '"v1"' } });
+      },
+      { maxAge: 10 },
+    );
+
+    // First request on this key, so this is a MISS — and `handleCacheHeaders` reads
+    // `if-none-match` off `event.req` *after* narrowing has already swapped it. Stripping it
+    // would leave 304s working on a HIT and silently never firing on a MISS.
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": '"v1"' } }),
+    )) as Response;
+
+    expect(res.status).toBe(304);
+    expect(callCount).toBe(1);
+  });
+
+  it("leaves an undeclared header intact on bypassed requests (non-GET/HEAD, Range)", async () => {
+    const seen: Array<Record<string, string | null>> = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        seen.push({
+          apiKey: event.req.headers.get("x-api-key"),
+          userAgent: event.req.headers.get("user-agent"),
+        });
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const headers = { "x-api-key": "alice-secret", "user-agent": "curl/8" };
+    await handler(makeEvent(path, { method: "POST", headers }));
+    await handler(makeEvent(path, { headers: { ...headers, range: "bytes=0-0" } }));
+
+    // Never keyed ⇒ never narrowed: a bypassed request reaches the handler as it arrived.
+    const intact = { apiKey: "alice-secret", userAgent: "curl/8" };
+    expect(seen).toEqual([intact, intact]);
+  });
+
   it("rejects stored entries carrying a non-allowlisted Set-Cookie (pre-upgrade entries)", async () => {
     const written: string[] = [];
     const memory = createMemoryStorage();
@@ -6360,15 +6541,16 @@ describe("defineCachedHandler", () => {
   it("never serves an anonymous login redirect to a later request (10.5)", async () => {
     let callCount = 0;
     const path = `${uniquePath()}/dashboard`;
-    // Auth middleware: anonymous visitors are bounced to /login, authenticated ones get
-    // their dashboard. The auth signal here is a proxy-injected header rather than a
-    // cookie/bearer token precisely because those are stripped by request-side defaults —
-    // either way the two callers land on the *same* anonymous cache key, which is exactly
-    // why the 302 must never stick to it.
+    // Auth middleware: anonymous visitors are bounced to /login, authenticated ones get their
+    // dashboard. The auth signal is deliberately *not* in the request — every candidate
+    // (cookie, bearer token, a proxy-injected header) is stripped by the request-side
+    // allowlist, and none is in the key — so both callers land on the *same* anonymous cache
+    // key, which is exactly why the 302 must never stick to it. Branching on the call instead
+    // pins the storage decision itself: the second request must reach the handler.
     const handler = defineCachedHandler(
-      (event) => {
+      () => {
         callCount++;
-        return event.req.headers.get("x-forwarded-user")
+        return callCount > 1
           ? new Response("alice's dashboard")
           : new Response("", {
               status: 302,
@@ -6383,9 +6565,7 @@ describe("defineCachedHandler", () => {
     expect(anonymous.headers.get("cache-control")).toBeNull();
 
     // The authenticated user must reach the handler, not the stored redirect.
-    const authenticated = (await handler(
-      makeEvent(path, { headers: { "x-forwarded-user": "alice" } }),
-    )) as Response;
+    const authenticated = (await handler(makeEvent(path))) as Response;
     expect(authenticated.status).toBe(200);
     expect(authenticated.headers.get("location")).toBeNull();
     expect(callCount).toBe(2);

@@ -7,6 +7,31 @@ import type { HandlerConfig } from "./config.ts";
 
 import type { HTTPEvent } from "../types.ts";
 
+/**
+ * The only headers a handler may read *without* the key covering them — every other
+ * undeclared name is stripped by `narrowRequest`. Each earns its place by being unusable
+ * as a rendering input, because `varies` is no escape hatch for any of them:
+ *
+ * - `host` — already keyed, via the URL authority `resolveKey` hashes.
+ * - `if-none-match` / `if-modified-since` — read by `defaultHandleCacheHeaders` *after*
+ *   narrowing has mutated the event, so stripping them would kill the 304 on every MISS.
+ *   Safe to forward: the only responses they can produce (304, 412) are off the status
+ *   allowlist (`validate.ts`), so nothing derived from them is ever stored.
+ * - the propagation headers — carried for logging/tracing, and per-request-unique by
+ *   construction: a handler rendering from one produces something no key could cover.
+ *   Deliberately NOT here: `user-agent` (device/bot branching is a real rendering input)
+ *   and `baggage` (OTel's is app-readable tenant/flag context). Declare those in `varies`.
+ */
+export const safeHeaderNames = [
+  "host",
+  "if-modified-since",
+  "if-none-match",
+  "traceparent",
+  "tracestate",
+  "x-correlation-id",
+  "x-request-id",
+];
+
 // Memoized per event so the key derivation and the URL rewrite don't recompute it.
 export function filteredSearch<E extends HTTPEvent>(
   config: HandlerConfig<E>,
