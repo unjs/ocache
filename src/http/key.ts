@@ -3,11 +3,10 @@
 // caller's `getKey`), `methodKey` prefixes the method — so the revalidation helpers can
 // enumerate every method variant of one resource from a single event.
 
-import { hash } from "ohash";
-
 import type { HandlerConfig } from "./config.ts";
 import { filterCookie, filteredSearch } from "./filters.ts";
 
+import { hash } from "../hash.ts";
 import type { HTTPEvent } from "../types.ts";
 
 // The methods that get a key space of their own, and the single source of truth for them:

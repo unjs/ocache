@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { bench, summary, compact, run } from "mitata";
+import { digest } from "../src/crypto.ts";
 import { defineCachedFunction, createMemoryStorage } from "../src/index.ts";
 import type { StorageInterface } from "../src/index.ts";
 
@@ -164,6 +166,29 @@ summary(() => {
     bench("cache miss", async () => {
       await cachedMiss();
     });
+  });
+});
+
+// --- Digest ---
+//
+// The two halves of the `#crypto` condition, on the two shapes ocache actually hashes: a
+// cache key (short, several per request) and a response body (`serialize` SHA-256s every one
+// for its weak etag, on the write path of every miss). `src/crypto.ts` is what edge/worker
+// builds run; `node:crypto` is what Node builds run, and it is the ceiling — a JS digest is
+// not going to beat a native one, it only has to stay far enough below the cost of the I/O
+// it sits next to.
+
+const shortKey = "x".repeat(64);
+const largeBody = "x".repeat(100_000);
+const nodeDigest = (message: string) =>
+  createHash("sha256").update(message, "utf8").digest("base64url");
+
+summary(() => {
+  compact(() => {
+    bench("digest — 64 B key (compact)", () => digest(shortKey));
+    bench("digest — 64 B key (node:crypto)", () => nodeDigest(shortKey));
+    bench("digest — 100 kB body (compact)", () => digest(largeBody));
+    bench("digest — 100 kB body (node:crypto)", () => nodeDigest(largeBody));
   });
 });
 

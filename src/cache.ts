@@ -1,4 +1,4 @@
-import { hash } from "ohash";
+import { hash } from "./hash.ts";
 import { resolveStorage } from "./storage.ts";
 
 import type { StorageInterface, StorageOption } from "./storage.ts";

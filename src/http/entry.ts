@@ -2,12 +2,11 @@
 // (`serializeResponse`) and back on a hit (`deserializeEntry`). One file because the two
 // halves must agree on the body encoding, the null-body statuses and which headers survive.
 
-import { hash } from "ohash";
-
 import type { HandlerConfig } from "./config.ts";
 import { isCacheableStatus } from "./validate.ts";
 import { appendVary, hasUnkeyedVary, hasVaryWildcard } from "./vary.ts";
 
+import { hash } from "../hash.ts";
 import type { HTTPEvent, ResponseCacheEntry } from "../types.ts";
 
 // Transport/framing headers stripped from a cached entry: the body is stored fully decoded

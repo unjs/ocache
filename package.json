@@ -10,6 +10,13 @@
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.mts",
+  "imports": {
+    "#crypto": {
+      "node": "ohash/crypto",
+      "ocache-source": "./src/crypto.ts",
+      "default": "./dist/crypto.mjs"
+    }
+  },
   "exports": {
     ".": "./dist/index.mjs"
   },

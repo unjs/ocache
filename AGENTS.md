@@ -20,6 +20,8 @@ src/
 │   ├── cache-control.ts # RFC 9111 directive parser (no policy, just syntax)
 │   ├── vary.ts          # Vary merging and the two response-`Vary` predicates
 │   └── conditional.ts   # 304 decisions and the headers a 304 must echo
+├── hash.ts         # `hash()` = ohash's serializer + the `#crypto` digest
+├── crypto.ts       # Compact SHA-256 -> base64url; the non-Node half of `#crypto`
 └── storage.ts      # Storage interface + built-in memory storage
 ```
 
@@ -103,6 +105,17 @@ Split across the modules listed under Project Structure. The bullets below are a
 - `resolveStorage(...optsList)` — internal: resolves `optsList[0].storage` (factory → call it; unset → fresh `createMemoryStorage()`) and writes the result into every listed options object. Deliberately commented with `//`, not JSDoc, so docs4ts keeps it out of the generated API docs
 - **No global storage.** `useStorage()`/`setStorage()` are _removed_ (not deprecated): the module-level slot made the last `setStorage()` call win for every consumer in the process, so two independent apps each building their own handler + storage shared one backend and served each other's cached response bodies (h3#1524 audit, finding #2). Per-instance defaults close it by construction — two defaults can never collide on a key. Sharing is explicit: pass the same `storage`
 
+### Hashing (`hash.ts`, `crypto.ts`)
+
+- `hash(input)` — the single hashing entry point; **every** `hash()` call site in `cache.ts` and `http/` imports it from `hash.ts`, never from `ohash` directly. It is literally what `ohash.hash()` is — `digest(serialize(input))` — re-composed from its two halves so the digest half can be swapped without touching the serializer
+- **Why it is split at all**: on a `platform: neutral` build ohash was ~36% of shipped gzip and roughly two thirds of _that_ was its JS SHA-256, not its serializer — the opposite of what the raw byte counts suggest (finding 18.2). But the cost is **not** paid everywhere: `ohash/crypto` carries a `node` export condition resolving to native `node:crypto`, so a Node consumer has always shipped zero bytes of SHA-256 and only edge/worker/browser/bundler-neutral builds pay for it. That asymmetry is the whole design constraint — a local digest that _replaced_ ohash's unconditionally would have saved ~600 gzip on the edge and **cost Node ~560**
+- **`#crypto` mirrors ohash's export condition one level up** (the `imports` map in `package.json`): `node` → `ohash/crypto` (native, unchanged), `default` → `./dist/crypto.mjs` (the compact implementation). Requires `src/crypto.ts` to be a **second obuild entry with `#crypto` left external** in `dist/index.mjs` — resolving it at build time would bake this machine's answer (always `node`) into the published bundle and ship a `node:crypto` import to every edge consumer. The third condition, `ocache-source` → `./src/crypto.ts`, is repo-private: `test/bundle.ts` builds from `src` with no `dist` present, and no bundler enables that name on its own
+- **`crypto.ts` is byte-identical to `node:crypto`**, and therefore to what `ohash.hash()` produced before, on every input — verified against `node:crypto` across block-boundary, multi-byte and astral fixed vectors, a ≥100 kB body, and 500 seeded-random unicode inputs (`test/hash.test.ts`). This is not a nice-to-have: `hash()` composes cache **keys** and **integrity** values, so a single character of drift silently invalidates every entry in every deployed store, or worse collides two differently-keyed ones. **Nothing is invalidated on upgrade**, and the test pins representative digests as literals so a future edit can't move them quietly
+- One deliberate divergence from ohash's _JS fallback_ (not from `node:crypto`), and it is an improvement: ohash encodes UTF-8 via `unescape(encodeURIComponent(s))`, which **throws** `URIError` on a lone surrogate, while `crypto.ts` uses `TextEncoder` and substitutes U+FFFD exactly as `node:crypto` does. An input that used to hash on Node and throw on the edge now agrees on both
+- Round constants are carried as a **base64 blob**, not derived from the primes at load time. Deriving is ~390 gzip smaller still and was **rejected**: `Math.cbrt` is spec'd as implementation-approximated, so a platform off by one ulp would silently produce a wrong table and thus wrong hashes on every key — a failure mode with no symptom short of a load-time assertion. A constant can't drift
+- **The serializer is deliberately untouched.** A hand-rolled one measures ~590 gzip smaller, but dropping its `$Set`/`$Map`/`$RegExp` cases makes every `Set` serialize to `Set{}`, so `cachedFunction` called with two different `Set`s returns the **wrong cached value** — silently, and the suite did not catch it until `test/hash.test.ts` added the case. It would also invalidate every stored `integrity`
+- Perf, measured on the write path it sits on (`serialize` SHA-256s every response body for its weak etag): **2.4× faster than ohash's JS digest on a 100 kB body** (0.82 ms vs 2.01 ms) and ~1.3× on a 64-byte key — so the edge build gets smaller _and_ faster, while Node keeps the native digest it already had (~0.18 ms on the same body). `test/bench.ts` carries the digest group
+
 ### Types (`types.ts`)
 
 - `HTTPEvent` — `{ req: Request; url?: URL }` (url falls back to `new URL(req.url)`)
@@ -115,7 +128,7 @@ Split across the modules listed under Project Structure. The bullets below are a
 
 ## Dependencies
 
-- `ohash` — hashing for cache keys and integrity
+- `ohash` — the **serializer** for cache keys and integrity (`serialize`), and, on Node only, the digest behind them (`ohash/crypto` → native `node:crypto`, reached through the `#crypto` condition). Its JS SHA-256 fallback is no longer shipped: `src/crypto.ts` replaces it on every non-Node platform, byte-identically. Still the only runtime dependency — see the Hashing section for why the split exists and what must not change
 
 ## Dev Commands
 
@@ -123,6 +136,7 @@ Split across the modules listed under Project Structure. The bullets below are a
 - `pnpm typecheck` — typecheck (`tsc --noEmit --skipLibCheck`)
 - `pnpm lint` — `oxlint` + `oxfmt --check`
 - `pnpm build` — build with obuild
+- `pnpm bundle` — bundle-size probe (`test/bundle.ts`, **not** part of the vitest suite): builds a realistic `defineCachedHandler` consumer with rolldown for **both** `platform: neutral` and `platform: node`, asserts per-platform raw/min/min+gzip budgets, and asserts that exactly the Node bundle resolves `#crypto` to `node:crypto`
 
 ## Design Decisions
 
