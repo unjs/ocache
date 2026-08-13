@@ -8,7 +8,7 @@ import type { HandlerConfig } from "./config.ts";
 import { isCacheableStatus } from "./validate.ts";
 import { appendVary, hasUnkeyedVary, hasVaryWildcard } from "./vary.ts";
 
-import type { HTTPEvent, ResponseCacheEntry } from "../types.ts";
+import type { CacheEntry, HTTPEvent, ResponseCacheEntry } from "../types.ts";
 
 // Transport/framing headers stripped from a cached entry: the body is stored fully decoded
 // and re-buffered, so none of them still describes it. `content-range` too — it describes a
@@ -27,12 +27,15 @@ const transportHeaders = [
 const nullBodyStatuses = new Set([204, 205, 304]);
 
 // Serializes a resolved `Response` into the stored entry. Runs exactly once per resolution
-// (shared across deduplicated callers), so consuming the body here is safe.
+// (shared across deduplicated callers), so consuming the body here is safe. Takes the whole
+// entry, not just its `Response`: the lifetimes advertised below are the ones `cache.ts` has
+// already resolved *onto it* (finding 10.2).
 export async function serializeResponse<E extends HTTPEvent>(
   config: HandlerConfig<E>,
-  res: Response,
+  entry: CacheEntry<Response>,
 ): Promise<ResponseCacheEntry> {
   const { opts, varyHeaderNames } = config;
+  const res = entry.value as Response;
 
   // Read the body once as raw bytes: valid UTF-8 is stored verbatim as a string (stable text
   // etags), anything else is base64-encoded and flagged so binary survives a JSON storage
@@ -67,22 +70,46 @@ export async function serializeResponse<E extends HTTPEvent>(
     !hasUnkeyedVary(declaredVary, varyHeaderNames) &&
     !res.headers.has("cache-control")
   ) {
+    // The lifetimes `getMaxAge` resolved for *this* entry, else the static options — exactly
+    // the precedence `cache.ts` applies to the freshness check and the storage TTL (finding
+    // 10.2). Reading `opts` alone expired our own entry on the dynamic window while telling
+    // every cache downstream the static one, which is most of a dynamic TTL's purpose gone.
+    // `http/index.ts` always installs a `getMaxAge` wrapper, so both fields are always
+    // *resolved* here — `undefined` meaning "no override", never "not asked".
+    const maxAge = entry.maxAge ?? opts.maxAge;
+    const staleMaxAge = entry.staleMaxAge ?? opts.staleMaxAge;
+
     const cacheControl = [];
-    // Both branches treat `maxAge` identically — present (`0` included) is advertised. So
-    // `validate` reads a zero lifetime out of our header as out of a hand-written one, i.e.
-    // `maxAge: 0` keeps the response out of storage (it was written already expired anyway).
-    if (opts.swr) {
-      if (opts.maxAge != null) {
-        cacheControl.push(`s-maxage=${opts.maxAge}`);
+    // `maxAge` is treated identically with and without `swr` — present (`0` included) is
+    // advertised. So `validate` reads a zero lifetime out of our header as out of a
+    // hand-written one, i.e. `maxAge: 0` keeps the response out of storage (it was written
+    // already expired anyway).
+    if (maxAge != null) {
+      // Both cache kinds get the same number, and it is the one ocache itself enforces:
+      // `s-maxage` overrides `max-age` in a shared cache (RFC 9111 §5.2.2.10) so nothing
+      // changes for CDNs, while a *private* cache finally gets a freshness lifetime at all.
+      // It had none before: `s-maxage` doesn't apply to it, so it fell back to heuristic
+      // freshness (§4.2.2) over `Date - Last-Modified` — and `last-modified` is stamped at
+      // fill time, so that is ≈ 0 and browsers revalidated on every navigation while the
+      // server held the entry for `maxAge` (finding 10.3). `s-maxage` stays alongside it
+      // rather than being folded away: it is what authorizes a shared cache to store the
+      // response to an `Authorization`-carrying request at all (§3.5, reachable under
+      // `allowAuthorization`), and `sendCacheControl: false` is the knob for wanting neither.
+      cacheControl.push(`max-age=${maxAge}`);
+      if (opts.swr) {
+        cacheControl.push(`s-maxage=${maxAge}`);
       }
-      if (opts.staleMaxAge != null) {
-        cacheControl.push(`stale-while-revalidate=${opts.staleMaxAge}`);
-      } else {
-        cacheControl.push("stale-while-revalidate");
-      }
-    } else if (opts.maxAge != null) {
-      // For non-SWR, set max-age directly
-      cacheControl.push(`max-age=${opts.maxAge}`);
+    }
+    // Only ever with a delta-seconds. RFC 5861 §3 requires the argument, so the bare token we
+    // used to emit for the ISR shape (`swr` with no `staleMaxAge`) was unparseable and had to
+    // be ignored wholesale (RFC 9111 §5.2.3) — the window evaporated downstream while reading
+    // as if it hadn't (finding 10.4). Nothing replaces it, because that shape's stale window
+    // is *unbounded* (the entry is retained until the backend evicts it by capacity): there is
+    // no honest number, and any invented one would advertise a stale window ocache cannot
+    // promise. Silence is the strict direction — downstream revalidates when `max-age` runs
+    // out and ocache answers that from its own stale entry, so ISR still happens, one layer in.
+    if (opts.swr && staleMaxAge != null) {
+      cacheControl.push(`stale-while-revalidate=${staleMaxAge}`);
     }
     if (cacheControl.length > 0) {
       res.headers.set("cache-control", cacheControl.join(", "));
