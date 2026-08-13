@@ -13,8 +13,8 @@ function defaultCacheOptions() {
   } as const;
 }
 
-/** Default deadline (ms) on one shared resolution — the resolver plus `getMaxAge` and `serialize`. */
-const DEFAULT_RESOLVER_TIMEOUT = 30_000;
+/** Default deadline (seconds) on one shared resolution — the resolver plus `getMaxAge` and `serialize`. */
+const DEFAULT_RESOLVER_TIMEOUT = 30;
 
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
@@ -75,8 +75,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const group = opts.group || "functions";
   const integrity = opts.integrity || hash([fn, integrityOpts(opts)]);
   const validate = opts.validate || ((entry) => entry.value !== undefined);
-  // A finite positive deadline arms the timeout; `Infinity` / `0` / negative disable it —
-  // the normalization shape `createMemoryStorage` uses for its own ceilings. Deliberately
+  // Seconds, like every other time-valued option here (`maxAge`, `staleMaxAge`, `getMaxAge`'s
+  // return, the storage `ttl`) — the conversion to milliseconds happens at the `setTimeout`,
+  // which is where `createMemoryStorage` does it too. A finite positive deadline arms the
+  // timeout; `Infinity` / `0` / negative disable it — the normalization shape
+  // `createMemoryStorage` uses for its own ceilings. Deliberately
   // NOT in `defaultCacheOptions()`: the default must not materialize as a key on `opts`, or
   // every entry written by an earlier ocache would go cold over a knob that says nothing
   // about the cached computation. Setting it explicitly does cost that one integrity change
@@ -637,9 +640,10 @@ function requireStorage(
   return resolveStorage(options);
 }
 
-// Rejects with a `TimeoutError` if `work` hasn't settled within `ms`, so a resolution that
-// never settles cannot pin its `pending` slot forever (finding 03 — see the call site for why
-// the waiters are rejected rather than merely released).
+// Rejects with a `TimeoutError` if `work` hasn't settled within `seconds`, so a resolution
+// that never settles cannot pin its `pending` slot forever (finding 03 — see the call site
+// for why the waiters are rejected rather than merely released). Seconds in, milliseconds
+// converted at the timer, exactly as `createMemoryStorage` treats its `ttl`.
 //
 // `work` is *not* cancelled: there is no cancellation to reach for (the resolver is the
 // caller's `fn`, invoked with the caller's arguments, and nothing here has an `AbortSignal`
@@ -658,15 +662,16 @@ function requireStorage(
 // `entry.value` decides whether a background refresh is visible to the call it was triggered
 // by. One tick is unavoidable and does change that for a *sync* resolver under SWR (see the
 // `status` attach below); three would be gratuitous.
-function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+function withDeadline<T>(work: Promise<T>, seconds: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      const error = new Error(`[cache] Resolver timed out after ${ms}ms.`);
+      // Reported in the unit the caller configured, never the converted milliseconds.
+      const error = new Error(`[cache] Resolver timed out after ${seconds}s.`);
       // The name the platform gives this failure (`AbortSignal.timeout()`), so a caller can
       // tell a deadline apart from a resolver's own error without a class to import.
       error.name = "TimeoutError";
       reject(error);
-    }, ms);
+    }, seconds * 1000);
     // Allow the process to exit even if a deadline is pending (as the memory storage does).
     if (timer && typeof timer === "object" && "unref" in timer) {
       timer.unref();
@@ -703,8 +708,28 @@ function buildCacheKey(
   base: string,
 ): string {
   const group = opts.group || "functions";
-  const name = opts.name || "_";
+  // Escaped like every other segment: `name` is the one that used to reach the key raw, and it
+  // stopped being a controlled alphabet once it started coming from `fn.name` (see `resolveName`).
+  const name = escapeKeySegment(opts.name || "_");
   return [base, group, name, key + ".json"].filter(Boolean).join(":").replace(/:\/$/, ":index");
+}
+
+// A storage-safe segment of the `:`-joined key. Non-word characters are dropped, which is lossy,
+// so a segment the escape changed also carries a hash of the raw value: `.` occurs only in that
+// hashed form, so the two forms can never overlap and two raws that escape alike (`a:bc` /
+// `ab:c`) stay distinct. Ordinary identifier characters come back byte-identical, so escaping
+// this late costs no existing entry its key. Shared by the `name` segment here and a custom
+// `getKey` in `http/key.ts`, which needs the same treatment for the same reason. Commented with
+// `//`, not JSDoc, so docs4ts keeps it out of the API docs.
+export function escapeKeySegment(raw: string): string {
+  const escaped = escapeKey(raw);
+  return escaped === raw ? escaped : `${escaped.slice(0, 64)}.${hash(raw)}`;
+}
+
+// Drops everything outside `[A-Za-z0-9_]` from a key segment. Lossy on purpose — see
+// `escapeKeySegment`, which is what callers composing a `:`-joined key should reach for.
+export function escapeKey(key: string | string[]): string {
+  return String(key).replace(/\W/g, "");
 }
 
 function normalizeBases(base: CacheOptions["base"]): [string, ...string[]] {

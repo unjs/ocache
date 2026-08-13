@@ -219,9 +219,10 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
     | undefined
     | Promise<number | { maxAge?: number; staleMaxAge?: number } | undefined>;
   /**
-   * Deadline in **milliseconds** on one shared resolution — the resolver plus the
-   * `getMaxAge`/`serialize` hooks folded into it. Defaults to `30 000`; `Infinity` (or `0`)
-   * waits forever.
+   * Number of **seconds** a single shared resolution may take — the resolver plus the
+   * `getMaxAge`/`serialize` hooks folded into it. Defaults to `30`; `Infinity` (or `0`) waits
+   * forever. Seconds, like {@link maxAge} and {@link staleMaxAge}; fractions are allowed
+   * (`resolverTimeout: 0.5` is half a second).
    *
    * Concurrent calls for a key share one in-flight resolution, so a resolver that never
    * settles would otherwise pin that key for the lifetime of the process: every later call
