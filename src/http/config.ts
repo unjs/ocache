@@ -19,6 +19,11 @@ export function defaultHandlerOptions() {
   } as const;
 }
 
+// Default ceiling on the body of a single response (5 MB). Above it the response is streamed
+// through uncached rather than buffered — see `readBody` in `entry.ts` for why the limit has to
+// be enforced while reading.
+const DEFAULT_MAX_BODY_SIZE = 5 * 1024 * 1024;
+
 // Stripped from the handler-visible request by default, like a non-allowlisted cookie:
 // otherwise a token-authenticated route fails *open* — the first caller's private response is
 // stored under the anonymous key and replayed to everyone. `allowAuthorization` folds both
@@ -59,6 +64,13 @@ export interface HandlerConfig<E extends HTTPEvent> {
   statusHeader: string | undefined;
 
   /**
+   * Byte ceiling on a single response body, or `undefined` when the caller disabled it.
+   * Enforced *while* the body is read (`entry.ts`); a body over it is streamed through to
+   * the caller and never cached.
+   */
+  maxBodySize: number | undefined;
+
+  /**
    * Memoizes the filtered query per request for the key derivation and the URL rewrite.
    * Scoped to this handler instance, so a shared event can't pick up another's allowlist.
    */
@@ -76,6 +88,15 @@ export interface HandlerConfig<E extends HTTPEvent> {
    * request's verdict into the next.
    */
   bypassed: WeakMap<HTTPEvent, boolean>;
+
+  /**
+   * Live `Response`s (an oversized body, streamed through uncached) already handed to a
+   * caller. A body can be read exactly once, but `cache.ts` gives every coalesced caller
+   * the *same* resolved value — so the first caller claims it here and any later one
+   * re-resolves instead of being served a disturbed stream. See the serve path in
+   * `index.ts`.
+   */
+  claimed: WeakSet<Response>;
 }
 
 // Derives the per-handler configuration from the caller's options. `name` is resolved BEFORE
@@ -128,6 +149,11 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
     ? [...new Set(opts.allowQuery.filter(Boolean))]
     : undefined;
 
+  // Same normalization as `createMemoryStorage`'s ceilings: a finite positive number arms the
+  // limit, `Infinity` / `0` / a negative disables it.
+  const _maxBodySize = opts.maxBodySize ?? DEFAULT_MAX_BODY_SIZE;
+  const maxBodySize = Number.isFinite(_maxBodySize) && _maxBodySize > 0 ? _maxBodySize : undefined;
+
   const statusHeader =
     opts.cacheStatusHeader === true
       ? "x-cache"
@@ -142,8 +168,10 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
     keyHeaderNames,
     varyHeaderNames,
     statusHeader,
+    maxBodySize,
     searchCache: new WeakMap<HTTPEvent, string>(),
     bypassed: new WeakMap<HTTPEvent, boolean>(),
+    claimed: new WeakSet<Response>(),
   };
 }
 

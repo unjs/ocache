@@ -28,16 +28,23 @@ const nullBodyStatuses = new Set([204, 205, 304]);
 
 // Serializes a resolved `Response` into the stored entry. Runs exactly once per resolution
 // (shared across deduplicated callers), so consuming the body here is safe.
+//
+// Returns a `Response` instead when the body blew the size ceiling: nothing was serialized,
+// nothing is storable, and the live response flows back out through `index.ts` exactly as a
+// bypassed one does (`value instanceof Response`).
 export async function serializeResponse<E extends HTTPEvent>(
   config: HandlerConfig<E>,
   res: Response,
-): Promise<ResponseCacheEntry> {
-  const { opts, varyHeaderNames } = config;
+): Promise<ResponseCacheEntry | Response> {
+  const { opts, varyHeaderNames, maxBodySize } = config;
 
   // Read the body once as raw bytes: valid UTF-8 is stored verbatim as a string (stable text
   // etags), anything else is base64-encoded and flagged so binary survives a JSON storage
   // backend. Discriminated on byte validity, not the spoofable/absent content-type.
-  const bytes = new Uint8Array(await res.arrayBuffer());
+  const bytes = await readBody(res, maxBodySize);
+  if (bytes instanceof Response) {
+    return bytes;
+  }
   const text = decodeUtf8(bytes);
   const base64 = text === undefined;
   const body = base64 ? bytesToBase64(bytes) : text;
@@ -146,6 +153,104 @@ export function deserializeEntry(entry: ResponseCacheEntry): {
       headers: entry.headers,
     },
   };
+}
+
+// Reads a response body as bytes under a hard ceiling, enforced *while reading* rather than
+// after — which is the whole of finding 03. `res.arrayBuffer()` has already materialized the
+// body by the time its length could be checked, so a check afterwards protects nothing: one
+// 50 MB binary response stalls the loop for 3.6 s (the rest of the serialize path is
+// synchronous too), 100 concurrent 5 MB misses leave 1139 MB resident, and a never-ending
+// stream simply never returns — 19 GB in 10 s, in *external* memory, so V8's heap limit never
+// fires and the OS OOM-killer takes the process. The storage byte budget (finding 14.1) cannot
+// stand in for this: it bounds what is *retained*, and by the time storage is offered a value
+// the cost of materializing it has already been paid.
+//
+// Returns the bytes, or — over the ceiling — a `Response` for the caller to stream, uncached.
+async function readBody(
+  res: Response,
+  maxBodySize: number | undefined,
+): Promise<Uint8Array | Response> {
+  // Ceiling disabled, or a body-less response (`res.body === null`): nothing to meter.
+  if (!maxBodySize || !res.body) {
+    return new Uint8Array(await res.arrayBuffer());
+  }
+  // `Content-Length` is a hint and never the authority — it is absent from every streamed or
+  // chunked response and a handler can simply state it wrong — so believing it only ever saves
+  // us a read we already know is pointless. The incremental check below stands on its own.
+  if (Number(res.headers.get("content-length")) > maxBodySize) {
+    // Untouched, so the caller gets the very object the handler returned.
+    return res;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    chunks.push(value);
+    size += value.byteLength;
+    if (size > maxBodySize) {
+      return streamRest(res, chunks, reader);
+    }
+  }
+  return concatChunks(chunks, size);
+}
+
+// Rebuilds a servable `Response` out of the chunks already buffered plus the rest of the
+// still-unread stream, once the ceiling made us abandon caching. A consumed body cannot be
+// re-read, so the servable copy has to come from somewhere, and the obvious alternative —
+// `res.clone()` taken up front — is worse: its tee queues every byte the reading branch
+// consumes for the branch nobody drains, doubling the memory of every *under*-limit response
+// (the common path) to rescue the rare one. Here nothing beyond what was already buffered is
+// held, and the remainder is never buffered at all — it is pulled one chunk at a time as the
+// caller reads it. Status and headers are copied, so the caller is served the handler's real
+// response rather than a stub.
+function streamRest(
+  res: Response,
+  chunks: Uint8Array[],
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+      // Handed to the stream's own queue — don't retain them twice.
+      chunks.length = 0;
+    },
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+      } else {
+        controller.enqueue(value);
+      }
+    },
+    // We hold the only lock on the upstream body, so a caller that gives up has to reach it
+    // through us or the connection is left dangling.
+    cancel: (reason) => reader.cancel(reason),
+  });
+  return new Response(body, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+  });
+}
+
+/** Joins the chunks read off a body into one buffer (a single-chunk body skips the copy). */
+function concatChunks(chunks: Uint8Array[], size: number): Uint8Array {
+  if (chunks.length === 1) {
+    return chunks[0]!;
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 // Fatal decoder so invalid UTF-8 throws (→ base64) instead of substituting replacement

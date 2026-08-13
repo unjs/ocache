@@ -2801,6 +2801,316 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(2);
   });
 
+  // `serialize` used to buffer every cacheable body whole (`new Uint8Array(await
+  // res.arrayBuffer())`), unconditionally: a 50 MB binary response stalled the loop for 3.6 s
+  // and a never-ending stream reached 19 GB of external memory in 10 s before the OOM-killer
+  // arrived. The ceiling therefore has to bite *while* the body is read — a check on the
+  // finished buffer would already have paid for it (finding 03).
+  describe("maxBodySize", () => {
+    /** A lazily produced body, reporting how many chunks were actually pulled out of it. */
+    function chunkedBody(chunk: Uint8Array, count: number) {
+      const state = { pulled: 0 };
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (state.pulled >= count) {
+            controller.close();
+            return;
+          }
+          state.pulled++;
+          controller.enqueue(chunk.slice());
+        },
+      });
+      return { body, state };
+    }
+
+    it("streams an oversized text body through instead of caching it", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const big = "x".repeat(4096);
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(big);
+        },
+        { maxAge: 10, maxBodySize: 1024 },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // Served complete and byte-identical, twice — the handler ran both times.
+      expect(await r1.text()).toBe(big);
+      expect(await r2.text()).toBe(big);
+      expect(callCount).toBe(2);
+    });
+
+    it("serves an oversized binary body byte-identically", async () => {
+      const path = uniquePath();
+      // 0xff is never valid UTF-8, so this would take the base64 branch if it were cached.
+      const bytes = new Uint8Array(4096).fill(0xff);
+      bytes[0] = 0x00;
+      const handler = defineCachedHandler(
+        () => new Response(bytes, { headers: { "content-type": "image/png" } }),
+        { maxAge: 10, maxBodySize: 1024 },
+      );
+
+      const res = (await handler(makeEvent(path))) as Response;
+      const out = new Uint8Array(await res.arrayBuffer());
+
+      expect(out.length).toBe(bytes.length);
+      expect([...out]).toEqual([...bytes]);
+      expect(res.headers.get("content-type")).toBe("image/png");
+    });
+
+    it("passes an oversized response through untouched (no etag/cache-control/x-cache)", async () => {
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response("x".repeat(4096)), {
+        maxAge: 10,
+        swr: true,
+        staleMaxAge: 60,
+        maxBodySize: 1024,
+      });
+
+      const res = (await handler(makeEvent(path))) as Response;
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get("x-cache")).toBe(null);
+      expect(res.headers.get("etag")).toBe(null);
+      expect(res.headers.get("last-modified")).toBe(null);
+      expect(res.headers.get("cache-control")).toBe(null);
+    });
+
+    it("caches a body at or under the ceiling as usual", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const body = "x".repeat(1024);
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(body);
+        },
+        { maxAge: 10, maxBodySize: 1024 },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      expect(await r1.text()).toBe(body);
+      expect(await r2.text()).toBe(body);
+      expect(callCount).toBe(1);
+      expect(r2.headers.get("x-cache")).toBe("HIT");
+      expect(r2.headers.get("etag")).toBeTruthy();
+    });
+
+    // Same normalization as `createMemoryStorage`'s ceilings.
+    for (const disabled of [0, Number.POSITIVE_INFINITY]) {
+      it(`caches an oversized body when maxBodySize is ${disabled}`, async () => {
+        let callCount = 0;
+        const path = uniquePath();
+        const big = "x".repeat(4096);
+        const handler = defineCachedHandler(
+          () => {
+            callCount++;
+            return new Response(big);
+          },
+          { maxAge: 10, maxBodySize: disabled },
+        );
+
+        await handler(makeEvent(path));
+        const r2 = (await handler(makeEvent(path))) as Response;
+
+        expect(await r2.text()).toBe(big);
+        expect(callCount).toBe(1);
+        expect(r2.headers.get("x-cache")).toBe("HIT");
+      });
+    }
+
+    it("catches an oversized body whose content-length lies (or is absent)", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const chunk = new Uint8Array(256).fill(0x61); // "a"
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          // A streamed body carries no content-length of its own; this one claims 10 bytes
+          // and delivers 25 600. Only the incremental check can catch that.
+          const { body } = chunkedBody(chunk, 100);
+          return new Response(body, { headers: { "content-length": "10" } });
+        },
+        { maxAge: 10, maxBodySize: 1024 },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      expect((await r1.arrayBuffer()).byteLength).toBe(25_600);
+      expect((await r2.arrayBuffer()).byteLength).toBe(25_600);
+      expect(callCount).toBe(2);
+    });
+
+    it("stops reading an oversized body instead of buffering it", async () => {
+      const path = uniquePath();
+      const chunk = new Uint8Array(256).fill(0x61);
+      const { body, state } = chunkedBody(chunk, 100);
+      const handler = defineCachedHandler(() => new Response(body), {
+        maxAge: 10,
+        maxBodySize: 1024,
+      });
+
+      const res = (await handler(makeEvent(path))) as Response;
+
+      // The ceiling is 4 chunks' worth, so the read was abandoned right after crossing it —
+      // the other ~96 chunks (a body 25× the ceiling) were never pulled. Loose bound: it is
+      // the *order of magnitude* that matters, and a runtime may read a chunk ahead.
+      expect(state.pulled).toBeLessThan(20);
+
+      // ...and the rest still arrives, complete, once the caller reads it.
+      const out = new Uint8Array(await res.arrayBuffer());
+      expect(out.length).toBe(25_600);
+      expect(out.every((byte) => byte === 0x61)).toBe(true);
+      expect(state.pulled).toBe(100);
+    });
+
+    it("skips the read entirely when content-length already exceeds the ceiling", async () => {
+      const path = uniquePath();
+      const chunk = new Uint8Array(256).fill(0x61);
+      const { body, state } = chunkedBody(chunk, 100);
+      const handler = defineCachedHandler(
+        () => new Response(body, { headers: { "content-length": "25600" } }),
+        { maxAge: 10, maxBodySize: 1024 },
+      );
+
+      const res = (await handler(makeEvent(path))) as Response;
+
+      // Never read by us at all: the body is handed back as the handler produced it. (The one
+      // chunk that may show up here is the runtime priming its own stream on construction —
+      // 4 chunks would be the ceiling's worth, which is what a metered read costs.)
+      expect(state.pulled).toBeLessThan(2);
+      expect((await res.arrayBuffer()).byteLength).toBe(25_600);
+    });
+
+    // Concurrent callers coalesce onto one resolution, so all of them are handed the *same*
+    // `Response` — and a body can only be read once, so every caller after the first used to
+    // get a rejected `.text()`/`.arrayBuffer()` on an already-disturbed stream. An oversized
+    // route is uncached by construction (every request reaches the origin anyway), so the
+    // honest resolution is one origin call per caller, not one shared stream.
+    it("gives every concurrent caller of an oversized route its own complete body", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const big = "x".repeat(20_000);
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(big);
+        },
+        { maxAge: 60, maxBodySize: 1024 },
+      );
+
+      const responses = (await Promise.all([
+        handler(makeEvent(path)),
+        handler(makeEvent(path)),
+        handler(makeEvent(path)),
+      ])) as Response[];
+
+      expect(await Promise.all(responses.map((res) => res.text()))).toEqual([big, big, big]);
+      expect(callCount).toBe(3);
+    });
+
+    it("gives every concurrent caller of an oversized binary route its own bytes", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const bytes = new Uint8Array(20_000).fill(0xff);
+      bytes[0] = 0x00;
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(bytes, { headers: { "content-type": "image/png" } });
+        },
+        { maxAge: 60, maxBodySize: 1024 },
+      );
+
+      const responses = (await Promise.all([
+        handler(makeEvent(path)),
+        handler(makeEvent(path)),
+      ])) as Response[];
+      const bodies = await Promise.all(
+        responses.map(async (res) => new Uint8Array(await res.arrayBuffer())),
+      );
+
+      for (const body of bodies) {
+        expect(body.length).toBe(bytes.length);
+        expect([...body]).toEqual([...bytes]);
+      }
+      expect(callCount).toBe(2);
+    });
+
+    it("still caches a body-less response", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(null, { status: 200 });
+        },
+        { maxAge: 10, maxBodySize: 1024 },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      expect(await r1.text()).toBe("");
+      expect(await r2.text()).toBe("");
+      expect(callCount).toBe(1);
+      expect(r2.headers.get("x-cache")).toBe("HIT");
+    });
+
+    it("drops a previously cached entry when the response outgrows the ceiling", async () => {
+      const path = uniquePath();
+      let big = false;
+      let callCount = 0;
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(big ? "x".repeat(4096) : "small");
+        },
+        { maxAge: 10, maxBodySize: 1024, shouldInvalidateCache: () => big },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      expect(await r1.text()).toBe("small");
+
+      big = true;
+      const r2 = (await handler(makeEvent(path))) as Response;
+      expect(await r2.text()).toBe("x".repeat(4096));
+
+      // The stale small entry must be gone rather than served again once the ceiling bites.
+      big = false;
+      const r3 = (await handler(makeEvent(path))) as Response;
+      expect(await r3.text()).toBe("small");
+      expect(r3.headers.get("x-cache")).toBe("MISS");
+      expect(callCount).toBe(3);
+    });
+
+    it("defaults the ceiling to 5 MB", async () => {
+      const path = uniquePath();
+      let callCount = 0;
+      // Just over 5 MB — cached at 5 MB exactly, streamed through above it.
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("x".repeat(5 * 1024 * 1024 + 1));
+        },
+        { maxAge: 10 },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      await handler(makeEvent(path));
+
+      expect(r1.headers.get("x-cache")).toBe(null);
+      expect(callCount).toBe(2);
+    });
+  });
+
   // Response-side Cache-Control is *the* documented way for a handler to opt a response out
   // of the cache, but only `no-store`/`private` (the two tests above) were ever recognized.
   // `no-cache` and `max-age=0`/`s-maxage=0` — the commonest ways a developer writes "don't

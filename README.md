@@ -169,6 +169,8 @@ untouched), only `200`/`203`/`301`/`308` is stored, and a response opting itself
 (`no-store`, `private`, `no-cache`, zero shared lifetime, `Vary: *`) is served but never
 stored — nor is one whose own `Vary` names a header outside `varies`, which a single entry
 cannot honor. `must-revalidate` is not an opt-out — stored, served fresh, never served stale.
+A body over `maxBodySize` (5 MB by default) is streamed through to the caller uncached,
+rather than buffered whole.
 
 **Parameters:**
 

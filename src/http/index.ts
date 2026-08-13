@@ -32,6 +32,8 @@ import type {
  * (`no-store`, `private`, `no-cache`, zero shared lifetime, `Vary: *`) is served but never
  * stored — nor is one whose own `Vary` names a header outside `varies`, which a single entry
  * cannot honor. `must-revalidate` is not an opt-out — stored, served fresh, never served stale.
+ * A body over `maxBodySize` (5 MB by default) is streamed through to the caller uncached,
+ * rather than buffered whole.
  *
  * @param handler - The event handler to cache.
  * @param opts - Cache and HTTP-specific configuration options.
@@ -70,8 +72,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // stored entry) so it flows through to the final Response headers.
     transform: statusHeader
       ? (entry) => {
-          const value = entry.value as unknown as ResponseCacheEntry | undefined;
-          if (!value) {
+          const value = entry.value as unknown as ResponseCacheEntry | Response | undefined;
+          // A body over `maxBodySize` was never serialized: `serialize` handed the live
+          // `Response` back for the caller to stream, and it passes through untouched — no
+          // entry to stamp, and spreading a `Response` would yield an empty object.
+          if (!value || value instanceof Response) {
             return;
           }
           return {
@@ -110,9 +115,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       return override ? { ...dynamic, ...override } : dynamic;
     },
-    // Write-side seam (see `entry.ts`): consume the body, synthesize the cache headers, build
-    // the entry. Runs once per resolution, and outside the resolver so bypassed requests —
-    // which never reach it — get their live `Response` back untouched.
+    // Write-side seam (see `entry.ts`): consume the body under the `maxBodySize` ceiling,
+    // synthesize the cache headers, build the entry. Runs once per resolution, and outside the
+    // resolver so bypassed requests — which never reach it — get their live `Response` back
+    // untouched. An oversized body reaches that same outcome by a different road: `serialize`
+    // returns a `Response` rather than an entry, and the hooks below let it past.
     serialize: (entry) => serializeResponse(config, entry.value as unknown as Response),
     // The built-in bypass composed with the caller's check (see `request.ts`). The single
     // evaluation of that composition per call: `cache.ts` short-circuits to the raw resolver
@@ -122,16 +129,24 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     getKey: async (event: HTTPEvent) =>
       methodKey(await resolveKey(config, event), event.req.method),
     // Always inspects the serialized shape: on write right after `serialize`, on read the
-    // entry as persisted.
-    validate: (entry) => validateEntry(config, entry.value as unknown as ResponseCacheEntry),
+    // entry as persisted. A `Response` is the one value that never is one — an oversized body,
+    // refused here so it is neither stored nor (on a warm key) kept: `validateEntry` would
+    // otherwise read the `Response`'s own `status`/`headers` as an entry's and store it.
+    validate: (entry) =>
+      entry.value instanceof Response
+        ? false
+        : validateEntry(config, entry.value as unknown as ResponseCacheEntry),
     group: opts.group || "handlers",
     integrity: opts.integrity || hash([handler, integrityOpts(opts)]),
   };
 
   // Resolver: narrow the request (cacheable calls only), run the handler, return the *live*
   // `Response`. Serialization happens in the `serialize` hook above, which a bypassed
-  // request skips entirely — so it flows back out untouched.
-  const cachedFn = cachedFunction<Response>(async (event: HTTPEvent) => {
+  // request skips entirely — so it flows back out untouched. Named rather than inline
+  // because the serve path calls it again directly for a caller that was handed an already
+  // claimed response (see below); `cache.ts` never sees that call, so no key, integrity or
+  // dedup behavior depends on this being one function or two.
+  const resolve = async (event: HTTPEvent): Promise<Response> => {
     // Cacheable calls only — `narrowRequest` gates itself on the composed bypass verdict, so
     // a request the caller excluded reaches the handler with its credentials and query intact.
     narrowRequest(config, event);
@@ -139,7 +154,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // Call handler
     const rawValue = await handler(event as E);
     return toResponse(rawValue, event as E);
-  }, _opts);
+  };
+
+  const cachedFn = cachedFunction<Response>(resolve, _opts);
 
   const cachedHandler: EventHandler<E> = async (event) => {
     // Headers-only mode
@@ -154,9 +171,29 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     const cached = (await cachedFn(event))! as Response | ResponseCacheEntry;
 
     // A bypassed request resolves to the handler's live `Response` (no `serialize`/
-    // `transform`). Pass it straight through: no body buffering (streams and binary bodies
+    // `transform`), as does one whose body blew `maxBodySize` (`serialize` gives up and hands
+    // it back). Pass it straight through: no body buffering (streams and binary bodies
     // survive), no synthesized cache headers, no bogus 304 for a non-cacheable method.
     if (cached instanceof Response) {
+      // ...but a live body can be read exactly once, and `cache.ts` hands *every* caller
+      // coalesced onto one resolution the same value. For a stored entry that is harmless
+      // (each caller builds its own `Response` from it); for an oversized one it means the
+      // second concurrent caller gets a stream the first already consumed — `.text()` rejects
+      // with "Body is unusable" rather than returning a short body. So the first caller to be
+      // handed the object claims it and any later one resolves independently: one origin call
+      // per caller, which is exactly what an uncached route already costs (every request for
+      // it reaches the handler anyway), and no buffering, so the ceiling still holds. The
+      // claim can't be a `bodyUsed`/`locked` check — all N callers receive the object before
+      // any of them reads, so the flag is `false` for every one of them.
+      //
+      // Only the cached path can share: a bypassed call short-circuits ahead of `pending` in
+      // `cache.ts`, so each of those callers already owns its response.
+      if (!config.bypassed.get(event)) {
+        if (config.claimed.has(cached)) {
+          return resolve(event);
+        }
+        config.claimed.add(cached);
+      }
       return cached;
     }
     const response = cached;

@@ -412,6 +412,30 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   allowAuthorization?: boolean;
 
   /**
+   * Largest response body, in **bytes**, that may be cached. Defaults to `5 MB`. Pass
+   * `Infinity` (or `0`) to remove the ceiling.
+   *
+   * A body over it is **streamed through to the caller and never cached** — exactly like a
+   * bypassed response: no buffering, no synthesized `etag` / `Cache-Control` / cache-status
+   * header, and a streaming body stays a stream. The handler is re-invoked on the next
+   * request for that resource, and a previously cached entry for it is dropped.
+   *
+   * The ceiling is enforced **while the body is read**, not after: buffering a response to
+   * measure it is precisely the cost being avoided, and an unbounded (or never-ending)
+   * upstream body would be fully resident — or never finish — before any check on its size
+   * could run. Reading stops as soon as the running total passes the ceiling; only what had
+   * already been read is held, and the rest is handed on to the caller a chunk at a time.
+   *
+   * This is a per-response bound and is not the same thing as a storage backend's capacity
+   * (e.g. `createMemoryStorage`'s `maxBytes`), which bounds what is *retained*: by the time
+   * storage is offered a value, the memory to build it has already been spent.
+   *
+   * Raise it if you legitimately cache large assets — and size it against your storage
+   * budget, since one entry can now cost this much.
+   */
+  maxBodySize?: number;
+
+  /**
    * Whether to synthesize a `Cache-Control` response header. Defaults to `true`.
    *
    * Set to `false` for **server-only caching**: the response is still stored and
