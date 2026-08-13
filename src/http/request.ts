@@ -54,7 +54,7 @@ export function narrowRequest<E extends HTTPEvent>(
   const filteredHeaders = [...event.req.headers.entries()].flatMap(([key, value]) => {
     const name = key.toLowerCase();
     if (name !== "cookie") {
-      return keyHeaderNames.includes(name) || safeHeaderNames.includes(name)
+      return keyHeaderNames.includes(name) || safeHeaderNames.has(name)
         ? [[key, value] as [string, string]]
         : [];
     }

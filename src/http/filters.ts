@@ -22,7 +22,7 @@ import type { HTTPEvent } from "../types.ts";
  *   Deliberately NOT here: `user-agent` (device/bot branching is a real rendering input)
  *   and `baggage` (OTel's is app-readable tenant/flag context). Declare those in `varies`.
  */
-export const safeHeaderNames = [
+export const safeHeaderNames = new Set([
   "host",
   "if-modified-since",
   "if-none-match",
@@ -30,7 +30,7 @@ export const safeHeaderNames = [
   "tracestate",
   "x-correlation-id",
   "x-request-id",
-];
+]);
 
 // Memoized per event so the key derivation and the URL rewrite don't recompute it.
 export function filteredSearch<E extends HTTPEvent>(
