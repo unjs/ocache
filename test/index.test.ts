@@ -544,9 +544,13 @@ describe("cachedFunction", () => {
     // SWR mode: if entry.value exists, it returns early with the stale value
     // The resolve promise runs in the background
     expect(callCount).toBe(2);
-    // SWR returns the cached entry value (which was already updated synchronously
-    // since the resolver is sync)
-    expect(r2).toBe("v2");
+    // The stale value, exactly as for an async resolver (the sibling test below). It used to
+    // be `v2` here: a *sync* resolver settled its shared promise within the microtask ticks
+    // the serve path spends on `validate`, so the background refresh's write to the live
+    // entry landed before this call returned. `resolverTimeout` puts one more promise between
+    // the resolution and that write, so the accident no longer fires and both resolver shapes
+    // now agree on what SWR means.
+    expect(r2).toBe("v1");
   });
 
   it("SWR returns stale value for async resolver", async () => {
@@ -6682,5 +6686,215 @@ describe("waitUntil survives request narrowing", () => {
     event.req.waitUntil!(later);
     expect(promises.at(-1)).toBe(later);
     expect(receivers.at(-1)).toBe(req);
+  });
+});
+
+// `serialize`, `getMaxAge` and the resolver all run inside the shared in-flight promise, so a
+// resolution that never settles used to pin its `pending` slot for the lifetime of the
+// process: every later call for that key joined a resolution that would never finish, so one
+// hung upstream took the key down for every client until a restart (finding 03). The deadline
+// makes the shared promise always settle — the waiters reject, and the slot is freed by the
+// same cleanup path a resolver error already goes through.
+describe("resolverTimeout", () => {
+  /** A resolver that never settles, plus a handle on how many times it was entered. */
+  function hangingResolver() {
+    let calls = 0;
+    return {
+      get calls() {
+        return calls;
+      },
+      fn: () => {
+        calls++;
+        return new Promise<string>(() => {});
+      },
+    };
+  }
+
+  it("rejects a resolution that never settles", async () => {
+    const hang = hangingResolver();
+    const fn = defineCachedFunction(hang.fn, {
+      maxAge: 10,
+      name: "hangReject",
+      resolverTimeout: 20,
+    });
+
+    await expect(fn()).rejects.toThrow(/timed out after 20ms/);
+    expect(hang.calls).toBe(1);
+  });
+
+  it("names the failure TimeoutError", async () => {
+    const hang = hangingResolver();
+    const fn = defineCachedFunction(hang.fn, {
+      maxAge: 10,
+      name: "hangNamed",
+      resolverTimeout: 20,
+    });
+
+    await expect(fn()).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+
+  // The finding's own regression test: a second request for a wedged key must not block
+  // indefinitely. Both callers are in flight *before* the deadline, so the second one is a
+  // deduplicated follower of the resolution that never settles.
+  it("does not block a second request for a wedged key", async () => {
+    const hang = hangingResolver();
+    const fn = defineCachedFunction(hang.fn, {
+      maxAge: 10,
+      name: "hangSecond",
+      resolverTimeout: 20,
+    });
+
+    const first = fn();
+    const second = fn();
+    const settled = await Promise.allSettled([first, second]);
+
+    expect(settled.map((r) => r.status)).toEqual(["rejected", "rejected"]);
+    // One resolution, shared: the follower joined it rather than starting its own.
+    expect(hang.calls).toBe(1);
+  });
+
+  // ...and the key is usable again afterwards: the freed slot means the next call elects a
+  // fresh leader instead of joining the abandoned resolution.
+  it("recovers: a later call with a healthy resolver caches normally", async () => {
+    let hang = true;
+    let calls = 0;
+    const fn = defineCachedFunction(
+      () => {
+        calls++;
+        return hang ? new Promise<string>(() => {}) : Promise.resolve("healthy");
+      },
+      { maxAge: 10, name: "hangRecover", resolverTimeout: 20 },
+    );
+
+    await expect(fn()).rejects.toThrow(/timed out/);
+
+    hang = false;
+    expect(await fn()).toBe("healthy");
+    expect(calls).toBe(2);
+    // Cached, not just resolved.
+    expect(await fn()).toBe("healthy");
+    expect(calls).toBe(2);
+  });
+
+  it("does not fire for a resolver that settles in time", async () => {
+    let calls = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 10));
+        return "value";
+      },
+      { maxAge: 10, name: "inTime", resolverTimeout: 500 },
+    );
+
+    expect(await fn()).toBe("value");
+    expect(await fn()).toBe("value");
+    expect(calls).toBe(1);
+  });
+
+  // The hooks run inside the same shared promise, so the deadline has to cover them too —
+  // `serialize` is where a never-ending body would be drained.
+  it("covers a serialize hook that never settles", async () => {
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 10,
+      name: "hangSerialize",
+      resolverTimeout: 20,
+      serialize: () => new Promise(() => {}),
+    });
+
+    await expect(fn()).rejects.toThrow(/timed out/);
+  });
+
+  it.each([0, Number.POSITIVE_INFINITY, -1])("%s disables the deadline", async (timeout) => {
+    let settle: ((value: string) => void) | undefined;
+    const fn = defineCachedFunction(() => new Promise<string>((r) => (settle = r)), {
+      maxAge: 10,
+      name: `noDeadline${timeout}`,
+      resolverTimeout: timeout,
+    });
+
+    const call = fn();
+    let done = false;
+    void call.then(() => (done = true));
+
+    // Well past a deadline that would have fired had one been armed.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(done).toBe(false);
+
+    settle!("late");
+    expect(await call).toBe("late");
+  });
+
+  // A timed-out resolution is a failed one in every respect, the eviction included: a hung
+  // background refresh must not leave a dead entry behind for SWR to keep serving.
+  it("evicts the entry a timed-out background refresh was refreshing", async () => {
+    let hang = false;
+    const fn = defineCachedFunction(
+      () => (hang ? new Promise<string>(() => {}) : Promise.resolve("v1")),
+      {
+        maxAge: 0.01,
+        swr: true,
+        staleMaxAge: 60,
+        name: "hangSwr",
+        resolverTimeout: 20,
+        onError: () => {},
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Expired: served stale while the background refresh runs — and hangs.
+    hang = true;
+    expect(await fn()).toBe("v1");
+    await vi.waitFor(async () => {
+      const keys = await fn.resolveKeys();
+      expect(await testStorage.get(keys[0]!)).toBeNull();
+    });
+  });
+
+  // Every armed deadline must be cleared when the resolution settles, or a long-lived process
+  // accumulates one live timer per resolution.
+  it("leaves no timer behind across many resolutions", async () => {
+    // A delay no other timer in the process would pick, so the armed set is exactly ours.
+    const timeout = 987_654;
+    const realSetTimeout = globalThis.setTimeout;
+    const realClearTimeout = globalThis.clearTimeout;
+    const armed: unknown[] = [];
+    const cleared = new Set<unknown>();
+    const setSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      cb: any,
+      ms?: any,
+      ...rest: any[]
+    ) => {
+      const handle = realSetTimeout(cb, ms, ...rest);
+      if (ms === timeout) {
+        armed.push(handle);
+      }
+      return handle;
+    }) as any);
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(((handle: any) => {
+      cleared.add(handle);
+      realClearTimeout(handle);
+    }) as any);
+
+    try {
+      const fn = defineCachedFunction((i: number) => `v${i}`, {
+        maxAge: 10,
+        name: "noTimerLeak",
+        getKey: (i: number) => String(i),
+        resolverTimeout: timeout,
+      });
+
+      for (let i = 0; i < 25; i++) {
+        expect(await fn(i)).toBe(`v${i}`);
+      }
+    } finally {
+      setSpy.mockRestore();
+      clearSpy.mockRestore();
+    }
+
+    expect(armed.length).toBe(25);
+    expect(armed.every((handle) => cleared.has(handle))).toBe(true);
   });
 });

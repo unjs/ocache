@@ -13,6 +13,9 @@ function defaultCacheOptions() {
   } as const;
 }
 
+/** Default deadline (ms) on one shared resolution — the resolver plus `getMaxAge` and `serialize`. */
+const DEFAULT_RESOLVER_TIMEOUT = 30_000;
+
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
 export type CachedFunction<T, ArgsT extends unknown[]> = {
@@ -72,6 +75,16 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const group = opts.group || "functions";
   const integrity = opts.integrity || hash([fn, integrityOpts(opts)]);
   const validate = opts.validate || ((entry) => entry.value !== undefined);
+  // A finite positive deadline arms the timeout; `Infinity` / `0` / negative disable it —
+  // the normalization shape `createMemoryStorage` uses for its own ceilings. Deliberately
+  // NOT in `defaultCacheOptions()`: the default must not materialize as a key on `opts`, or
+  // every entry written by an earlier ocache would go cold over a knob that says nothing
+  // about the cached computation. Setting it explicitly does cost that one integrity change
+  // (it stays in `integrityOpts` — it is not a storage-*location* field, and carving out an
+  // exception for it would be the first).
+  const rawResolverTimeout = opts.resolverTimeout ?? DEFAULT_RESOLVER_TIMEOUT;
+  const resolverTimeout =
+    Number.isFinite(rawResolverTimeout) && rawResolverTimeout > 0 ? rawResolverTimeout : undefined;
   const onError = (context: string, error: unknown) => {
     if (opts.onError) {
       opts.onError(error);
@@ -199,7 +212,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         // storable form) with all concurrent callers. `getMaxAge` and `serialize`
         // run exactly once here — critical for `serialize`, which may consume a
         // one-shot source (e.g. a `ReadableStream`).
-        const pendingPromise = (async () => {
+        const resolution = (async () => {
           const value = await resolver();
           // Throwaway entry so the hooks can inspect resolution metadata.
           const resolvedEntry: CacheEntry<T> = { value, mtime: Date.now(), integrity };
@@ -226,14 +239,44 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
           return { value: stored, maxAge, staleMaxAge };
         })();
-        pending.set(key, pendingPromise);
+        // Bound the shared resolution (finding 03). Every other way this promise can end
+        // already cleans the slot up — the auditor verified the resolve path, the reject path,
+        // a throwing `getMaxAge`, a throwing `serialize` and a throwing `validate` — so a
+        // promise that *never settles* was the one leak: the slot stayed occupied forever and
+        // every later request for that key became a follower of a resolution that would never
+        // finish. One hung upstream took the key down for the whole process.
+        //
+        // The deadline **rejects the waiters** rather than merely dropping the slot (the
+        // finding's weaker "at minimum" option), for three reasons. A caller left awaiting a
+        // resolution nobody will ever complete is not "served" — it holds its request open
+        // until something outside kills it, which on a serverless runtime is nothing; the
+        // whole write block below sits *after* this `await`, so a rejection also guarantees an
+        // abandoned resolver that settles late can never write its long-dead value over an
+        // entry a fresh leader has since resolved; and the fault becomes visible (thrown to
+        // the caller, or reported through `onError` by the SWR handler) instead of presenting
+        // as a hang. The cost is real and deliberate: an upstream that would have answered at
+        // 31s now fails at 30s, which is why the default is generous and `0`/`Infinity` opts
+        // out entirely.
+        //
+        // The slot is *not* additionally dropped from the timer callback: with the promise
+        // guaranteed to settle, the existing lifecycle already frees it, and an independent
+        // deletion would open a window in which a successor installs its own promise that
+        // this leader's `catch` then deletes — splitting the dedup group it just left.
+        //
+        // Covers the hooks too, not just `resolver()`: `serialize` is where a never-ending
+        // body is drained, so a deadline around the resolver alone would miss the measured case.
+        pending.set(key, resolverTimeout ? withDeadline(resolution, resolverTimeout) : resolution);
       }
 
       let resolved: { value: T; maxAge?: number; staleMaxAge?: number };
       try {
         resolved = await pending.get(key)!;
       } catch (error) {
-        // Make sure entries that reject get removed.
+        // Make sure entries that reject get removed. A timed-out resolution (see the deadline
+        // above) is a rejection in every respect, this eviction included: "the resolution
+        // failed" already has exactly one meaning here, and giving the timeout its own
+        // softer one would pre-empt the open question of whether evicting on failure is right
+        // at all — a question that belongs to every arm of it at once, not to this one.
         if (!isPending) {
           pending.delete(key);
           // Evict stale entry from storage so SWR doesn't keep serving it
@@ -319,10 +362,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     // read path above), never the object a ref-sharing storage backend still holds,
     // so this can't corrupt shared state or race with concurrent same-key calls. It's
     // still marked NON-ENUMERABLE as defence-in-depth so it stays out of every
-    // persistence path (object spreads, JSON/structuredClone). Attaching to the live
-    // clone (rather than a fresh return-time copy) means a synchronous SWR
-    // revalidation that updates `entry.value` in a microtask is reflected in the
-    // returned value.
+    // persistence path (object spreads, JSON/structuredClone). It is attached to the live
+    // clone rather than to a fresh return-time copy, so an SWR revalidation that completes
+    // while this call is still in the serve path is reflected in the returned value — which
+    // no longer happens for a *sync* resolver, whose shared promise now carries the
+    // `resolverTimeout` deadline and settles a microtask later than the serve path reads it.
+    // That was always a tick-count accident: an async resolver never made it in time, so SWR
+    // now serves the stale value for both, which is what SWR means.
     Object.defineProperty(entry, "status", {
       value: status,
       enumerable: false,
@@ -589,6 +635,53 @@ function requireStorage(
     throw new Error(`[ocache] ${caller}() requires \`options.storage\``);
   }
   return resolveStorage(options);
+}
+
+// Rejects with a `TimeoutError` if `work` hasn't settled within `ms`, so a resolution that
+// never settles cannot pin its `pending` slot forever (finding 03 — see the call site for why
+// the waiters are rejected rather than merely released).
+//
+// `work` is *not* cancelled: there is no cancellation to reach for (the resolver is the
+// caller's `fn`, invoked with the caller's arguments, and nothing here has an `AbortSignal`
+// to hand it). It keeps running, its hooks may still run, and it may still settle late — but
+// only into a promise nobody awaits any more, so a late settle can neither be served nor
+// written to storage.
+//
+// The timer is cleared on *every* settle path, or a long-lived process accumulates one live
+// timer per resolution — a rejecting `work` included, which is why the handler is attached as
+// `.then(f, f)` and not as a `.finally` (whose returned promise would reject with nothing
+// listening) or a lone `.then`. A late settle lands on those same handlers, so it is absorbed
+// here rather than surfacing as an unhandled rejection.
+//
+// Hand-built rather than `Promise.race([...])`, which adopts a promise arm at a cost of two
+// further microtask ticks. Ticks are not free here: how quickly a resolution lands on
+// `entry.value` decides whether a background refresh is visible to the call it was triggered
+// by. One tick is unavoidable and does change that for a *sync* resolver under SWR (see the
+// `status` attach below); three would be gratuitous.
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error(`[cache] Resolver timed out after ${ms}ms.`);
+      // The name the platform gives this failure (`AbortSignal.timeout()`), so a caller can
+      // tell a deadline apart from a resolver's own error without a class to import.
+      error.name = "TimeoutError";
+      reject(error);
+    }, ms);
+    // Allow the process to exit even if a deadline is pending (as the memory storage does).
+    if (timer && typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function isHTTPEvent(input: unknown): input is HTTPEvent {
