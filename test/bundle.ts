@@ -35,11 +35,17 @@ import { rolldown } from "rolldown";
 // `Cache-Control` opt-out fix: ~7 kB raw for ~1.1 kB min / ~0.4 kB gzip, most of it the RFC
 // rationale on the new `Cache-Control`/`Vary` predicates). The numbers that describe what is
 // actually downloaded are `min`/`minGzip`; keep those tight and let `raw` follow — 48_000
-// left it at 99% used, which is a tripwire on the next JSDoc paragraph, not a ceiling, and
-// 50_000 was back at 99% by the time `resolverTimeout` (finding 03) added ~670 bytes of raw
-// code for ~330 min / ~140 gzip. Raised rather than trimmed: `min`/`minGzip` both still have
-// room, and the alternative was to buy `raw` back out of the prose that documents the
-// decisions — which is the wrong thing to spend first.
+// left it at 99% used, which is a tripwire on the next JSDoc paragraph, not a ceiling.
+//
+// 50_000 was back over on the tree that added `resolverTimeout` (finding 03): 50_321 raw /
+// 20_463 min / 8_211 gzip, against a 47_716 / 19_346 / 7_791 baseline. `resolverTimeout` is
+// ~870 of those raw bytes (~330 min, ~130 gzip) and all of it is *code* — rolldown strips
+// `//` comments and erases type-only JSDoc, so there is no prose to trim it out of, and
+// buying `raw` back out of the comments that document the decisions is the wrong thing to
+// spend first. The rest is `createMemoryStorage`'s byte budget (finding 14.1), which sits
+// below this change in the same branch and will move out from under this number when the
+// histories reconcile — so 52_000 is measured against a tree that carries both, and is worth
+// re-measuring (downwards) once they have.
 const BUDGETS = {
   raw: 52_000,
   min: 21_000,

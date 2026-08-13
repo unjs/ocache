@@ -196,8 +196,10 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * Derive the per-entry cache lifetime from the resolved value. Runs after the resolver and before
    * the entry is persisted. Return a number (seconds) as shorthand for `maxAge`, or an object to also
    * override `staleMaxAge`. The resolved values override the static options for that entry and drive
-   * both the read freshness check and the storage TTL. Return `undefined` (or omit a field) to fall
-   * back to the static option. A resolved value `<= 0` disables caching for that entry — it is
+   * the read freshness check, the storage TTL and — in `defineCachedHandler` — the synthesized
+   * `Cache-Control`, so the lifetime advertised downstream is the one actually enforced here.
+   * Return `undefined` (or omit a field) to fall back to the static option. A resolved value
+   * `<= 0` disables caching for that entry — it is
    * re-resolved on every access and never written to storage; negatives are clamped to `0`
    * rather than treated as "cache forever".
    *

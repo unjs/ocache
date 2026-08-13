@@ -112,8 +112,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     },
     // Write-side seam (see `entry.ts`): consume the body, synthesize the cache headers, build
     // the entry. Runs once per resolution, and outside the resolver so bypassed requests —
-    // which never reach it — get their live `Response` back untouched.
-    serialize: (entry) => serializeResponse(config, entry.value as unknown as Response),
+    // which never reach it — get their live `Response` back untouched. Handed the whole entry,
+    // not just its `Response`: the lifetimes it advertises are the ones the hook above just
+    // resolved onto it.
+    serialize: (entry) => serializeResponse(config, entry),
     // The built-in bypass composed with the caller's check (see `request.ts`). The single
     // evaluation of that composition per call: `cache.ts` short-circuits to the raw resolver
     // on `true`, and the resolver's narrowing reads the same memoized verdict.

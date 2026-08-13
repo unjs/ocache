@@ -1330,7 +1330,9 @@ describe("storage TTL and the no-lifetime invariant", () => {
 
     // The zero lifetime is advertised (`s-maxage=0`), and `validate` reads it back as the
     // storage opt-out it is — so the handler runs every time and nothing is stored.
-    expect(r1.headers.get("cache-control")).toBe("s-maxage=0, stale-while-revalidate=600");
+    expect(r1.headers.get("cache-control")).toBe(
+      "max-age=0, s-maxage=0, stale-while-revalidate=600",
+    );
     expect(await r2.text()).toBe("v2");
     expect(r2.headers.get("x-cache")).toBe("MISS");
     expect(callCount).toBe(2);
@@ -1464,6 +1466,156 @@ describe("storage TTL and the no-lifetime invariant", () => {
     expect(r1.headers.get("x-cache")).toBe("MISS");
     expect(r2.headers.get("x-cache")).toBe("HIT");
     expect(callCount).toBe(1);
+  });
+});
+
+// The synthesized `Cache-Control` states the lifetime ocache actually enforces for *this*
+// entry: the one `getMaxAge` resolved onto it, else the static option (finding 10.2); with a
+// `max-age` beside the shared-cache-only `s-maxage` (10.3); and never a bare, unparseable
+// `stale-while-revalidate` (10.4).
+describe("synthesized Cache-Control lifetimes", () => {
+  let testId = 0;
+  const makeEvent = (path: string) => ({ req: new Request(`http://localhost${path}`) });
+  const uniquePath = () => `/cc-${++testId}-${Date.now()}`;
+
+  /** Runs a handler once and reports the header it advertised. */
+  async function advertised(opts: Record<string, unknown>, res?: () => Response) {
+    const path = uniquePath();
+    const handler = defineCachedHandler(res ?? (() => new Response("ok")), opts as any);
+    const first = (await handler(makeEvent(path))) as Response;
+    return first.headers.get("cache-control");
+  }
+
+  it("advertises the maxAge a getMaxAge hook returned as a number", async () => {
+    // The static option said an hour; the hook says two seconds and ocache expires its own
+    // entry on the two. Downstream used to be told the hour regardless.
+    expect(await advertised({ maxAge: 3600, getMaxAge: () => 2 })).toBe("max-age=2");
+  });
+
+  it("advertises both lifetimes a getMaxAge hook returned as an object", async () => {
+    expect(
+      await advertised({
+        maxAge: 3600,
+        staleMaxAge: 7200,
+        swr: true,
+        getMaxAge: () => ({ maxAge: 2, staleMaxAge: 30 }),
+      }),
+    ).toBe("max-age=2, s-maxage=2, stale-while-revalidate=30");
+  });
+
+  it("falls back to the static options when the hook returns nothing", async () => {
+    expect(
+      await advertised({ maxAge: 60, staleMaxAge: 120, swr: true, getMaxAge: () => undefined }),
+    ).toBe("max-age=60, s-maxage=60, stale-while-revalidate=120");
+  });
+
+  it("falls back per field: a hook giving only maxAge keeps the static staleMaxAge", async () => {
+    // Exactly the precedence `cache.ts` applies to the freshness check and the storage TTL
+    // (`entry.x ?? opts.x`), field by field — not all-or-nothing.
+    expect(
+      await advertised({
+        maxAge: 60,
+        staleMaxAge: 120,
+        swr: true,
+        getMaxAge: () => ({ maxAge: 5 }),
+      }),
+    ).toBe("max-age=5, s-maxage=5, stale-while-revalidate=120");
+  });
+
+  it("advertises a per-entry staleMaxAge of 0 as stale-while-revalidate=0", async () => {
+    // A zero window is a real window ("never serve this stale"), and `cache.ts` honors it as
+    // one — so it is advertised, exactly as a zero `maxAge` is.
+    expect(await advertised({ maxAge: 60, swr: true, getMaxAge: () => ({ staleMaxAge: 0 }) })).toBe(
+      "max-age=60, s-maxage=60, stale-while-revalidate=0",
+    );
+  });
+
+  it("advertises a dynamic zero lifetime, and then stores nothing (no gap)", async () => {
+    const setSpy = vi.spyOn(testStorage, "set");
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`);
+      },
+      { maxAge: 600, swr: true, getMaxAge: () => 0 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // The advertisement now moves with the storage decision: a hook clamping to 0 refuses the
+    // write (`storageTtl`), and `validate` reads the same zero lifetime back out of our own
+    // header. Before, the entry was refused while `s-maxage=600` shipped anyway.
+    expect(r1.headers.get("cache-control")).toBe("max-age=0, s-maxage=0");
+    expect(await r2.text()).toBe("v2");
+    expect(callCount).toBe(2);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("never emits a bare stale-while-revalidate, whatever the shape", async () => {
+    const shapes = [
+      { maxAge: 60, swr: true },
+      { swr: true, getMaxAge: () => 60 },
+      { maxAge: 60, swr: true, staleMaxAge: undefined },
+      { maxAge: 60, swr: true, getMaxAge: () => ({ maxAge: 30 }) },
+    ];
+    for (const shape of shapes) {
+      const cc = await advertised(shape);
+      // A delta-seconds or nothing — the bare token is unparseable (RFC 5861 §3), so a
+      // conforming cache drops the whole directive and the window evaporates unannounced.
+      expect(cc).not.toMatch(/stale-while-revalidate(?!=)/);
+    }
+  });
+
+  it("keeps max-age alone when swr is off, whatever the hook says", async () => {
+    // `s-maxage` is only synthesized under `swr`; without it `max-age` already governs both
+    // cache kinds, so nothing is added.
+    expect(await advertised({ maxAge: 60, staleMaxAge: 600, getMaxAge: () => 30 })).toBe(
+      "max-age=30",
+    );
+    expect(await advertised({ maxAge: 0 })).toBe("max-age=0");
+  });
+
+  it("does not clobber a handler cache-control, whatever the hook resolved", async () => {
+    expect(
+      await advertised(
+        { maxAge: 60, swr: true, staleMaxAge: 600, getMaxAge: () => 5 },
+        () => new Response("ok", { headers: { "cache-control": "public, max-age=600" } }),
+      ),
+    ).toBe("public, max-age=600");
+  });
+
+  it("a must-revalidate response is stored on its own staleMaxAge: 0 and advertises nothing of ours", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`, {
+          headers: { "cache-control": "public, max-age=60, must-revalidate" },
+        });
+      },
+      { maxAge: 60, swr: true, staleMaxAge: 600 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // The internal wrapper's per-entry `staleMaxAge: 0` reaches the synthesis path like any
+    // other resolved lifetime — but there is nothing to synthesize: the response carries the
+    // handler's own header, which is where the `must-revalidate` came from in the first place.
+    expect(r1.headers.get("cache-control")).toBe("public, max-age=60, must-revalidate");
+    expect(r2.headers.get("cache-control")).toBe("public, max-age=60, must-revalidate");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(1);
+  });
+
+  it("sendCacheControl: false still suppresses everything, hook or no hook", async () => {
+    expect(
+      await advertised({ maxAge: 60, swr: true, getMaxAge: () => 5, sendCacheControl: false }),
+    ).toBeNull();
   });
 });
 
@@ -2673,18 +2825,22 @@ describe("defineCachedHandler", () => {
     });
 
     const res = (await handler(makeEvent(path))) as Response;
-    expect(res.headers.get("cache-control")).toContain("s-maxage=60");
-    expect(res.headers.get("cache-control")).toContain("stale-while-revalidate=120");
+    // `max-age` accompanies `s-maxage`: the latter is shared-cache-only, and a private cache
+    // fell back to a heuristic freshness of ≈ 0 (`last-modified` is stamped at fill time).
+    expect(res.headers.get("cache-control")).toBe(
+      "max-age=60, s-maxage=60, stale-while-revalidate=120",
+    );
   });
 
-  it("sets cache-control with SWR without staleMaxAge", async () => {
+  it("sets cache-control with SWR without staleMaxAge, and never a bare stale-while-revalidate", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 60, swr: true });
 
     const res = (await handler(makeEvent(path))) as Response;
-    const cc = res.headers.get("cache-control")!;
-    expect(cc).toContain("s-maxage=60");
-    expect(cc).toContain("stale-while-revalidate");
+    // The ISR shape. `stale-while-revalidate` needs a delta-seconds (RFC 5861 §3) and this
+    // shape's stale window is unbounded, so nothing is advertised rather than a bare token a
+    // conforming cache must ignore anyway (or an invented number ocache couldn't promise).
+    expect(res.headers.get("cache-control")).toBe("max-age=60, s-maxage=60");
   });
 
   it("sets max-age when swr is false", async () => {
@@ -4329,7 +4485,7 @@ describe("defineCachedHandler", () => {
     expect(dark.headers.get("vary")).toBe("cookie");
     expect(light.headers.get("vary")).toBe("cookie");
     // ... accompanies a shared-cacheability claim, which is exactly why it must be there.
-    expect(dark.headers.get("cache-control")).toBe("s-maxage=60, stale-while-revalidate");
+    expect(dark.headers.get("cache-control")).toBe("max-age=60, s-maxage=60");
     // ... and it is true: two `theme` values are two entries, while the unlisted `sid`
     // still doesn't split them (key composition unchanged).
     expect(callCount).toBe(2);
@@ -5096,7 +5252,7 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
   });
 
-  it("sets s-maxage=0 when swr with maxAge: 0", async () => {
+  it("sets max-age=0, s-maxage=0 when swr with maxAge: 0", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
       maxAge: 0,
@@ -5104,9 +5260,9 @@ describe("defineCachedHandler", () => {
     });
 
     const res = (await handler(makeEvent(path))) as Response;
-    const cc = res.headers.get("cache-control")!;
-    expect(cc).toContain("s-maxage=0");
-    expect(cc).toContain("stale-while-revalidate");
+    // A zero lifetime is advertised on both axes (and read back by `validate` as the storage
+    // opt-out it is). No stale window is named, so none is advertised.
+    expect(res.headers.get("cache-control")).toBe("max-age=0, s-maxage=0");
   });
 
   it("sets stale-while-revalidate=0 when swr with staleMaxAge: 0", async () => {
