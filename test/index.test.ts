@@ -4852,6 +4852,49 @@ describe("defineCachedHandler", () => {
     expect(vary.split(",").map((v) => v.trim())).toEqual(["authorization", "proxy-authorization"]);
   });
 
+  // The documented "private response" recipe (docs/1.guide/8.cache-control.md): the
+  // `Cache-Control: private` opt-out is only meaningful if the handler could identify the user
+  // in the first place, which under the credential defaults takes `allowAuthorization`. Pins
+  // the two halves working *together* — credential visible, personalized response never stored,
+  // anonymous rendering still cached under its own key.
+  it("allowAuthorization + Cache-Control: private serves per-user without storing it", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        const user = event.req.headers.get("authorization");
+        return user
+          ? new Response(`dashboard for ${user} (call ${callCount})`, {
+              headers: { "cache-control": "private" },
+            })
+          : new Response(`public (call ${callCount})`);
+      },
+      { maxAge: 10, allowAuthorization: true },
+    );
+
+    const auth = (user: string) => makeEvent(path, { headers: { authorization: user } });
+    const alice1 = (await handler(auth("alice"))) as Response;
+    const alice2 = (await handler(auth("alice"))) as Response;
+    const bob = (await handler(auth("bob"))) as Response;
+
+    // The credential reaches the handler, and the opt-out keeps every rendering out of
+    // storage — so even the same user re-runs it rather than replaying a stored body.
+    expect(await alice1.text()).toBe("dashboard for alice (call 1)");
+    expect(await alice2.text()).toBe("dashboard for alice (call 2)");
+    expect(await bob.text()).toBe("dashboard for bob (call 3)");
+    // The directive is returned to the caller untouched.
+    expect(alice1.headers.get("cache-control")).toBe("private");
+
+    // The anonymous branch sets no opt-out, so it caches under its own (credential-free) key.
+    const anon1 = (await handler(makeEvent(path))) as Response;
+    const anon2 = (await handler(makeEvent(path))) as Response;
+    expect(await anon1.text()).toBe("public (call 4)");
+    expect(await anon2.text()).toBe("public (call 4)");
+    expect(anon2.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(4);
+  });
+
   it("treats varies: ['authorization'] as an opt-in (no double vary entry)", async () => {
     const seen: (string | null)[] = [];
     const path = uniquePath();
