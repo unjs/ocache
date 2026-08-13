@@ -5,6 +5,8 @@
 
 import { hash } from "ohash";
 
+import { escapeKey, escapeKeySegment } from "../cache.ts";
+
 import type { HandlerConfig } from "./config.ts";
 import { filterCookie, filteredSearch } from "./filters.ts";
 
@@ -27,11 +29,10 @@ export async function resolveKey<E extends HTTPEvent>(
   // Custom user-defined key
   const customKey = await opts.getKey?.(event as E);
   if (customKey) {
-    const _key = escapeKey(customKey);
-    // A no-op escape is already storage-safe; otherwise escaping is lossy, so append a hash
-    // of the raw key. The `.` separator only appears in the hashed form, so the two forms
-    // can never overlap.
-    return _key === customKey ? _key : `${_key.slice(0, 64)}.${hash(customKey)}`;
+    // A no-op escape is already storage-safe; otherwise escaping is lossy, so the segment
+    // carries a hash of the raw key. Same helper the `name` segment uses (`cache.ts`), so the
+    // two treatments cannot drift.
+    return escapeKeySegment(customKey);
   }
   // Auto-generated key
   const _url = event.url ?? new URL(event.req.url);
@@ -66,14 +67,12 @@ export async function resolveKey<E extends HTTPEvent>(
  * none, so its keys stay warm. Without this, a HEAD — whose body a spec-compliant host nulls —
  * seeds the shared entry with a zero-byte body that every GET is then served (h3#1524 finding
  * #3). Methods are verbatim (case-sensitive, already normalized by `Request`) and alphabetic,
- * which a resource key's first `:`-segment never is, so the key spaces cannot overlap.
+ * which a resource key's first `:`-segment never is, so the key spaces cannot overlap. That
+ * argument covers the *key* segment only; the `name` before it is escaped in `buildCacheKey`,
+ * so it cannot spell a `HEAD:` of its own.
  */
 export function methodKey(key: string, method: string): string {
   return method === "GET" ? key : `${method}:${key}`;
-}
-
-function escapeKey(key: string | string[]) {
-  return String(key).replace(/\W/g, "");
 }
 
 /**

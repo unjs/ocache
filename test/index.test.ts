@@ -929,7 +929,9 @@ describe("cache key name resolution (#53)", () => {
   it("anonymous function falls back to a stable hash of its source", async () => {
     const fn = defineCachedFunction(async () => 1);
     const key = (await fn.resolveKeys())[0]!;
-    expect(key).toMatch(/^\/cache:functions:anon_[\w-]{16}:\.json$/);
+    // ohash's alphabet includes `-`, which the key escape drops — so a slice carrying one
+    // takes the escaped-plus-hash form (see "cache key name escaping"). Both are accepted.
+    expect(key).toMatch(/^\/cache:functions:anon_\w{1,16}(\.[\w-]+)?:\.json$/);
     // Stable across separate definitions of the identical function source.
     const same = defineCachedFunction(async () => 1);
     expect((await same.resolveKeys())[0]).toBe(key);
@@ -987,7 +989,7 @@ describe("handler cache key name resolution", () => {
     const acmeKey = (await acme.resolveKeys(handlerEvent("/dashboard")))[0]!;
     const globexKey = (await globex.resolveKeys(handlerEvent("/dashboard")))[0]!;
     expect(acmeKey).not.toBe(globexKey);
-    expect(acmeKey).toMatch(/^\/cache:handlers:anon_[\w-]{16}:dashboard\./);
+    expect(acmeKey).toMatch(/^\/cache:handlers:anon_\w{1,16}(\.[\w-]+)?:dashboard\./);
 
     // …and they never serve each other's responses, in either order.
     expect(await ((await acme(handlerEvent("/dashboard"))) as Response).text()).toBe("tenant=ACME");
@@ -1068,6 +1070,136 @@ describe("handler cache key name resolution", () => {
     expect(await ((await globex2(handlerEvent("/dash2"))) as Response).text()).toBe(
       "tenant=GLOBEX",
     );
+  });
+});
+
+// `buildCacheKey` joins `[base, group, name, key]` with `:` and used to escape everything but
+// `name` — harmless while every handler keyed as the literal `_`, but `name` now comes from
+// `fn.name`, which is not a controlled alphabet (`named.bind(null)` alone yields `bound named`).
+// An unescaped `:` in it could rebuild another handler's `HEAD:` variant key verbatim.
+describe("cache key name escaping", () => {
+  const handlerEvent = (path: string, method = "GET") => ({
+    req: new Request(`http://localhost${path}`, { method }),
+  });
+
+  it("leaves an ordinary identifier name byte-identical", async () => {
+    // The whole point of escaping this late: no existing entry moves unless its name actually
+    // carries an escapable character.
+    const fn = defineCachedFunction(async function getUser() {
+      return "u";
+    });
+    expect((await fn.resolveKeys())[0]).toBe("/cache:functions:getUser:.json");
+
+    const named = defineCachedFunction(() => "v", { name: "my_fn_2", getKey: () => "k" });
+    expect((await named.resolveKeys())[0]).toBe("/cache:functions:my_fn_2:k.json");
+  });
+
+  it("keeps a `:` in the name out of the key's segment structure", async () => {
+    const fn = defineCachedFunction(() => "v", { name: "a:b", getKey: () => "k", maxAge: 60 });
+    const key = (await fn.resolveKeys())[0]!;
+    // base : group : name : key — exactly four segments, whatever the name contained.
+    expect(key.split(":")).toHaveLength(4);
+    expect(key).toMatch(/^\/cache:functions:ab\.[\w-]+:k\.json$/);
+  });
+
+  it("keeps a space in the name (a bound function) out of the key", async () => {
+    function render() {
+      return "v";
+    }
+    const fn = defineCachedFunction(render.bind(null), { getKey: () => "k" });
+    const key = (await fn.resolveKeys())[0]!;
+    expect(key.split(":")).toHaveLength(4);
+    expect(key).not.toContain(" ");
+    expect(key).toMatch(/^\/cache:functions:boundrender\.[\w-]+:k\.json$/);
+  });
+
+  it("round-trips an escaped name through resolveKeys/invalidate/expire", async () => {
+    const storage = createMemoryStorage();
+    let calls = 0;
+    const opts = { name: "a:b c", getKey: () => "k", maxAge: 60, storage };
+    const fn = _defineCachedFunction(() => `v${++calls}`, opts);
+
+    expect(await fn()).toBe("v1");
+    expect(await fn()).toBe("v1");
+
+    // The key the write path used is the key the helpers reconstruct.
+    const key = (await fn.resolveKeys())[0]!;
+    expect(await storage.get(key)).toMatchObject({ value: "v1" });
+    expect((await resolveCacheKeys({ options: opts }))[0]).toBe(key);
+
+    await fn.expire();
+    expect(await storage.get(key)).toMatchObject({ value: "v1", stale: true });
+    expect(await fn()).toBe("v2");
+
+    await fn.invalidate();
+    expect(await storage.get(key)).toBeNull();
+    expect(await fn()).toBe("v3");
+
+    // …and so does the standalone helper, handed the same name.
+    await invalidateCache({ options: opts });
+    expect(await storage.get(key)).toBeNull();
+    expect(await fn()).toBe("v4");
+  });
+
+  it("does not collide two names differing only in where the escapable character sits", async () => {
+    const storage = createMemoryStorage();
+    const ab = _defineCachedFunction(() => "A", { name: "a:bc", getKey: () => "k", storage });
+    const bc = _defineCachedFunction(() => "B", { name: "ab:c", getKey: () => "k", storage });
+
+    expect((await ab.resolveKeys())[0]).not.toBe((await bc.resolveKeys())[0]);
+    expect(await ab()).toBe("A");
+    expect(await bc()).toBe("B");
+    expect(await ab()).toBe("A");
+  });
+
+  // The sharp case: pre-fix, a handler named `page:HEAD` built exactly the key a `page`
+  // handler's HEAD variant writes — `/cache:handlers:page:HEAD:<resource>.json` — so one
+  // anonymous HEAD seeded the other handler's GET entry (h3#1524 finding #3, one segment over).
+  it("cannot forge another handler's HEAD variant key from the name", async () => {
+    const storage = createMemoryStorage();
+    const trap = _defineCachedHandler(() => new Response("trap"), {
+      maxAge: 60,
+      name: "page:HEAD",
+      storage,
+    });
+    const page = _defineCachedHandler(() => new Response("page"), {
+      maxAge: 60,
+      name: "page",
+      storage,
+    });
+
+    const [pageGet, pageHead] = await page.resolveKeys(handlerEvent("/x"));
+    const trapGet = (await trap.resolveKeys(handlerEvent("/x")))[0]!;
+    // The key the trap's name spelled out verbatim before it was escaped.
+    expect(pageHead).toBe(pageGet!.replace("/cache:handlers:page:", "/cache:handlers:page:HEAD:"));
+    expect(trapGet).not.toBe(pageHead);
+    expect(trapGet).not.toBe(pageGet);
+
+    // Neither serves the other, in either order.
+    await page(handlerEvent("/x", "HEAD"));
+    expect(await ((await trap(handlerEvent("/x"))) as Response).text()).toBe("trap");
+    expect(await ((await page(handlerEvent("/x"))) as Response).text()).toBe("page");
+  });
+
+  it("round-trips an escaped handler name through the revalidation helpers", async () => {
+    const storage = createMemoryStorage();
+    let calls = 0;
+    const handler = _defineCachedHandler(() => new Response(`call-${++calls}`), {
+      maxAge: 60,
+      name: "tenant a:b",
+      storage,
+    });
+
+    expect(await ((await handler(handlerEvent("/r"))) as Response).text()).toBe("call-1");
+    expect(await ((await handler(handlerEvent("/r"))) as Response).text()).toBe("call-1");
+
+    const keys = await handler.resolveKeys(handlerEvent("/r"));
+    expect(keys[0]).toMatch(/^\/cache:handlers:tenantab\.[\w-]+:r\./);
+    expect(await storage.get(keys[0]!)).toBeTruthy();
+
+    await handler.invalidate(handlerEvent("/r"));
+    expect(await storage.get(keys[0]!)).toBeNull();
+    expect(await ((await handler(handlerEvent("/r"))) as Response).text()).toBe("call-2");
   });
 });
 
@@ -1326,7 +1458,9 @@ describe("storage TTL and the no-lifetime invariant", () => {
 
     // The zero lifetime is advertised (`s-maxage=0`), and `validate` reads it back as the
     // storage opt-out it is — so the handler runs every time and nothing is stored.
-    expect(r1.headers.get("cache-control")).toBe("s-maxage=0, stale-while-revalidate=600");
+    expect(r1.headers.get("cache-control")).toBe(
+      "max-age=0, s-maxage=0, stale-while-revalidate=600",
+    );
     expect(await r2.text()).toBe("v2");
     expect(r2.headers.get("x-cache")).toBe("MISS");
     expect(callCount).toBe(2);
@@ -1460,6 +1594,156 @@ describe("storage TTL and the no-lifetime invariant", () => {
     expect(r1.headers.get("x-cache")).toBe("MISS");
     expect(r2.headers.get("x-cache")).toBe("HIT");
     expect(callCount).toBe(1);
+  });
+});
+
+// The synthesized `Cache-Control` states the lifetime ocache actually enforces for *this*
+// entry: the one `getMaxAge` resolved onto it, else the static option (finding 10.2); with a
+// `max-age` beside the shared-cache-only `s-maxage` (10.3); and never a bare, unparseable
+// `stale-while-revalidate` (10.4).
+describe("synthesized Cache-Control lifetimes", () => {
+  let testId = 0;
+  const makeEvent = (path: string) => ({ req: new Request(`http://localhost${path}`) });
+  const uniquePath = () => `/cc-${++testId}-${Date.now()}`;
+
+  /** Runs a handler once and reports the header it advertised. */
+  async function advertised(opts: Record<string, unknown>, res?: () => Response) {
+    const path = uniquePath();
+    const handler = defineCachedHandler(res ?? (() => new Response("ok")), opts as any);
+    const first = (await handler(makeEvent(path))) as Response;
+    return first.headers.get("cache-control");
+  }
+
+  it("advertises the maxAge a getMaxAge hook returned as a number", async () => {
+    // The static option said an hour; the hook says two seconds and ocache expires its own
+    // entry on the two. Downstream used to be told the hour regardless.
+    expect(await advertised({ maxAge: 3600, getMaxAge: () => 2 })).toBe("max-age=2");
+  });
+
+  it("advertises both lifetimes a getMaxAge hook returned as an object", async () => {
+    expect(
+      await advertised({
+        maxAge: 3600,
+        staleMaxAge: 7200,
+        swr: true,
+        getMaxAge: () => ({ maxAge: 2, staleMaxAge: 30 }),
+      }),
+    ).toBe("max-age=2, s-maxage=2, stale-while-revalidate=30");
+  });
+
+  it("falls back to the static options when the hook returns nothing", async () => {
+    expect(
+      await advertised({ maxAge: 60, staleMaxAge: 120, swr: true, getMaxAge: () => undefined }),
+    ).toBe("max-age=60, s-maxage=60, stale-while-revalidate=120");
+  });
+
+  it("falls back per field: a hook giving only maxAge keeps the static staleMaxAge", async () => {
+    // Exactly the precedence `cache.ts` applies to the freshness check and the storage TTL
+    // (`entry.x ?? opts.x`), field by field — not all-or-nothing.
+    expect(
+      await advertised({
+        maxAge: 60,
+        staleMaxAge: 120,
+        swr: true,
+        getMaxAge: () => ({ maxAge: 5 }),
+      }),
+    ).toBe("max-age=5, s-maxage=5, stale-while-revalidate=120");
+  });
+
+  it("advertises a per-entry staleMaxAge of 0 as stale-while-revalidate=0", async () => {
+    // A zero window is a real window ("never serve this stale"), and `cache.ts` honors it as
+    // one — so it is advertised, exactly as a zero `maxAge` is.
+    expect(await advertised({ maxAge: 60, swr: true, getMaxAge: () => ({ staleMaxAge: 0 }) })).toBe(
+      "max-age=60, s-maxage=60, stale-while-revalidate=0",
+    );
+  });
+
+  it("advertises a dynamic zero lifetime, and then stores nothing (no gap)", async () => {
+    const setSpy = vi.spyOn(testStorage, "set");
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`);
+      },
+      { maxAge: 600, swr: true, getMaxAge: () => 0 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // The advertisement now moves with the storage decision: a hook clamping to 0 refuses the
+    // write (`storageTtl`), and `validate` reads the same zero lifetime back out of our own
+    // header. Before, the entry was refused while `s-maxage=600` shipped anyway.
+    expect(r1.headers.get("cache-control")).toBe("max-age=0, s-maxage=0");
+    expect(await r2.text()).toBe("v2");
+    expect(callCount).toBe(2);
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+
+  it("never emits a bare stale-while-revalidate, whatever the shape", async () => {
+    const shapes = [
+      { maxAge: 60, swr: true },
+      { swr: true, getMaxAge: () => 60 },
+      { maxAge: 60, swr: true, staleMaxAge: undefined },
+      { maxAge: 60, swr: true, getMaxAge: () => ({ maxAge: 30 }) },
+    ];
+    for (const shape of shapes) {
+      const cc = await advertised(shape);
+      // A delta-seconds or nothing — the bare token is unparseable (RFC 5861 §3), so a
+      // conforming cache drops the whole directive and the window evaporates unannounced.
+      expect(cc).not.toMatch(/stale-while-revalidate(?!=)/);
+    }
+  });
+
+  it("keeps max-age alone when swr is off, whatever the hook says", async () => {
+    // `s-maxage` is only synthesized under `swr`; without it `max-age` already governs both
+    // cache kinds, so nothing is added.
+    expect(await advertised({ maxAge: 60, staleMaxAge: 600, getMaxAge: () => 30 })).toBe(
+      "max-age=30",
+    );
+    expect(await advertised({ maxAge: 0 })).toBe("max-age=0");
+  });
+
+  it("does not clobber a handler cache-control, whatever the hook resolved", async () => {
+    expect(
+      await advertised(
+        { maxAge: 60, swr: true, staleMaxAge: 600, getMaxAge: () => 5 },
+        () => new Response("ok", { headers: { "cache-control": "public, max-age=600" } }),
+      ),
+    ).toBe("public, max-age=600");
+  });
+
+  it("a must-revalidate response is stored on its own staleMaxAge: 0 and advertises nothing of ours", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`, {
+          headers: { "cache-control": "public, max-age=60, must-revalidate" },
+        });
+      },
+      { maxAge: 60, swr: true, staleMaxAge: 600 },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const r2 = (await handler(makeEvent(path))) as Response;
+
+    // The internal wrapper's per-entry `staleMaxAge: 0` reaches the synthesis path like any
+    // other resolved lifetime — but there is nothing to synthesize: the response carries the
+    // handler's own header, which is where the `must-revalidate` came from in the first place.
+    expect(r1.headers.get("cache-control")).toBe("public, max-age=60, must-revalidate");
+    expect(r2.headers.get("cache-control")).toBe("public, max-age=60, must-revalidate");
+    expect(r2.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(1);
+  });
+
+  it("sendCacheControl: false still suppresses everything, hook or no hook", async () => {
+    expect(
+      await advertised({ maxAge: 60, swr: true, getMaxAge: () => 5, sendCacheControl: false }),
+    ).toBeNull();
   });
 });
 
@@ -2358,9 +2642,14 @@ describe("defineCachedHandler", () => {
   }
   // The `HEAD:` component is inserted right after the name segment. That segment is the
   // resolved handler name (`fn.name` / `anon_<hash>` — see "handler cache key name
-  // resolution (#53)"), not the old shared `_` literal, so match it structurally.
+  // resolution (#53)"), not the old shared `_` literal, so match it structurally. `[^:]+` is
+  // exact rather than merely usual: `buildCacheKey` escapes the name, so that segment can
+  // never itself contain a `:` (see "cache key name escaping").
   function headVariantKey(getKey: string) {
-    return getKey.replace(/^(\/cache:handlers:[^:]+:)/, "$1HEAD:");
+    const key = getKey.replace(/^(\/cache:handlers:[^:]+:)/, "$1HEAD:");
+    // Guard against the helper silently matching nothing and asserting a no-op.
+    expect(key).not.toBe(getKey);
+    return key;
   }
 
   it("caches GET responses", async () => {
@@ -2669,18 +2958,22 @@ describe("defineCachedHandler", () => {
     });
 
     const res = (await handler(makeEvent(path))) as Response;
-    expect(res.headers.get("cache-control")).toContain("s-maxage=60");
-    expect(res.headers.get("cache-control")).toContain("stale-while-revalidate=120");
+    // `max-age` accompanies `s-maxage`: the latter is shared-cache-only, and a private cache
+    // fell back to a heuristic freshness of ≈ 0 (`last-modified` is stamped at fill time).
+    expect(res.headers.get("cache-control")).toBe(
+      "max-age=60, s-maxage=60, stale-while-revalidate=120",
+    );
   });
 
-  it("sets cache-control with SWR without staleMaxAge", async () => {
+  it("sets cache-control with SWR without staleMaxAge, and never a bare stale-while-revalidate", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 60, swr: true });
 
     const res = (await handler(makeEvent(path))) as Response;
-    const cc = res.headers.get("cache-control")!;
-    expect(cc).toContain("s-maxage=60");
-    expect(cc).toContain("stale-while-revalidate");
+    // The ISR shape. `stale-while-revalidate` needs a delta-seconds (RFC 5861 §3) and this
+    // shape's stale window is unbounded, so nothing is advertised rather than a bare token a
+    // conforming cache must ignore anyway (or an invented number ocache couldn't promise).
+    expect(res.headers.get("cache-control")).toBe("max-age=60, s-maxage=60");
   });
 
   it("sets max-age when swr is false", async () => {
@@ -4635,7 +4928,7 @@ describe("defineCachedHandler", () => {
     expect(dark.headers.get("vary")).toBe("cookie");
     expect(light.headers.get("vary")).toBe("cookie");
     // ... accompanies a shared-cacheability claim, which is exactly why it must be there.
-    expect(dark.headers.get("cache-control")).toBe("s-maxage=60, stale-while-revalidate");
+    expect(dark.headers.get("cache-control")).toBe("max-age=60, s-maxage=60");
     // ... and it is true: two `theme` values are two entries, while the unlisted `sid`
     // still doesn't split them (key composition unchanged).
     expect(callCount).toBe(2);
@@ -5162,6 +5455,49 @@ describe("defineCachedHandler", () => {
     expect(vary.split(",").map((v) => v.trim())).toEqual(["authorization", "proxy-authorization"]);
   });
 
+  // The documented "private response" recipe (docs/1.guide/8.cache-control.md): the
+  // `Cache-Control: private` opt-out is only meaningful if the handler could identify the user
+  // in the first place, which under the credential defaults takes `allowAuthorization`. Pins
+  // the two halves working *together* — credential visible, personalized response never stored,
+  // anonymous rendering still cached under its own key.
+  it("allowAuthorization + Cache-Control: private serves per-user without storing it", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        const user = event.req.headers.get("authorization");
+        return user
+          ? new Response(`dashboard for ${user} (call ${callCount})`, {
+              headers: { "cache-control": "private" },
+            })
+          : new Response(`public (call ${callCount})`);
+      },
+      { maxAge: 10, allowAuthorization: true },
+    );
+
+    const auth = (user: string) => makeEvent(path, { headers: { authorization: user } });
+    const alice1 = (await handler(auth("alice"))) as Response;
+    const alice2 = (await handler(auth("alice"))) as Response;
+    const bob = (await handler(auth("bob"))) as Response;
+
+    // The credential reaches the handler, and the opt-out keeps every rendering out of
+    // storage — so even the same user re-runs it rather than replaying a stored body.
+    expect(await alice1.text()).toBe("dashboard for alice (call 1)");
+    expect(await alice2.text()).toBe("dashboard for alice (call 2)");
+    expect(await bob.text()).toBe("dashboard for bob (call 3)");
+    // The directive is returned to the caller untouched.
+    expect(alice1.headers.get("cache-control")).toBe("private");
+
+    // The anonymous branch sets no opt-out, so it caches under its own (credential-free) key.
+    const anon1 = (await handler(makeEvent(path))) as Response;
+    const anon2 = (await handler(makeEvent(path))) as Response;
+    expect(await anon1.text()).toBe("public (call 4)");
+    expect(await anon2.text()).toBe("public (call 4)");
+    expect(anon2.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(4);
+  });
+
   it("treats varies: ['authorization'] as an opt-in (no double vary entry)", async () => {
     const seen: (string | null)[] = [];
     const path = uniquePath();
@@ -5402,7 +5738,7 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(1);
   });
 
-  it("sets s-maxage=0 when swr with maxAge: 0", async () => {
+  it("sets max-age=0, s-maxage=0 when swr with maxAge: 0", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
       maxAge: 0,
@@ -5410,9 +5746,9 @@ describe("defineCachedHandler", () => {
     });
 
     const res = (await handler(makeEvent(path))) as Response;
-    const cc = res.headers.get("cache-control")!;
-    expect(cc).toContain("s-maxage=0");
-    expect(cc).toContain("stale-while-revalidate");
+    // A zero lifetime is advertised on both axes (and read back by `validate` as the storage
+    // opt-out it is). No stale window is named, so none is advertised.
+    expect(res.headers.get("cache-control")).toBe("max-age=0, s-maxage=0");
   });
 
   it("sets stale-while-revalidate=0 when swr with staleMaxAge: 0", async () => {

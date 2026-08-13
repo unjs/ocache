@@ -119,8 +119,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // synthesize the cache headers, build the entry. Runs once per resolution, and outside the
     // resolver so bypassed requests — which never reach it — get their live `Response` back
     // untouched. An oversized body reaches that same outcome by a different road: `serialize`
-    // returns a `Response` rather than an entry, and the hooks below let it past.
-    serialize: (entry) => serializeResponse(config, entry.value as unknown as Response),
+    // returns a `Response` rather than an entry, and the hooks below let it past. Handed the
+    // whole entry, not just its `Response`: the lifetimes it advertises are the ones the hook
+    // above just resolved onto it.
+    serialize: (entry) => serializeResponse(config, entry),
     // The built-in bypass composed with the caller's check (see `request.ts`). The single
     // evaluation of that composition per call: `cache.ts` short-circuits to the raw resolver
     // on `true`, and the resolver's narrowing reads the same memoized verdict.
