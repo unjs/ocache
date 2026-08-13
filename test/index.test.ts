@@ -1975,6 +1975,262 @@ describe("storage", () => {
     expect(storage.get("key-1999")).toBe(1999);
   });
 
+  // Finding 14.1: `maxSize` bounds entry *count*, never bytes — measured, 10 000 × 1 MB
+  // documents retained 10 GB of RSS, and because that is external/large-object memory the
+  // process is OOM-killed rather than throwing a catchable RangeError. `maxBytes` is the
+  // bound; it matters most for `{ swr: true, maxAge: N }` (the ISR shape), whose entries
+  // carry an expiry but no storage TTL and are retained until the backend evicts them.
+  describe("maxBytes", () => {
+    // A per-entry weight in exact units, so a test can state its budget in bytes instead of
+    // depending on the built-in estimate.
+    const byLength = (value: unknown) => (typeof value === "string" ? value.length : 1);
+
+    it("evicts least-recently-used entries once the byte budget is exceeded", () => {
+      const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+      storage.set("a", "12345");
+      storage.set("b", "12345"); // total 10 — at the budget, not over it
+      // Touch "a" so "b" is the least-recently-used.
+      expect(storage.get("a")).toBe("12345");
+      storage.set("c", "12345"); // 15 > 10 -> evicts "b"
+      expect(storage.get("b")).toBeNull();
+      expect(storage.get("a")).toBe("12345");
+      expect(storage.get("c")).toBe("12345");
+    });
+
+    // The regression the finding asks for: a byte budget evicts before RSS grows unbounded.
+    // 120 entries is far under the 10 000-entry ceiling, so only the byte budget can evict.
+    it("bounds total bytes under the default budget where maxSize alone would not", () => {
+      const storage = createMemoryStorage();
+      const body = "x".repeat(1024 * 1024); // ~2 MB estimated per entry
+      for (let i = 0; i < 120; i++) {
+        storage.set(`key-${i}`, { body: `${i}-${body}` });
+      }
+      let live = 0;
+      for (let i = 0; i < 120; i++) {
+        if (storage.get(`key-${i}`) !== null) {
+          live++;
+        }
+      }
+      expect(storage.get("key-0")).toBeNull();
+      expect(storage.get("key-119")).not.toBeNull();
+      // 100 MB / ~2 MB ≈ 48 entries retained, nowhere near 120.
+      expect(live).toBeGreaterThan(30);
+      expect(live).toBeLessThan(60);
+    });
+
+    it("counts the key's own bytes", () => {
+      // The finding's second measurement is pure key weight: 10 000 × 8 KB
+      // attacker-chosen paths, 93 MB heap / 296 MB RSS in 6 s, with 1-byte values.
+      const storage = createMemoryStorage({ maxBytes: 100_000 });
+      for (let i = 0; i < 20; i++) {
+        storage.set(`/${"p".repeat(8000)}/${i}`, 1);
+      }
+      let live = 0;
+      for (let i = 0; i < 20; i++) {
+        if (storage.get(`/${"p".repeat(8000)}/${i}`) !== null) {
+          live++;
+        }
+      }
+      // ~16 KB per key -> ~6 fit in 100 KB.
+      expect(live).toBeGreaterThan(2);
+      expect(live).toBeLessThan(10);
+    });
+
+    it("charges binary payloads their byte length", () => {
+      const storage = createMemoryStorage({ maxBytes: 4096 });
+      storage.set("a", new Uint8Array(3000));
+      storage.set("b", new Uint8Array(3000)); // 6000 > 4096 -> evicts "a"
+      expect(storage.get("a")).toBeNull();
+      expect(storage.get("b")).not.toBeNull();
+    });
+
+    it("disables the byte budget when maxBytes is 0 or Infinity", () => {
+      for (const maxBytes of [0, Number.POSITIVE_INFINITY, -1]) {
+        const sizeOf = vi.fn(() => 50 * 1024 * 1024);
+        const storage = createMemoryStorage({ maxBytes, sizeOf });
+        for (let i = 0; i < 10; i++) {
+          storage.set(`key-${i}`, i);
+        }
+        expect(storage.get("key-0")).toBe(0);
+        expect(storage.get("key-9")).toBe(9);
+        // With no budget armed, the estimate is never even computed.
+        expect(sizeOf).not.toHaveBeenCalled();
+      }
+    });
+
+    it("honors a custom sizeOf, which owns the whole per-entry charge", () => {
+      const seen: string[] = [];
+      const storage = createMemoryStorage({
+        maxBytes: 100,
+        sizeOf: (_value, key) => {
+          seen.push(key);
+          return key.length * 10;
+        },
+      });
+      storage.set("aaaa", "x"); // 40
+      storage.set("bbbb", "x"); // 80
+      storage.set("cccc", "x"); // 120 > 100 -> evicts "aaaa"
+      expect(seen).toEqual(["aaaa", "bbbb", "cccc"]);
+      expect(storage.get("aaaa")).toBeNull();
+      expect(storage.get("bbbb")).toBe("x");
+      expect(storage.get("cccc")).toBe("x");
+    });
+
+    it("falls back to the built-in estimate when sizeOf throws or returns a non-number", () => {
+      const hooks = [
+        () => {
+          throw new Error("boom");
+        },
+        () => Number.NaN,
+        () => -1,
+        () => "big" as unknown as number,
+      ];
+      for (const sizeOf of hooks) {
+        const storage = createMemoryStorage({ maxBytes: 10_000, sizeOf });
+        storage.set("a", "small");
+        // 50 000 chars -> 100 000 estimated bytes, over the whole budget on its own.
+        storage.set("big", "x".repeat(50_000));
+        expect(storage.get("big")).toBeNull();
+        expect(storage.get("a")).toBe("small");
+      }
+    });
+
+    // The running total is maintained incrementally, so every path that removes an entry has
+    // to release its bytes. A leak converges on evicting everything, silently.
+    it("does not leak bytes when a key is overwritten", () => {
+      const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+      for (let i = 0; i < 10; i++) {
+        storage.set("a", "123456789"); // 9 bytes, ten times over — total must stay 9
+      }
+      storage.set("b", "1");
+      expect(storage.get("a")).toBe("123456789");
+      expect(storage.get("b")).toBe("1");
+    });
+
+    it("does not leak bytes when an entry expires via its TTL timer", async () => {
+      const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+      storage.set("a", "123456789", { ttl: 0.01 });
+      await new Promise((r) => setTimeout(r, 30));
+      // Fits only if the timer released "a"'s 9 bytes.
+      storage.set("b", "123456789");
+      expect(storage.get("b")).toBe("123456789");
+    });
+
+    it("does not leak bytes when an entry expires lazily on read", () => {
+      vi.useFakeTimers();
+      try {
+        const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+        storage.set("a", "123456789", { ttl: 60 });
+        // Move the clock without running timers, so the entry is reclaimed by `get`'s lazy
+        // expiry check rather than by its `setTimeout`.
+        vi.setSystemTime(Date.now() + 120_000);
+        expect(storage.get("a")).toBeNull();
+        storage.set("b", "123456789");
+        expect(storage.get("b")).toBe("123456789");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not leak bytes when an entry is deleted by a nullish set", () => {
+      const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+      storage.set("a", "123456789");
+      storage.set("a", null);
+      storage.set("b", "123456789");
+      expect(storage.get("a")).toBeNull();
+      expect(storage.get("b")).toBe("123456789");
+    });
+
+    it("does not leak bytes across LRU evictions", () => {
+      const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+      for (let i = 0; i < 50; i++) {
+        storage.set(`k${i}`, "123456789"); // only one 9-byte entry fits at a time
+      }
+      expect(storage.get("k49")).toBe("123456789");
+      expect(storage.get("k48")).toBeNull();
+    });
+
+    it("refuses an entry larger than the whole budget instead of flushing the cache", () => {
+      const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+      storage.set("a", "12345");
+      storage.set("b", "12345");
+      storage.set("huge", "1234567890123456789"); // 19 > 10
+      expect(storage.get("huge")).toBeNull();
+      // The hot set survives: one oversized value must not evict everything else.
+      expect(storage.get("a")).toBe("12345");
+      expect(storage.get("b")).toBe("12345");
+    });
+
+    it("drops the previous value when an oversized entry replaces it", () => {
+      const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+      storage.set("a", "12345");
+      storage.set("a", "1234567890123456789");
+      // `set` was asked to replace it; serving the old value afterwards would be a lie.
+      expect(storage.get("a")).toBeNull();
+    });
+
+    it("applies maxSize and maxBytes together", () => {
+      // Entry ceiling binds first.
+      const byCount = createMemoryStorage({ maxSize: 2, maxBytes: 1000, sizeOf: () => 10 });
+      byCount.set("a", 1);
+      byCount.set("b", 2);
+      byCount.set("c", 3);
+      expect(byCount.get("a")).toBeNull();
+      expect(byCount.get("b")).toBe(2);
+      expect(byCount.get("c")).toBe(3);
+
+      // Byte ceiling binds first.
+      const byBytes = createMemoryStorage({ maxSize: 100, maxBytes: 25, sizeOf: () => 10 });
+      byBytes.set("a", 1);
+      byBytes.set("b", 2);
+      byBytes.set("c", 3);
+      expect(byBytes.get("a")).toBeNull();
+      expect(byBytes.get("b")).toBe(2);
+      expect(byBytes.get("c")).toBe(3);
+    });
+
+    it("estimates exotic values without throwing", () => {
+      const storage = createMemoryStorage({ maxBytes: 10 * 1024 * 1024 });
+      const cyclic: Record<string, unknown> = { name: "cyclic" };
+      cyclic.self = cyclic;
+      cyclic.again = [cyclic, { deep: cyclic }];
+      class Instance {
+        field = "x";
+        get computed() {
+          return "y";
+        }
+      }
+      const throwingGetter = Object.defineProperty({}, "boom", {
+        get() {
+          throw new Error("no");
+        },
+        enumerable: true,
+      });
+      const values: unknown[] = [
+        cyclic,
+        new Instance(),
+        throwingGetter,
+        new Uint8Array([1, 2, 3]),
+        new DataView(new ArrayBuffer(8)),
+        new ArrayBuffer(16),
+        new Map<unknown, unknown>([["k", { v: 1 }]]),
+        new Set([1, "two", { three: 3 }]),
+        [1, [2, [3, [4]]]],
+        new Date(),
+        /re/g,
+        10n,
+        Symbol("s"),
+        () => {},
+        Number.NaN,
+        Object.create(null),
+      ];
+      for (const [i, value] of values.entries()) {
+        expect(() => storage.set(`exotic-${i}`, value)).not.toThrow();
+        expect(storage.get(`exotic-${i}`)).toBe(value);
+      }
+    });
+  });
+
   // Regression: nitro#2138 — expired cache entries never get flushed from memory.
   // When entries expire via TTL, they should eventually be removed from the underlying
   // Map even if nobody reads them again, to prevent unbounded memory growth.
