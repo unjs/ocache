@@ -222,7 +222,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * Number of **seconds** a single shared resolution may take — the resolver plus the
    * `getMaxAge`/`serialize` hooks folded into it. Defaults to `30`; `Infinity` (or `0`) waits
    * forever. Seconds, like {@link maxAge} and {@link staleMaxAge}; fractions are allowed
-   * (`resolverTimeout: 0.5` is half a second).
+   * (`maxResolveTime: 0.5` is half a second).
    *
    * Concurrent calls for a key share one in-flight resolution, so a resolver that never
    * settles would otherwise pin that key for the lifetime of the process: every later call
@@ -237,7 +237,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * refreshing. Under `swr` it also bounds the background refresh, whose failure is reported
    * through `onError` rather than thrown.
    */
-  resolverTimeout?: number;
+  maxResolveTime?: number;
   /** Base path prefix(es) for cache keys. When an array, reads try each prefix in order (multi-tier) and writes go to all prefixes. Defaults to `"/cache"`. */
   base?: string | string[];
   /**

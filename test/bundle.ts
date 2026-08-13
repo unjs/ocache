@@ -37,7 +37,7 @@ import { rolldown } from "rolldown";
 // actually downloaded are `min`/`minGzip`; keep those tight and let `raw` follow — 48_000
 // left it at 99% used, which is a tripwire on the next JSDoc paragraph, not a ceiling.
 //
-// 50_000 ran out on `resolverTimeout` (finding 03), and only just: the baseline was already
+// 50_000 ran out on `maxResolveTime` (finding 03), and only just: the baseline was already
 // 49_867 raw / 20_162 min / 8_077 gzip — 100% of `raw` before this change existed — and the
 // deadline adds ~700 raw / ~330 min / ~135 gzip on top, for 50_563 / 20_495 / 8_212. All of
 // that is *code*: rolldown strips `//` comments and erases type-only JSDoc, so there is no

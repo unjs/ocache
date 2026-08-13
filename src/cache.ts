@@ -14,7 +14,7 @@ function defaultCacheOptions() {
 }
 
 /** Default deadline (seconds) on one shared resolution — the resolver plus `getMaxAge` and `serialize`. */
-const DEFAULT_RESOLVER_TIMEOUT = 30;
+const DEFAULT_MAX_RESOLVE_TIME = 30;
 
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
@@ -85,9 +85,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   // about the cached computation. Setting it explicitly does cost that one integrity change
   // (it stays in `integrityOpts` — it is not a storage-*location* field, and carving out an
   // exception for it would be the first).
-  const rawResolverTimeout = opts.resolverTimeout ?? DEFAULT_RESOLVER_TIMEOUT;
-  const resolverTimeout =
-    Number.isFinite(rawResolverTimeout) && rawResolverTimeout > 0 ? rawResolverTimeout : undefined;
+  const rawMaxResolveTime = opts.maxResolveTime ?? DEFAULT_MAX_RESOLVE_TIME;
+  const maxResolveTime =
+    Number.isFinite(rawMaxResolveTime) && rawMaxResolveTime > 0 ? rawMaxResolveTime : undefined;
   const onError = (context: string, error: unknown) => {
     if (opts.onError) {
       opts.onError(error);
@@ -268,7 +268,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         //
         // Covers the hooks too, not just `resolver()`: `serialize` is where a never-ending
         // body is drained, so a deadline around the resolver alone would miss the measured case.
-        pending.set(key, resolverTimeout ? withDeadline(resolution, resolverTimeout) : resolution);
+        pending.set(key, maxResolveTime ? withDeadline(resolution, maxResolveTime) : resolution);
       }
 
       let resolved: { value: T; maxAge?: number; staleMaxAge?: number };
@@ -369,7 +369,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     // clone rather than to a fresh return-time copy, so an SWR revalidation that completes
     // while this call is still in the serve path is reflected in the returned value — which
     // no longer happens for a *sync* resolver, whose shared promise now carries the
-    // `resolverTimeout` deadline and settles a microtask later than the serve path reads it.
+    // `maxResolveTime` deadline and settles a microtask later than the serve path reads it.
     // That was always a tick-count accident: an async resolver never made it in time, so SWR
     // now serves the stale value for both, which is what SWR means.
     Object.defineProperty(entry, "status", {

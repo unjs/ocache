@@ -547,7 +547,7 @@ describe("cachedFunction", () => {
     // The stale value, exactly as for an async resolver (the sibling test below). It used to
     // be `v2` here: a *sync* resolver settled its shared promise within the microtask ticks
     // the serve path spends on `validate`, so the background refresh's write to the live
-    // entry landed before this call returned. `resolverTimeout` puts one more promise between
+    // entry landed before this call returned. `maxResolveTime` puts one more promise between
     // the resolution and that write, so the accident no longer fires and both resolver shapes
     // now agree on what SWR means.
     expect(r2).toBe("v1");
@@ -7031,7 +7031,7 @@ describe("waitUntil survives request narrowing", () => {
 // hung upstream took the key down for every client until a restart (finding 03). The deadline
 // makes the shared promise always settle — the waiters reject, and the slot is freed by the
 // same cleanup path a resolver error already goes through.
-describe("resolverTimeout", () => {
+describe("maxResolveTime", () => {
   /** A resolver that never settles, plus a handle on how many times it was entered. */
   function hangingResolver() {
     let calls = 0;
@@ -7051,7 +7051,7 @@ describe("resolverTimeout", () => {
     const fn = defineCachedFunction(hang.fn, {
       maxAge: 10,
       name: "hangReject",
-      resolverTimeout: 0.02,
+      maxResolveTime: 0.02,
     });
 
     await expect(fn()).rejects.toThrow(/timed out after 0.02s/);
@@ -7063,7 +7063,7 @@ describe("resolverTimeout", () => {
     const fn = defineCachedFunction(hang.fn, {
       maxAge: 10,
       name: "hangNamed",
-      resolverTimeout: 0.02,
+      maxResolveTime: 0.02,
     });
 
     await expect(fn()).rejects.toMatchObject({ name: "TimeoutError" });
@@ -7077,7 +7077,7 @@ describe("resolverTimeout", () => {
     const fn = defineCachedFunction(hang.fn, {
       maxAge: 10,
       name: "hangSecond",
-      resolverTimeout: 0.02,
+      maxResolveTime: 0.02,
     });
 
     const first = fn();
@@ -7099,7 +7099,7 @@ describe("resolverTimeout", () => {
         calls++;
         return hang ? new Promise<string>(() => {}) : Promise.resolve("healthy");
       },
-      { maxAge: 10, name: "hangRecover", resolverTimeout: 0.02 },
+      { maxAge: 10, name: "hangRecover", maxResolveTime: 0.02 },
     );
 
     await expect(fn()).rejects.toThrow(/timed out/);
@@ -7124,7 +7124,7 @@ describe("resolverTimeout", () => {
         await new Promise((r) => setTimeout(r, 10));
         return "value";
       },
-      { maxAge: 10, name: "inTime", resolverTimeout: 1 },
+      { maxAge: 10, name: "inTime", maxResolveTime: 1 },
     );
 
     expect(await fn()).toBe("value");
@@ -7138,7 +7138,7 @@ describe("resolverTimeout", () => {
     const fn = defineCachedFunction(() => "value", {
       maxAge: 10,
       name: "hangSerialize",
-      resolverTimeout: 0.02,
+      maxResolveTime: 0.02,
       serialize: () => new Promise(() => {}),
     });
 
@@ -7150,7 +7150,7 @@ describe("resolverTimeout", () => {
     const fn = defineCachedFunction(() => new Promise<string>((r) => (settle = r)), {
       maxAge: 10,
       name: `noDeadline${timeout}`,
-      resolverTimeout: timeout,
+      maxResolveTime: timeout,
     });
 
     const call = fn();
@@ -7176,7 +7176,7 @@ describe("resolverTimeout", () => {
         swr: true,
         staleMaxAge: 60,
         name: "hangSwr",
-        resolverTimeout: 0.02,
+        maxResolveTime: 0.02,
         onError: () => {},
       },
     );
@@ -7226,7 +7226,7 @@ describe("resolverTimeout", () => {
         maxAge: 10,
         name: "noTimerLeak",
         getKey: (i: number) => String(i),
-        resolverTimeout: timeoutSeconds,
+        maxResolveTime: timeoutSeconds,
       });
 
       for (let i = 0; i < 25; i++) {
