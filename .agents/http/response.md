@@ -80,6 +80,14 @@ This is **breaking** for a route whose `varies` list does not match its handler'
 
 Do not implement **full `Vary` support** by automatically adding response names to the key. The response reveals these names only after the handler runs. Support requires a second storage pass or re-keying. This is the standard two-phase problem and remains **tracked, open**.
 
+## `Cache-Tag`
+
+`opts.tags` advertises purge tags for a downstream cache, such as Cloudflare Workers Cache. `config.ts` trims and deduplicates the list once. An empty result becomes `undefined`, and `serialize` then emits no header. A handler value wins, like `etag`, `last-modified`, and `cache-control`.
+
+This header is **advisory only**. ocache never indexes or invalidates its own storage by tag. Tag purge needs a tag-to-key index, and a `StorageInterface` of `get`/`set` cannot enumerate keys. Use `invalidate`, `expire`, or the standalone key helpers for ocache's own storage.
+
+Unlike `cache-control`, tags are not gated on `isCacheableStatus` or the `Vary` predicates. A tag names a resource; it does not claim a lifetime. A response that storage rejects still reaches its direct caller with the tags that the downstream cache indexes it under.
+
 ## Cookies, response side
 
 **No `Set-Cookie` may survive a cacheable route.** `serialize` must call `headers.delete("set-cookie")` on the copied headers without conditions before storage and before any caller, including a direct MISS caller, receives the value.

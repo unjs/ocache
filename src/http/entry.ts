@@ -22,7 +22,7 @@ export async function serializeResponse<E extends HTTPEvent>(
   config: HandlerConfig<E>,
   entry: CacheEntry<Response>,
 ): Promise<ResponseCacheEntry> {
-  const { opts, varyHeaderNames } = config;
+  const { opts, varyHeaderNames, tagList } = config;
   const res = entry.value as Response;
 
   // Use byte validity, not Content-Type, to preserve binary data in JSON storage.
@@ -75,6 +75,11 @@ export async function serializeResponse<E extends HTTPEvent>(
   // Vary can name only the complete Cookie header, not an allowlisted subset.
   if (varyHeaderNames.length > 0) {
     appendVary(headers, varyHeaderNames);
+  }
+
+  // Tags are advisory for downstream caches. A handler header wins.
+  if (tagList && !headers.has("cache-tag")) {
+    headers.set("cache-tag", tagList.join(", "));
   }
 
   // Never share a response cookie with deduplicated or later callers.

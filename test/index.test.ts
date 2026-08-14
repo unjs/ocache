@@ -3779,6 +3779,91 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("vary")).toBe("User-Agent, *");
   });
 
+  describe("cache tags", () => {
+    it("emits Cache-Tag from the tags option", async () => {
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response("ok"), {
+        maxAge: 10,
+        tags: ["products", "product:123"],
+      });
+
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(res.headers.get("cache-tag")).toBe("products, product:123");
+    });
+
+    it("emits no Cache-Tag without the tags option", async () => {
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(res.headers.get("cache-tag")).toBeNull();
+    });
+
+    it("trims and deduplicates tags", async () => {
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response("ok"), {
+        maxAge: 10,
+        tags: ["", "  ", " products ", "products", "product:123"],
+      });
+
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(res.headers.get("cache-tag")).toBe("products, product:123");
+    });
+
+    it("emits no Cache-Tag for a whitespace-only list", async () => {
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response("ok"), {
+        maxAge: 10,
+        tags: ["", "  "],
+      });
+
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(res.headers.get("cache-tag")).toBeNull();
+    });
+
+    it("keeps a handler Cache-Tag header", async () => {
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => new Response("ok", { headers: { "cache-tag": "handler-tag" } }),
+        { maxAge: 10, tags: ["products", "product:123"] },
+      );
+
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(res.headers.get("cache-tag")).toBe("handler-tag");
+    });
+
+    it("replays the stored Cache-Tag on a hit", async () => {
+      const path = uniquePath();
+      let callCount = 0;
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("ok");
+        },
+        { maxAge: 10, tags: ["products", "product:123"] },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      expect(callCount).toBe(1);
+      expect(r2.headers.get("x-cache")).toBe("HIT");
+      expect(r1.headers.get("cache-tag")).toBe("products, product:123");
+      expect(r2.headers.get("cache-tag")).toBe("products, product:123");
+    });
+
+    it("emits no Cache-Tag for a bypassed request", async () => {
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response("ok"), {
+        maxAge: 10,
+        tags: ["products"],
+      });
+
+      const res = (await handler(makeEvent(path, { method: "POST" }))) as Response;
+      expect(res.headers.get("cache-tag")).toBeNull();
+    });
+  });
+
   describe("handler-declared Vary", () => {
     /**
      * ocache *writes* `Vary` but keys only on `varies`/`allowCookies`, so a handler that

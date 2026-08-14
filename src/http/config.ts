@@ -36,6 +36,9 @@ export interface HandlerConfig<E extends HTTPEvent> {
   /** Cache-status header name, or `undefined` to disable it. */
   statusHeader: string | undefined;
 
+  /** Cache tags advertised in `Cache-Tag`, or `undefined` to emit no header. */
+  tagList: string[] | undefined;
+
   /** Filtered query values for this handler's requests. */
   searchCache: WeakMap<HTTPEvent, string>;
 
@@ -82,6 +85,10 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
     ? [...new Set(opts.allowQuery.filter(Boolean))]
     : undefined;
 
+  // An empty tag list means that no `Cache-Tag` header is advertised.
+  const _tags = [...new Set((opts.tags ?? []).map((t) => t?.trim()).filter(Boolean))];
+  const tagList = _tags.length > 0 ? _tags : undefined;
+
   const statusHeader =
     opts.cacheStatusHeader === true
       ? "x-cache"
@@ -96,6 +103,7 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
     keyHeaderNames,
     varyHeaderNames,
     statusHeader,
+    tagList,
     searchCache: new WeakMap<HTTPEvent, string>(),
     bypassed: new WeakMap<HTTPEvent, boolean>(),
   };

@@ -298,4 +298,21 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * ```
    */
   shouldCache?: (entry: ResponseCacheEntry) => boolean | Promise<boolean>;
+
+  /**
+   * Cache tags advertised in the `Cache-Tag` response header.
+   *
+   * Tags are trimmed and deduplicated, then joined with `", "`.
+   * An omitted, empty, or whitespace-only list emits no header.
+   * An explicit handler `Cache-Tag` header remains unchanged.
+   * This header is advisory. ocache never indexes or purges by tag.
+   * A downstream cache that supports tags, such as Cloudflare Workers Cache,
+   * indexes them and serves its own `purge({ tags: [...] })`.
+   *
+   * @example
+   * ```ts
+   * tags: ["products", "product:123"],
+   * ```
+   */
+  tags?: string[] | readonly string[];
 }
