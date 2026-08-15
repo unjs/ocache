@@ -12,8 +12,8 @@ importers:
         specifier: ^0.0.4
         version: 0.0.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
       undocs:
-        specifier: npm:undocs-nightly@0.10.1-20260810-080950-9339f88
-        version: undocs-nightly@0.10.1-20260810-080950-9339f88(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lightningcss@1.33.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3)
+        specifier: npm:undocs-nightly@0.10.1-20260810-100210-6b76dc8
+        version: undocs-nightly@0.10.1-20260810-100210-6b76dc8(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lightningcss@1.33.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3)
 
 packages:
 
@@ -1306,8 +1306,8 @@ packages:
   ufo@1.6.4:
     resolution: {integrity: sha512-JFNbkD1Svwe0KvGi8GOeLcP4kAWQ609twvCdcHxq1oSL8svv39ZuSvajcD8B+5D0eL4+s1Is2D/O6KN3qcTeRA==}
 
-  undocs-nightly@0.10.1-20260810-080950-9339f88:
-    resolution: {integrity: sha512-NrESJJmDxW+1ssAMY9Yku+M9P5UhB5gFHq0QLnVDgnUFX1nWzePSFeIeasny68Li+1xssGtSaDPuHHHFkDh2zg==}
+  undocs-nightly@0.10.1-20260810-100210-6b76dc8:
+    resolution: {integrity: sha512-pkabADZBdl8ld6p5PPHcrwpaan5Kp8pAIe/vL5dJ6wKeUdlKZ06ZTenJU+7DaLM+x7zNRiQbtRN+OriBkcSoLg==}
     hasBin: true
 
   unenv@2.0.0-rc.24:
@@ -2583,7 +2583,7 @@ snapshots:
 
   ufo@1.6.4: {}
 
-  undocs-nightly@0.10.1-20260810-080950-9339f88(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lightningcss@1.33.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3):
+  undocs-nightly@0.10.1-20260810-100210-6b76dc8(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(jiti@2.7.0)(lightningcss@1.33.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3):
     dependencies:
       '@fontsource-variable/geist': 5.3.0
       '@fontsource-variable/geist-mono': 5.3.0

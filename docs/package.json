@@ -7,7 +7,7 @@
   },
   "devDependencies": {
     "docs4ts": "^0.0.4",
-    "undocs": "npm:undocs-nightly@0.10.1-20260810-080950-9339f88"
+    "undocs": "npm:undocs-nightly@0.10.1-20260810-100210-6b76dc8"
   },
   "packageManager": "pnpm@11.21.0"
 }
