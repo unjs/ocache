@@ -116,6 +116,75 @@ describe("serialize", () => {
     }
   });
 
+  // A constructor name is caller-controlled text too — a class can be named `A{},B` — so a raw tag
+  // could spell out the boundary between two members just like a string value could.
+  it("keeps a class name from imitating a member boundary", () => {
+    const Weird = { ["A{},B"]: class {} }["A{},B"]!;
+    const Prefixed = { ["'1:a:1}"]: class {} }["'1:a:1}"]!;
+    const A = class A {};
+    const B = class B {};
+    const cases: unknown[][] = [
+      // The reported collision: one instance of a class named `A{},B` against an `A` and a `B`.
+      [new Set([new Weird()]), new Set([new A(), new B()])],
+      [[new Weird()], [new A(), new B()]],
+      // A name that spells a length prefix is still consumed by its own prefix.
+      [new Prefixed(), { a: 1 }, new (class {})()],
+      // An anonymous class is not the plain object it used to hash as.
+      [new (class {})(), {}],
+      // A class cannot claim a built-in's rendering by taking its name.
+      [new (class URL {})(), new URL("http://a.example/x"), "URL"],
+      [new (class Set {})(), new Set(), new (class Map {})(), new Map()],
+      [new (class Headers {})(), new Headers()],
+      [new (class Uint8Array {})(), new Uint8Array(), new (class ArrayBuffer {})()],
+      // Bytes and element values are different readings of the same memory.
+      [new Uint8Array([1, 2]), new Uint8Array([1, 2]).buffer],
+    ];
+    for (const group of cases) {
+      const rendered = group.map((value) => serialize(value));
+      expect(new Set(rendered).size, rendered.join(" | ")).toBe(group.length);
+    }
+  });
+
+  // Anything with no own enumerable property and no `toJSON` used to render as its bare tag, so
+  // every value of the type shared one cache key. These are readable synchronously, so they are
+  // rendered by value; `.agents/hash.md` records the ones that are not.
+  it("renders opaque built-ins by value instead of collapsing them to a tag", () => {
+    // Entry order is part of a `URLSearchParams`, so it is the one collection that is not sorted.
+    expect(serialize(new URLSearchParams("a=1"))).not.toBe(serialize(new URLSearchParams("z=9")));
+    expect(serialize(new URLSearchParams("a=1&a=2"))).not.toBe(
+      serialize(new URLSearchParams("a=2&a=1")),
+    );
+    expect(serialize(new URLSearchParams("a=1&b=2"))).toBe(
+      serialize(new URLSearchParams([["a", "1"], ["b", "2"]])), // prettier-ignore
+    );
+    // A query string is not the `URL` it came from, nor a plain string of the same text.
+    expect(serialize(new URLSearchParams("a=1"))).not.toBe(serialize("a=1"));
+
+    // Header iteration is spec'd to be sorted by lowercased name, so construction order drops out
+    // without a sort of ours, and name case is not part of the identity.
+    expect(serialize(new Headers({ a: "1" }))).not.toBe(serialize(new Headers({ b: "1" })));
+    expect(serialize(new Headers({ a: "1" }))).not.toBe(serialize(new Headers({ a: "2" })));
+    expect(
+      serialize(
+        new Headers([
+          ["a", "1"],
+          ["b", "2"],
+        ]),
+      ),
+    ).toBe(
+      // prettier-ignore
+      serialize(new Headers([["b", "2"], ["a", "1"]])), // prettier-ignore
+    );
+    expect(serialize(new Headers({ "X-A": "1" }))).toBe(serialize(new Headers({ "x-a": "1" })));
+
+    // A `SharedArrayBuffer` is not an `ArrayBuffer`, so it fell through to its tag.
+    const shared = new SharedArrayBuffer(4);
+    new Uint8Array(shared).set([1, 2, 3, 4]);
+    expect(serialize(shared)).not.toBe(serialize(new SharedArrayBuffer(4)));
+    expect(serialize(new SharedArrayBuffer(8))).not.toBe(serialize(new SharedArrayBuffer(4)));
+    expect(serialize(shared)).not.toBe(serialize(new Uint8Array([1, 2, 3, 4]).buffer));
+  });
+
   // A function is rendered as source text, which is text a caller can also pass as a string.
   it("keeps a function apart from a string of the same source", () => {
     const fn = () => 1;

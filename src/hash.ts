@@ -4,6 +4,10 @@
 
 import { digest } from "#crypto";
 
+// A `SharedArrayBuffer` is not an `ArrayBuffer`, and the global is absent in runtimes that do not
+// enable it. Reading it once keeps the branch below a comparison instead of a per-call lookup.
+const SharedBuffer = globalThis.SharedArrayBuffer as SharedArrayBufferConstructor | undefined;
+
 /** Returns a base64url SHA-256 digest of the serialized input. */
 export function hash(input: unknown): string {
   return digest(serialize(input));
@@ -12,10 +16,12 @@ export function hash(input: unknown): string {
 /**
  * Renders values in a deterministic, type-tagged storage format.
  *
- * Text is length-prefixed, so distinct inputs never share a rendering.
- * Object, Map, and Set order does not affect the result.
+ * Text and type tags are length-prefixed, so chosen input cannot imitate a member boundary.
+ * Object, Map, and Set order does not affect the result, but `URLSearchParams` order does.
  * Cycles use visit-order references.
  * Functions use source text, so equal-source closures are indistinguishable.
+ * A value with no synchronously readable contents, such as a `Blob` or a `Promise`, renders as
+ * its type tag alone, so every value of that type shares a key.
  */
 export function serialize(input: unknown): string {
   // Strings do not need cycle tracking.
@@ -31,6 +37,16 @@ export function serialize(input: unknown): string {
  */
 function serString(value: string): string {
   return `'${value.length}:${value}`;
+}
+
+/**
+ * Renders a constructor name as a length-prefixed tag.
+ *
+ * A class name is caller-controlled text like any other — `{ ["A{},B"]: class {} }["A{},B"].name`
+ * is `A{},B` — so an unprefixed tag could imitate the boundary between two members.
+ */
+function serTag(ctor: { name?: string }): string {
+  return serString(typeof ctor.name === "string" ? ctor.name : "");
 }
 
 function ser(value: unknown, seen: Map<object, string>): string {
@@ -86,9 +102,25 @@ function serObject(value: object, seen: Map<object, string>): string {
     // Render all invalid dates identically without calling `toISOString`.
     return `Date(${Number.isNaN(value.getTime()) ? "null" : value.toISOString()})`;
   }
-  if (value instanceof RegExp || value instanceof URL || value instanceof Error) {
-    // A URL, a pattern, and a message are all caller-controlled text.
-    return `${value.constructor.name}${serString(String(value))}`;
+  if (
+    value instanceof RegExp ||
+    value instanceof URL ||
+    value instanceof URLSearchParams ||
+    value instanceof Error
+  ) {
+    // A pattern, a URL, a query string, and a message are all caller-controlled text.
+    // `URLSearchParams` renders in entry order and is never sorted: duplicate keys and their
+    // order are part of the value, so `a=1&a=2` must not share a key with `a=2&a=1`.
+    return `${serTag(ctor)}${serString(String(value))}`;
+  }
+  if (value instanceof Headers) {
+    // Header iteration is sorted by lowercased name by spec, so it is already deterministic
+    // across runtimes; sorting again here would only hide a runtime that got that wrong.
+    let items = "";
+    for (const [name, item] of value) {
+      items += `,${serString(name)}:${serString(item)}`;
+    }
+    return `Headers{${items.slice(1)}}`;
   }
   if (value instanceof Set) {
     const parts: string[] = [];
@@ -105,8 +137,8 @@ function serObject(value: object, seen: Map<object, string>): string {
     }
     return `Map{${parts.sort().join(",")}}`;
   }
-  if (value instanceof ArrayBuffer) {
-    return `ArrayBuffer[${new Uint8Array(value).join(",")}]`;
+  if (value instanceof ArrayBuffer || (SharedBuffer && value instanceof SharedBuffer)) {
+    return `${serTag(ctor)}[${new Uint8Array(value as ArrayBuffer).join(",")}]`;
   }
   if (ArrayBuffer.isView(value)) {
     // Element values keep typed-array hashes independent of machine endianness.
@@ -114,11 +146,12 @@ function serObject(value: object, seen: Map<object, string>): string {
       "join" in value
         ? (value as unknown as number[]).join(",")
         : new Uint8Array(value.buffer, value.byteOffset, value.byteLength).join(",");
-    return `${value.constructor.name}[${items}]`;
+    return `${serTag(ctor)}[${items}]`;
   }
-  return serProperties(ctor.name || "", value, seen);
+  return serProperties(serTag(ctor), value, seen);
 }
 
+// `tag` is already rendered: `""` for a plain object, a length-prefixed name for a class.
 // Prefer `toJSON` because enumerable properties omit private state and getters.
 function serProperties(tag: string, value: object, seen: Map<object, string>): string {
   const toJSON = (value as { toJSON?: unknown }).toJSON;
