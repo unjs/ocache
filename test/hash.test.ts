@@ -243,12 +243,40 @@ describe("serialize", () => {
     const a = () => 1;
     const b = () => 1;
     expect(serialize(a)).not.toBe(serialize(b));
-    // Line breaks are collapsed, so reindentation alone does not rotate every key.
+    // Line breaks collapse to a space, so reindentation alone does not rotate every key.
     expect(
       serialize(function named(x: number) {
         return x;
       }),
     ).toBe(serialize(function named(x: number) { return x; })); // prettier-ignore
+  });
+
+  // Source text is the whole identity of a function, so a collapsed line break must still hold
+  // the tokens either side apart. Collapsing it to nothing merged them, and two functions that
+  // merge share one `anon_<hash>` name and one `integrity` — they then overwrite each other.
+  it("keeps a collapsed line break from joining the tokens either side", () => {
+    // Held in an array so none of them takes an inferred name: the source text is the only thing
+    // that separates them.
+    const [broken, joined, spaced] = [
+      () => `a
+b`,
+      () => `ab`,
+      () => `a b`,
+    ];
+    expect(serialize(broken)).not.toBe(serialize(joined));
+    // The same merge, in the body of a function that relies on ASI. Its source is built here so
+    // that neither this file's formatter nor the test transform can rewrite the break away.
+    // eslint-disable-next-line no-new-func
+    expect(serialize(new Function("a\nb"))).not.toBe(serialize(new Function("ab")));
+
+    // What a space cannot separate stays merged: inside a literal, a line break and a space are
+    // the same rendering. Reindentation stability is what this buys, and `.agents/hash.md` says
+    // so — an argument that turns on it needs an explicit `name` or `getKey`.
+    expect(serialize(broken)).toBe(serialize(spaced));
+    // A bound or native function has no source to tell it apart: `bound f` and the arity are all
+    // that is left, so the bound arguments are invisible.
+    const add = (a: number, b: number) => a + b;
+    expect(hash(add.bind(null, 1))).toBe(hash(add.bind(null, 2)));
   });
 
   it("terminates on cycles and still separates them from their acyclic twin", () => {

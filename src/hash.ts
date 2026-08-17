@@ -65,8 +65,10 @@ function ser(value: unknown, seen: Map<object, string>): string {
       return value.description === undefined ? "Symbol()" : `Symbol${serString(value.description)}`;
     }
     case "function": {
-      // The tag keeps a function apart from a string of its own source text.
-      return `Function${serString(`${value.name}(${value.length})${Function.prototype.toString.call(value).replace(/\s*\n\s*/g, "")}`)}`;
+      // The tag keeps a function apart from a string of its own source text. A line break
+      // collapses to a space, never to nothing: removing it joined the tokens either side, so
+      // `{ foo\nbar }` read as `{ foobar }`.
+      return `Function${serString(`${value.name}(${value.length})${Function.prototype.toString.call(value).replace(/\s*\n\s*/g, " ")}`)}`;
     }
     case "object": {
       const ref = seen.get(value);
