@@ -80,7 +80,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   name?: string;
   /** Returns a cache key from the function arguments. */
   getKey?: (...args: ArgsT) => string | Promise<string>;
-  /** Transforms an entry before return. The return value replaces the cached value. */
+  /** Transforms an entry before return. The return value replaces the cached value unless it is `undefined`. */
   transform?: (entry: CacheEntry<T>, ...args: ArgsT) => any;
   /**
    * Converts a resolved value to its stored form.

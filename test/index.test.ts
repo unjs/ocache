@@ -118,6 +118,26 @@ describe("cachedFunction", () => {
     expect(await fn()).toBe("transformed-raw");
   });
 
+  it("keeps a falsy transform result", async () => {
+    for (const value of [0, false, "", Number.NaN]) {
+      const fn = defineCachedFunction(() => "raw", {
+        maxAge: 10,
+        transform: () => value,
+      });
+
+      expect(await fn()).toBe(value);
+    }
+  });
+
+  it("falls back to the cached value when transform returns undefined", async () => {
+    const fn = defineCachedFunction(() => "raw", {
+      maxAge: 10,
+      transform: () => undefined,
+    });
+
+    expect(await fn()).toBe("raw");
+  });
+
   it("exposes cache status (hit/miss/stale) to transform", async () => {
     const statuses: (string | undefined)[] = [];
     let n = 0;

@@ -339,7 +339,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     );
     let value = entry.value;
     if (opts.transform) {
-      value = (await opts.transform(entry, ...args)) || value;
+      // Only `undefined` falls back; a falsy transform result is a real value.
+      value = (await opts.transform(entry, ...args)) ?? value;
     }
     return value;
   };
