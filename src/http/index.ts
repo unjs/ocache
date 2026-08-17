@@ -1,5 +1,11 @@
 import { hash } from "../hash.ts";
-import { cachedFunction, expireCache, invalidateCache, resolveCacheKeys } from "../cache.ts";
+import {
+  cachedFunction,
+  expireCache,
+  fencePending,
+  invalidateCache,
+  resolveCacheKeys,
+} from "../cache.ts";
 import { resolveStorage } from "../storage.ts";
 
 import { requiresRevalidation } from "./cache-control.ts";
@@ -171,22 +177,33 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         cacheableMethods;
     return methods.map((method) => {
       const _key = methodKey(key, method);
-      return { ..._opts, getKey: () => _key };
+      return { key: _key, options: { ..._opts, getKey: () => _key } };
     });
   };
 
   const revalidate = cachedHandler as CachedEventHandler<E>;
   revalidate.resolveKeys = async (event: E) => {
     const keys = await Promise.all(
-      (await variantOptions(event)).map((options) => resolveCacheKeys({ options })),
+      (await variantOptions(event)).map(({ options }) => resolveCacheKeys({ options })),
     );
     return keys.flat();
   };
+  // Fence each variant so an in-flight resolution cannot undo the purge.
   revalidate.invalidate = async (event: E) => {
-    await Promise.all((await variantOptions(event)).map((options) => invalidateCache({ options })));
+    await Promise.all(
+      (await variantOptions(event)).map(({ key, options }) => {
+        fencePending(cachedFn, key);
+        return invalidateCache({ options });
+      }),
+    );
   };
   revalidate.expire = async (event: E) => {
-    await Promise.all((await variantOptions(event)).map((options) => expireCache({ options })));
+    await Promise.all(
+      (await variantOptions(event)).map(({ key, options }) => {
+        fencePending(cachedFn, key);
+        return expireCache({ options });
+      }),
+    );
   };
 
   return revalidate;

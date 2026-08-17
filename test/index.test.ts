@@ -7163,7 +7163,7 @@ describe("purge fences in-flight resolutions", () => {
 
     await handler.invalidate(event());
     releases[0]!(new Response("v1"));
-    expect(await (await first).text()).toBe("v1");
+    expect(await ((await first) as Response).text()).toBe("v1");
     await tick();
 
     for (const key of await handler.resolveKeys(event())) {
@@ -7174,7 +7174,7 @@ describe("purge fences in-flight resolutions", () => {
     await tick();
     expect(calls()).toBe(2);
     releases[1]!(new Response("v2"));
-    expect(await (await second).text()).toBe("v2");
+    expect(await ((await second) as Response).text()).toBe("v2");
   });
 });
 

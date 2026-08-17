@@ -58,6 +58,20 @@ The returned function provides `.resolveKeys(...args)`, `.invalidate(...args)`, 
 - Standalone helpers are generic over `args` and do not understand HTTP methods. For a `defineCachedHandler` key, they affect only the method variant implied by `args`. Use the handler's `.invalidate(event)` or `.expire(event)` methods. See `.agents/http/key.md`.
 - These helpers can reach a store only when they receive the **same options object**, where the resolved storage is memoized, or an explicit `storage`. If storage is unset, `requireStorage` makes them **throw**. Do not let them purge a new empty store while the original store keeps serving stale data. A different `name` or `getKey` still does nothing without an error. `resolveCacheKeys` only derives keys and is not affected.
 
+### In-flight fence
+
+A purge must also beat work that started **before** it. `pending` holds one token per key, `{ promise, fenced? }`. `.invalidate()` and `.expire()` set `fenced` on the current token and drop it from `pending` before they touch storage.
+
+Without the fence, a resolver that started before the purge wrote its pre-purge value back to the key after `invalidateCache` had already removed it. The cache then served pre-purge data for a full `maxAge`. The default `maxResolveTime` makes that window up to 30 s wide. `expire` had the same defect: the late write cleared `stale`.
+
+- A fenced leader still returns its value **to its own caller**. It writes nothing, and it does not evict after a failed resolution, because the purge already removed the entry and a newer resolution may own the key.
+- Dropping the token from `pending` matters as much as the flag. Otherwise a call that arrives after the purge becomes a follower of the doomed resolution and receives the pre-purge value.
+- The leader keeps its slot until the write decision instead of releasing it before `await validate(...)`, and it reads `fenced` **after** that await. `releasePending` checks token identity, so no leader can remove a newer leader's slot. This narrows the unfenced window to the storage call itself. No fence can order a purge against a `set` that is already in flight.
+- Existing followers keep the value they are already waiting for. Their call started before the purge, so this matches a request that returned one tick earlier.
+- A fenced resolution is **discarded, not stored as stale**. `expire` therefore costs one extra resolution. Storing a pre-purge value under a fresh lifetime is the failure this fence exists to prevent.
+- The fence is **per instance**. It lives in a `WeakMap` keyed by the cached function so it stays off the public `CachedFunction` type. `http/index.ts` reaches it through the internal `fencePending(cachedFn, key)` for every method variant; see `.agents/http/key.md`. The standalone helpers cannot fence, because they receive options, not the instance. This is one more reason to prefer the instance methods.
+- `.invalidate()` and `.expire()` resolve the key once and hand the helper a fixed `getKey`, exactly as the handler variants do. A custom `getKey` must not run twice per purge.
+
 ## Storage resolution
 
 `opts.storage` accepts a `StorageInterface` or a factory. The default is a fresh `createMemoryStorage()` **for each cached function or handler**, never a global instance. See `.agents/storage.md`. `resolveStorage(_optsRef, opts)` resolves storage lazily on the first read or write. Do not resolve it at definition time because factories support late binding. Memoize the result in both the caller's options and the internal clone. A factory must run at most once. Instance methods and standalone helpers must reach the same store.

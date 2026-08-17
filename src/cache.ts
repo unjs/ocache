@@ -18,6 +18,21 @@ const DEFAULT_MAX_RESOLVE_TIME = 30;
 
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
+type PendingResolution<T> = {
+  promise: Promise<{ value: T; maxAge?: number; staleMaxAge?: number }>;
+  /** Set when a purge ran while this resolution was in flight. */
+  fenced?: boolean;
+};
+
+// A purge must reach the in-flight resolutions of the instance it targets.
+// This registry keeps that channel off the public `CachedFunction` type.
+const fences = new WeakMap<object, (key: string) => void>();
+
+/** Stops in-flight resolutions for `key` from writing after a purge. Internal. */
+export function fencePending(cachedFn: object, key: string): void {
+  fences.get(cachedFn)?.(key);
+}
+
 export type CachedFunction<T, ArgsT extends unknown[]> = {
   (...args: ArgsT): Promise<T>;
   /** Returns one storage key per base prefix. */
@@ -50,7 +65,14 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const getStorage = (): StorageInterface => resolveStorage(_optsRef, opts);
 
   // A Map prevents user-controlled keys from reading Object prototype members.
-  const pending = new Map<string, Promise<{ value: T; maxAge?: number; staleMaxAge?: number }>>();
+  const pending = new Map<string, PendingResolution<T>>();
+
+  // Release a slot only while it still belongs to this resolution.
+  const releasePending = (key: string, current: PendingResolution<T>) => {
+    if (pending.get(key) === current) {
+      pending.delete(key);
+    }
+  };
 
   // Resolve settings shared by every call.
   const group = opts.group || "functions";
@@ -159,8 +181,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             : "revalidated";
 
     const resolveEntry = async () => {
-      const isPending = pending.has(key);
-      if (!isPending) {
+      let current = pending.get(key);
+      const isPending = current !== undefined;
+      if (!current) {
         if (entry.value !== undefined && (opts.staleMaxAge || 0) >= 0 && opts.swr === false) {
           entry.value = undefined;
           entry.integrity = undefined;
@@ -192,22 +215,28 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           return { value: stored, maxAge, staleMaxAge };
         })();
         // Reject all waiters on timeout and prevent a late result from reaching storage.
-        pending.set(key, maxResolveTime ? withDeadline(resolution, maxResolveTime) : resolution);
+        current = {
+          promise: maxResolveTime ? withDeadline(resolution, maxResolveTime) : resolution,
+        };
+        pending.set(key, current);
       }
 
       let resolved: { value: T; maxAge?: number; staleMaxAge?: number };
       try {
-        resolved = await pending.get(key)!;
+        resolved = await current.promise;
       } catch (error) {
         // Treat a timeout like any other failed resolution.
         if (!isPending) {
-          pending.delete(key);
-          const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
-            (error) => {
-              onError("[cache] Cache eviction error.", error);
-            },
-          );
-          event?.req.waitUntil?.(evictPromise);
+          releasePending(key, current);
+          // A purge already removed the entry, and a newer resolution may own the key.
+          if (!current.fenced) {
+            const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
+              (error) => {
+                onError("[cache] Cache eviction error.", error);
+              },
+            );
+            event?.req.waitUntil?.(evictPromise);
+          }
         }
         throw error;
       }
@@ -219,7 +248,6 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         entry.mtime = Date.now();
         entry.integrity = integrity;
         entry.stale = undefined;
-        pending.delete(key);
         // Store dynamic lifetimes with the entry.
         if (opts.getMaxAge) {
           entry.maxAge = resolved.maxAge;
@@ -230,31 +258,41 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           entry.staleMaxAge ?? opts.staleMaxAge,
           opts.swr,
         );
-        if ((await validate(entry, validateCtx)) !== false && setOpts !== false) {
-          // Write misses to all tiers and promote lower-tier hits.
-          const writeBases = hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
-          // Never persist per-call status.
-          const { status: _status, ...toStore } = entry;
-          const promise = (async () => {
-            try {
-              await Promise.all(
-                writeBases.map((b) =>
-                  getStorage().set(buildCacheKey(key, { group, name }, b), toStore, setOpts),
-                ),
-              );
-            } catch (error) {
-              onError("[cache] Cache write error.", error);
-            }
-          })();
-          event?.req.waitUntil?.(promise);
-        } else if (hitIndex >= 0) {
-          // Remove an old entry when its replacement cannot be stored.
-          const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
-            (error) => {
-              onError("[cache] Cache eviction error.", error);
-            },
-          );
-          event?.req.waitUntil?.(evictPromise);
+        try {
+          const isValid = (await validate(entry, validateCtx)) !== false;
+          // A purge that ran during this resolution wins. Check it as late as possible.
+          if (current.fenced) {
+            return;
+          }
+          if (isValid && setOpts !== false) {
+            // Write misses to all tiers and promote lower-tier hits.
+            const writeBases = hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
+            // Never persist per-call status.
+            const { status: _status, ...toStore } = entry;
+            const promise = (async () => {
+              try {
+                await Promise.all(
+                  writeBases.map((b) =>
+                    getStorage().set(buildCacheKey(key, { group, name }, b), toStore, setOpts),
+                  ),
+                );
+              } catch (error) {
+                onError("[cache] Cache write error.", error);
+              }
+            })();
+            event?.req.waitUntil?.(promise);
+          } else if (hitIndex >= 0) {
+            // Remove an old entry when its replacement cannot be stored.
+            const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
+              (error) => {
+                onError("[cache] Cache eviction error.", error);
+              },
+            );
+            event?.req.waitUntil?.(evictPromise);
+          }
+        } finally {
+          // Hold the slot until the write is decided so a purge can still fence it.
+          releasePending(key, current);
         }
       }
     };
@@ -306,15 +344,31 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     return value;
   };
 
-  cachedFn.resolveKeys = (...args: ArgsT) => resolveCacheKeys({ options: opts, args });
-  // Resolve storage before purge helpers copy the options.
-  cachedFn.invalidate = (...args: ArgsT) => {
+  // Cancel the storage write of every resolution that started before the purge.
+  fences.set(cachedFn, (key: string) => {
+    const current = pending.get(key);
+    if (current) {
+      current.fenced = true;
+      // Later callers must resolve again instead of following a purged result.
+      pending.delete(key);
+    }
+  });
+
+  // Resolve the key once so a custom `getKey` runs no more than the call does.
+  const purgeOptions = async (args: ArgsT) => {
+    // Resolve storage before purge helpers copy the options.
     getStorage();
-    return invalidateCache({ options: opts, args });
+    const key = await (opts.getKey || getKey)(...args);
+    fencePending(cachedFn, key);
+    return { ...opts, getKey: () => key };
   };
-  cachedFn.expire = (...args: ArgsT) => {
-    getStorage();
-    return expireCache({ options: opts, args });
+
+  cachedFn.resolveKeys = (...args: ArgsT) => resolveCacheKeys({ options: opts, args });
+  cachedFn.invalidate = async (...args: ArgsT) => {
+    await invalidateCache({ options: await purgeOptions(args) });
+  };
+  cachedFn.expire = async (...args: ArgsT) => {
+    await expireCache({ options: await purgeOptions(args) });
   };
 
   return cachedFn;
