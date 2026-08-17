@@ -361,4 +361,95 @@ b`,
     expect(serialize({ constructor: null })).not.toBe(serialize({ constructor: undefined }));
     expect(serialize({ constructor: null })).not.toBe(serialize({}));
   });
+
+  // Nesting is one stack frame per level, and the default `getKey` hashes call arguments, so a
+  // 10 kB parsed body (`"[".repeat(5000)`) threw `RangeError: Maximum call stack size exceeded`
+  // out of the cache layer before the wrapped function ever ran. Worse, the depth it gave out at
+  // moved with the runtime, the JIT tier, and how much stack the caller had already used, so the
+  // same argument could hash on one request and throw on the next. The ceiling replaces that with
+  // one boundary that does not move, and an error that says what to do (`.agents/hash.md`).
+  it("stops at a depth ceiling instead of overflowing the stack", () => {
+    const nest = (depth: number) => {
+      let value: unknown = { leaf: 1 };
+      for (let index = 0; index < depth; index++) {
+        value = { a: value };
+      }
+      return value;
+    };
+    // 128 levels: a leaf under 127 wrappers is the deepest value still rendered.
+    expect(() => serialize(nest(127))).not.toThrow();
+    expect(() => serialize(nest(128))).toThrow(RangeError);
+    // The failure lands on a per-request key path, so the message has to carry the fix with it.
+    expect(() => serialize(nest(128))).toThrow(/nested deeper than 128 levels/);
+    expect(() => serialize(nest(128))).toThrow(/getKey/);
+    // The reported input: previously a stack overflow, now the same deterministic refusal.
+    expect(() => hash(JSON.parse("[".repeat(5000) + "]".repeat(5000)))).toThrow(RangeError);
+  });
+
+  // A guard that misses one recursive branch just moves the overflow into that branch. `toJSON` is
+  // the one to watch: it hands back a fresh value that the `seen` map cannot stop, so it has to
+  // count as a level like any other child.
+  it("applies the ceiling to every branch that recurses", () => {
+    const chains: Record<string, (depth: number) => unknown> = {
+      array: (depth) => {
+        let value: unknown = [1];
+        for (let index = 0; index < depth; index++) value = [value];
+        return value;
+      },
+      class: (depth) => {
+        class Node {
+          constructor(public inner: unknown) {}
+        }
+        let value: unknown = new Node(1);
+        for (let index = 0; index < depth; index++) value = new Node(value);
+        return value;
+      },
+      set: (depth) => {
+        let value: unknown = new Set([1]);
+        for (let index = 0; index < depth; index++) value = new Set([value]);
+        return value;
+      },
+      mapKey: (depth) => {
+        let value: unknown = new Map([[1, 1]]);
+        for (let index = 0; index < depth; index++) value = new Map([[value, 1]]);
+        return value;
+      },
+      mapValue: (depth) => {
+        let value: unknown = new Map([[1, 1]]);
+        for (let index = 0; index < depth; index++) value = new Map([[1, value]]);
+        return value;
+      },
+      toJSON: (depth) => {
+        let value: unknown = { toJSON: () => 1 };
+        for (let index = 0; index < depth; index++) {
+          const inner = value;
+          value = { toJSON: () => inner };
+        }
+        return value;
+      },
+    };
+    for (const [name, chain] of Object.entries(chains)) {
+      expect(() => serialize(chain(127)), name).not.toThrow();
+      expect(() => serialize(chain(128)), name).toThrow(RangeError);
+    }
+  });
+
+  // What the ceiling counts is what costs a stack frame. Breadth costs none, so an ordinary large
+  // payload must keep hashing; and a cycle is answered by its back-reference, which is why the
+  // `seen` lookup has to come before the ceiling rather than after it.
+  it("counts nesting, not breadth, and lets a cycle terminate before the ceiling", () => {
+    expect(() =>
+      serialize(Array.from({ length: 50_000 }, (_, index) => ({ index }))),
+    ).not.toThrow();
+
+    // The cycle sits at the deepest level the ceiling allows: its self-reference must return the
+    // `#<n>` placeholder instead of asking to descend one more level.
+    const ring: Record<string, unknown> = { a: 1 };
+    ring.self = ring;
+    let value: unknown = ring;
+    for (let index = 0; index < 127; index++) {
+      value = { a: value };
+    }
+    expect(() => serialize(value)).not.toThrow();
+  });
 });

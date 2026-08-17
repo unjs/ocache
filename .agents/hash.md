@@ -35,6 +35,7 @@ Keep these consequences in mind:
 - **A constructor name is caller-controlled text.** A class name can hold any character — `{ ["A{},B"]: class {} }["A{},B"].name` is `A{},B` — so a raw tag can imitate a member boundary exactly as a string value can. `serialize(new Set([new A()]))` for that class rendered `Set[A{},B{}]`, which is also what a `Set` of one `A` and one `B` rendered. `serTag` routes every tag through `serString`. The one exception is a **plain object**, which keeps its bare `{…}`: it is the common shape and must not churn. An anonymous class therefore renders `'0:{…}`, which is what keeps it apart from `{}` (`hash(new (class {})()) === hash({})` before).
 - **Order-independent members.** Sort object, `Map`, and `Set` entries. `{a, b}` and `{b, a}` must share an entry. Object keys are unique and already provide a total order. `Map` entries are sorted as complete rendered `key:value` pairs. Rendered `Map` and `Set` members provide a total order, including for object keys. Use bare `sort()`. Its default string comparator uses code-unit order by definition. Never use `localeCompare`.
 - **Cycles terminate** as `#<n>` in visit order. Replace the `seen` entry with the completed rendering. A repeated reference that is not cyclic must still render in full.
+- **Nesting terminates at `MAX_DEPTH` (128) with a `RangeError`.** The traversal is recursive, so depth is stack frames. The ceiling is a refusal, never a truncation: a rendering that dropped or elided a subtree would give two different values one key. See "The depth ceiling" below.
 - **Functions render as source text** with each line break and the whitespace around it collapsed to **one space**. Equal source produces equal hashes across restarts. This makes `anon_<hash>` names and `integrity` usable with persistent backends. Reindentation alone does not make entries cold, because reindentation only changes whitespace that touches a line break. Collapsing to nothing instead of a space was a bug: it joined the tokens either side, so `() => { foo\nbar }` rendered as `() => { foobar }` and two unrelated functions shared one `anon_<hash>` name and one `integrity`. Three costs remain, and all three are the same fix — pass an explicit `name`, `getKey`, or `integrity`:
   - Equal source with different closed-over values is indistinguishable. This limitation appears in the `resolveName` documentation, `.agents/cache.md`, and the guides.
   - Inside a string or template literal, a line break and a space are the same rendering, so `` () => `a\nb` `` and `` () => `a b` `` share a hash. Telling them apart needs a tokenizer, and reindentation stability is worth more than the distinction.
@@ -71,6 +72,41 @@ The alternative considered was throwing. It was rejected: `serialize` cannot tel
 **A class that takes another built-in's name merges with it.** The tag is the only thing separating siblings inside a branch, so `class ArrayBuffer extends Uint8Array {}` renders as `'11:ArrayBuffer[1,2]`, which a real `ArrayBuffer` over the same bytes also renders. The same holds for `class URL extends Error {}` with a URL-shaped message. `Object.prototype.toString` was considered as an unforgeable tag and rejected: a subclass can shadow `Symbol.toStringTag`, so it is forgeable too, and it costs a call plus a slice on the typed-array path. This residue is outside the threat model that motivates the prefix — an attacker supplies **data** (URLs, headers, cookies, JSON arguments), not JavaScript class declarations.
 
 **A shadowed own `constructor` still decides the tag.** `{ constructor: {} }` renders `'0:{…}`, the same shape as an anonymous class instance carrying that own key. Reading the tag off the value is what makes an own `constructor` key safe (see the `ctor == null` branch), and both readings are already the same rendering today.
+
+## The depth ceiling
+
+`ser`, `serObject`, and `serProperties` are mutually recursive, so one level of nesting is one to three stack frames. Without a ceiling, `serialize(JSON.parse("[".repeat(5000) + "]".repeat(5000)))` threw `RangeError: Maximum call stack size exceeded`. That is a 10 kB payload, `JSON.parse` accepts it without complaint (V8 parses iteratively and did not break at four million levels), and the default `getKey` hashes call arguments — so a small parsed body failed the call inside the cache layer before the wrapped function ever ran. The handler path is not exposed: `http/key.ts` only ever hashes strings.
+
+**Where the stack actually gives out.** Measured on Node 24 (x64, default `--stack-size`), one cold probe per process, binary-searched on nesting depth:
+
+| Shape                         | Cold limit | Warm limit (same process) |
+| ----------------------------- | ---------- | ------------------------- |
+| array (`ser` → `serObject`)   | 1787       | ~3900                     |
+| object (adds `serProperties`) | 1389       | ~3450                     |
+| `toJSON` chain                | 1332       | —                         |
+| `Set` / `Map`                 | 1787       | ~6100                     |
+
+The two columns are the reason a ceiling beats leaving it alone: the same input overflows at 1389 on a cold call and survives past 3400 once the traversal is optimized, because an interpreted frame is much larger than an optimized one. The limit also scales with the stack — the object shape gives out at 718 with `--stack-size=512`, 354 at 256, and 172 at 128 — and it shrinks with whatever stack the caller already used. So the failure boundary moved with the runtime, the JIT tier, and the call site: one argument could hash on one request and throw on the next.
+
+**Why 128.** It has to fire before the stack does in the worst configuration, not the best one, so the cold column is the one that matters and the ceiling has to sit under 1332 with room for a smaller stack. 128 still fires first at `--stack-size=128`, an eighth of Node's default, which covers a constrained runtime and a deep caller stack at the same time. It is also two orders of magnitude above any plausible key shape: a cache key argument is an id and an options object, and JSON body parsers in the same position cap nesting far lower (`qs` defaults to 5).
+
+**The error is a `RangeError`,** not a new class. It is the type the runtime already threw for this condition, so a consumer that catches `RangeError` keeps working; it needs no new export; and the module is already over its bundle budget. The message names the depth and the fix (`getKey`), because it surfaces on a per-request path where the stack trace points at `hash`, not at the caller's argument.
+
+**`toJSON` counts as a level.** The hook returns a fresh value that `seen` cannot stop, so `{ toJSON: () => ({ toJSON: … }) }` recurses without ever revisiting an object. Passing the current depth into `ser(toJSON.call(value), …)` covers it; leaving `toJSON` uncounted would have left the whole overflow reachable through one branch.
+
+**The `seen` lookup stays ahead of the check.** A back-reference terminates without a frame, so a cycle at the ceiling must return its `#<n>` placeholder rather than be refused.
+
+### Rejected: an iterative rewrite
+
+An explicit-stack traversal removes the limit instead of naming it, and it was rejected on measurement. A prototype covering only the two hot shapes (arrays and plain objects, everything else delegated back to the recursive renderer, so it is a **lower bound** on a complete one) cost 3.9x on `[authority, path]`, 2.7x on a 2-arg `args`, and 2.3x on a 100-deep object. The cost is structural: a post-order machine needs a per-node frame and a per-node parts array, which is exactly the allocation the "concatenate members" and "no closure per call" optimizations below exist to avoid. It would also have to reproduce the cycle semantics — `#<n>` in visit order, the `seen` entry replaced by the completed rendering, a repeated non-cyclic reference still rendered in full — byte for byte across every branch, on a format that has already rotated three times, and it would spend more of a bundle budget that is already exceeded.
+
+### Rejected: leaving it documented
+
+The exposure is real (parsed bodies reach the default `getKey`) and the failure is undiagnosable from the outside: `RangeError: Maximum call stack size exceeded` with a stack full of `ser`/`serObject` says nothing about arguments or `getKey`. The warm/cold split above makes it worse than a plain limit, because it is not reproducible from the input alone.
+
+### What did not change
+
+Everything that renders today renders identically: the ceiling only adds a `depth` argument and a comparison. This was checked two ways against the pre-change implementation, in one process, on the same objects — a 101-value corpus covering every branch (including nesting at 1, 2, 8, 64, 100 and 126 levels) and a 20 000-case differential fuzz whose generator reuses objects to produce repeats and cycles. Zero differences in both. Chains of 127 levels render identically in every recursive branch (array, object, class, `Set`, `Map` key, `Map` value, `toJSON`); 128 is where each throws. The `depth` argument costs nothing measurable at the `hash` level: `[authority, path]` and a 2-arg `args` are within run-to-run noise, and strings still return before traversal. Bundle: +503 raw, +199 min, ~+125 gzip, the same on both platforms in `test/bundle.ts`, so it is shared logic rather than an arm of `#crypto`.
 
 ## Performance costs and optimizations
 

@@ -8,6 +8,11 @@ import { digest } from "#crypto";
 // enable it. Reading it once keeps the branch below a comparison instead of a per-call lookup.
 const SharedBuffer = globalThis.SharedArrayBuffer as SharedArrayBufferConstructor | undefined;
 
+// Nesting maps one-to-one onto stack frames, so without a ceiling a parsed payload overflows the
+// stack at a depth that varies with the runtime and the JIT tier. This one fires first down to an
+// eighth of Node's default stack. See `.agents/hash.md`.
+const MAX_DEPTH = 128;
+
 /** Returns a base64url SHA-256 digest of the serialized input. */
 export function hash(input: unknown): string {
   return digest(serialize(input));
@@ -22,10 +27,12 @@ export function hash(input: unknown): string {
  * Functions use source text, so equal-source closures are indistinguishable.
  * A value with no synchronously readable contents, such as a `Blob` or a `Promise`, renders as
  * its type tag alone, so every value of that type shares a key.
+ *
+ * @throws {RangeError} when the value nests deeper than 128 levels.
  */
 export function serialize(input: unknown): string {
   // Strings do not need cycle tracking.
-  return typeof input === "string" ? serString(input) : ser(input, new Map<object, string>());
+  return typeof input === "string" ? serString(input) : ser(input, new Map<object, string>(), 0);
 }
 
 /**
@@ -49,7 +56,8 @@ function serTag(ctor: { name?: string }): string {
   return serString(typeof ctor.name === "string" ? ctor.name : "");
 }
 
-function ser(value: unknown, seen: Map<object, string>): string {
+// `depth` counts the object levels already entered above `value`.
+function ser(value: unknown, seen: Map<object, string>, depth: number): string {
   if (value === null) {
     return "null";
   }
@@ -73,10 +81,16 @@ function ser(value: unknown, seen: Map<object, string>): string {
     case "object": {
       const ref = seen.get(value);
       if (ref !== undefined) {
+        // A back-reference terminates here, so a cycle never reaches the ceiling.
         return ref;
       }
+      if (depth >= MAX_DEPTH) {
+        throw new RangeError(
+          `[ocache] Cannot hash a value nested deeper than ${MAX_DEPTH} levels. Pass an explicit \`getKey\` that derives the key from what identifies the value.`,
+        );
+      }
       seen.set(value, `#${seen.size}`);
-      const serialized = serObject(value, seen);
+      const serialized = serObject(value, seen, depth + 1);
       seen.set(value, serialized);
       return serialized;
     }
@@ -86,11 +100,12 @@ function ser(value: unknown, seen: Map<object, string>): string {
   }
 }
 
-function serObject(value: object, seen: Map<object, string>): string {
+// `depth` counts the object levels entered, including `value` itself.
+function serObject(value: object, seen: Map<object, string>, depth: number): string {
   if (Array.isArray(value)) {
     let items = "";
     for (let index = 0; index < value.length; index++) {
-      items += index === 0 ? ser(value[index], seen) : `,${ser(value[index], seen)}`;
+      items += index === 0 ? ser(value[index], seen, depth) : `,${ser(value[index], seen, depth)}`;
     }
     return `[${items}]`;
   }
@@ -98,7 +113,7 @@ function serObject(value: object, seen: Map<object, string>): string {
   // Tag class instances, but keep common plain objects untagged. Parsed input can carry an own
   // `constructor` key, so a null one reads as a plain object like a null prototype does.
   if (ctor === Object || ctor == null) {
-    return serProperties("", value, seen);
+    return serProperties("", value, seen, depth);
   }
   if (value instanceof Date) {
     // Render all invalid dates identically without calling `toISOString`.
@@ -127,7 +142,7 @@ function serObject(value: object, seen: Map<object, string>): string {
   if (value instanceof Set) {
     const parts: string[] = [];
     for (const item of value) {
-      parts.push(ser(item, seen));
+      parts.push(ser(item, seen, depth));
     }
     return `Set[${parts.sort().join(",")}]`;
   }
@@ -135,7 +150,7 @@ function serObject(value: object, seen: Map<object, string>): string {
     // Sort rendered pairs because Map keys may not be comparable.
     const parts: string[] = [];
     for (const [key, item] of value) {
-      parts.push(`${ser(key, seen)}:${ser(item, seen)}`);
+      parts.push(`${ser(key, seen, depth)}:${ser(item, seen, depth)}`);
     }
     return `Map{${parts.sort().join(",")}}`;
   }
@@ -150,15 +165,21 @@ function serObject(value: object, seen: Map<object, string>): string {
         : new Uint8Array(value.buffer, value.byteOffset, value.byteLength).join(",");
     return `${serTag(ctor)}[${items}]`;
   }
-  return serProperties(serTag(ctor), value, seen);
+  return serProperties(serTag(ctor), value, seen, depth);
 }
 
 // `tag` is already rendered: `""` for a plain object, a length-prefixed name for a class.
 // Prefer `toJSON` because enumerable properties omit private state and getters.
-function serProperties(tag: string, value: object, seen: Map<object, string>): string {
+function serProperties(
+  tag: string,
+  value: object,
+  seen: Map<object, string>,
+  depth: number,
+): string {
   const toJSON = (value as { toJSON?: unknown }).toJSON;
   if (typeof toJSON === "function") {
-    return `${tag}(${ser(toJSON.call(value), seen)})`;
+    // The result is a fresh value that `seen` cannot stop, so it counts as a level like any child.
+    return `${tag}(${ser(toJSON.call(value), seen, depth)})`;
   }
   // Use code-unit order; locale-dependent order would change keys across machines.
   const keys = Object.keys(value).sort();
@@ -167,7 +188,7 @@ function serProperties(tag: string, value: object, seen: Map<object, string>): s
     const key = keys[index]!;
     // A key is caller-controlled text like any other; render it the same way.
     parts += index === 0 ? `${serString(key)}:` : `,${serString(key)}:`;
-    parts += ser((value as Record<string, unknown>)[key], seen);
+    parts += ser((value as Record<string, unknown>)[key], seen, depth);
   }
   return `${tag}{${parts}}`;
 }
