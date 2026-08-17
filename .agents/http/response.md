@@ -108,4 +108,10 @@ Choose storage format by **byte validity, not content-type**. Decode with a fata
 
 ## `304 Not Modified`
 
-Use `if-none-match` and `if-modified-since` to select a 304. `handleCacheHeaders` may replace this decision. The set of headers that a 304 repeats is not configurable. Always include `Vary`. A 304 must state the same variant dimensions. Otherwise, a shared cache can update its stored entry after losing those dimensions (RFC 7232 §4.1). Also include the cache-status header because a HIT returned as 304 is still a HIT.
+Use `if-none-match` and `if-modified-since` to select a 304. `handleCacheHeaders` may replace this decision.
+
+**`If-None-Match` wins when it is present** (RFC 9110 §13.2.2). Return its result and never evaluate the date. Earlier code fell through to `if-modified-since` on a non-matching tag, so a client holding an older representation received a 304 for changed content whenever its `If-Modified-Since` was newer than `last-modified`. Browsers send both headers together, so this was the common case, not a crafted one.
+
+Compare tags **weakly** (§8.8.3.2): strip a `W/` prefix from both sides, so `W/"x"` and `"x"` match. `serialize` mints weak etags, and clients echo either form. `*` matches whenever a representation exists, which is always true at this point because an entry was found. `If-None-Match` is a **list**, so a match on any member returns 304. Split it by scanning quoted strings rather than by splitting on `,`: `etagc` excludes `"` but allows `,`, so `W/"a,b"` is one tag. An unquoted token is malformed but is still compared as sent, which preserves the old exact-equality behavior for handlers that emit bare etags.
+
+The set of headers that a 304 repeats is not configurable. Always include `Vary`. A 304 must state the same variant dimensions. Otherwise, a shared cache can update its stored entry after losing those dimensions (RFC 7232 §4.1). Also include the cache-status header because a HIT returned as 304 is still a HIT.

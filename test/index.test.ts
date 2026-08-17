@@ -3692,6 +3692,87 @@ describe("defineCachedHandler", () => {
     expect(res.status).toBe(200);
   });
 
+  it("does not fall back to if-modified-since when if-none-match misses", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () =>
+        new Response("body", {
+          headers: { etag: '"v2"', "last-modified": new Date("2020-01-01").toUTCString() },
+        }),
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path));
+
+    // The client holds "v1", so the entry changed even though its date is older.
+    const res = (await handler(
+      makeEvent(path, {
+        headers: {
+          "if-none-match": '"v1"',
+          "if-modified-since": new Date("2030-01-01").toUTCString(),
+        },
+      }),
+    )) as Response;
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("body");
+  });
+
+  it("compares if-none-match weakly", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("body", { headers: { etag: '"my-etag"' } }),
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path));
+
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": 'W/"my-etag"' } }),
+    )) as Response;
+    expect(res.status).toBe(304);
+  });
+
+  it("returns 304 for a matching tag inside an if-none-match list", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("body", { headers: { etag: 'W/"a,b"' } }),
+      { maxAge: 10 },
+    );
+
+    await handler(makeEvent(path));
+
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": '"other", W/"a,b", "more"' } }),
+    )) as Response;
+    expect(res.status).toBe(304);
+  });
+
+  it("returns 200 when no tag in an if-none-match list matches", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("body", { headers: { etag: '"v3"' } }), {
+      maxAge: 10,
+    });
+
+    await handler(makeEvent(path));
+
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": '"v1", "v2"' } }),
+    )) as Response;
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 304 for if-none-match: *", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("body", { headers: { etag: '"v1"' } }), {
+      maxAge: 10,
+    });
+
+    await handler(makeEvent(path));
+
+    const res = (await handler(makeEvent(path, { headers: { "if-none-match": "*" } }))) as Response;
+    expect(res.status).toBe(304);
+  });
+
   it("headersOnly mode delegates to handler", async () => {
     let callCount = 0;
     const path = uniquePath();
@@ -6979,6 +7060,121 @@ describe("invalidateCache", () => {
     await invalidateCache({
       options: { name: "nonexistent", getKey: () => "nope", storage: testStorage },
     });
+  });
+});
+
+// A purge must win over work that started before it. Without a fence, a slow resolver
+// finished after `.invalidate()` and wrote its pre-purge value back to the same key.
+describe("purge fences in-flight resolutions", () => {
+  const tick = () => new Promise((r) => setTimeout(r, 10));
+
+  /** A resolver that stays in flight until its release is called. */
+  function blocking<T>() {
+    const releases: Array<(value: T) => void> = [];
+    return {
+      releases,
+      calls: () => releases.length,
+      resolver: () => new Promise<T>((resolve) => releases.push(resolve)),
+    };
+  }
+
+  it("invalidate() stops an in-flight resolution from rewriting the key", async () => {
+    const { releases, calls, resolver } = blocking<string>();
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 60,
+      name: "fenced",
+      getKey: () => "k",
+      swr: false,
+    });
+
+    const first = fn();
+    await tick();
+    expect(calls()).toBe(1);
+
+    await fn.invalidate();
+    releases[0]!("v1");
+    // The caller still receives the value it resolved.
+    expect(await first).toBe("v1");
+    await tick();
+
+    expect(await testStorage.get("/cache:functions:fenced:k.json")).toBeFalsy();
+
+    const second = fn();
+    await tick();
+    expect(calls()).toBe(2);
+    releases[1]!("v2");
+    expect(await second).toBe("v2");
+  });
+
+  it("a call after invalidate() resolves again instead of following the purged work", async () => {
+    const { releases, calls, resolver } = blocking<string>();
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 60,
+      name: "fenced",
+      getKey: () => "k",
+      swr: false,
+    });
+
+    const first = fn();
+    await tick();
+    await fn.invalidate();
+
+    const second = fn();
+    await tick();
+    expect(calls()).toBe(2);
+
+    releases[0]!("v1");
+    releases[1]!("v2");
+    expect(await first).toBe("v1");
+    expect(await second).toBe("v2");
+  });
+
+  it("expire() stops an in-flight resolution from storing a fresh entry", async () => {
+    const { releases, calls, resolver } = blocking<string>();
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 60,
+      name: "fenced",
+      getKey: () => "k",
+      swr: false,
+    });
+
+    const first = fn();
+    await tick();
+
+    await fn.expire();
+    releases[0]!("v1");
+    expect(await first).toBe("v1");
+    await tick();
+
+    expect(await testStorage.get("/cache:functions:fenced:k.json")).toBeFalsy();
+    fn();
+    await tick();
+    expect(calls()).toBe(2);
+  });
+
+  it("a handler's .invalidate(event) fences its in-flight resolution", async () => {
+    const { releases, calls, resolver } = blocking<Response>();
+    const handler = defineCachedHandler(resolver, { maxAge: 60, name: "fencedHandler" });
+    const event = () => ({ req: new Request("http://localhost/fenced") });
+
+    const first = handler(event());
+    await tick();
+    expect(calls()).toBe(1);
+
+    await handler.invalidate(event());
+    releases[0]!(new Response("v1"));
+    expect(await (await first).text()).toBe("v1");
+    await tick();
+
+    for (const key of await handler.resolveKeys(event())) {
+      expect(await testStorage.get(key)).toBeFalsy();
+    }
+
+    const second = handler(event());
+    await tick();
+    expect(calls()).toBe(2);
+    releases[1]!(new Response("v2"));
+    expect(await (await second).text()).toBe("v2");
   });
 });
 
