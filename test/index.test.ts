@@ -5074,6 +5074,106 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(2);
   });
 
+  // --- Narrowing that cannot be applied must fail closed ---
+  //
+  // Narrowing rewrites `event.req` (and `event.url` under `allowQuery`) in place. A
+  // framework event that exposes either as a read-only accessor used to log the failure
+  // and run the handler anyway: the handler then read the credentials and excluded query
+  // values that the key does not cover, and the result was stored under — and advertised
+  // for — that key. The request must instead be served exactly as an explicit bypass.
+  describe("an event that cannot be narrowed", () => {
+    /** An event whose `req` is a getter: assigning to it throws in strict mode. */
+    function readonlyReqEvent(path: string, headers: Record<string, string>) {
+      const req = new Request(`http://localhost${path}`, { headers });
+      return Object.defineProperty({} as HTTPEvent, "req", { get: () => req, enumerable: true });
+    }
+
+    /** An event with a writable `req` but a getter-only `url`. */
+    function readonlyUrlEvent(path: string, headers: Record<string, string>) {
+      const event = { req: new Request(`http://localhost${path}`, { headers }) } as HTTPEvent;
+      const url = new URL(event.req.url);
+      return Object.defineProperty(event, "url", { get: () => url, enumerable: true });
+    }
+
+    it("serves a read-only `req` uncached instead of keying past the credentials", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        (event) => {
+          callCount++;
+          return new Response(event.req.headers.get("authorization") ?? "anonymous");
+        },
+        { maxAge: 10 },
+      );
+
+      const headers = { authorization: "Bearer alice" };
+      const res = (await handler(readonlyReqEvent(path, headers))) as Response;
+
+      // The handler still runs and still sees the untouched request, as under a bypass...
+      expect(await res.text()).toBe("Bearer alice");
+      // ...but nothing is stored and nothing is advertised to a shared cache.
+      expect(res.headers.has("x-cache")).toBe(false);
+      expect(res.headers.has("cache-control")).toBe(false);
+      const [getKey] = await handler.resolveKeys(makeEvent(path));
+      expect(await testStorage.get(getKey!)).toBeFalsy();
+
+      // Alice's response is not replayed to the next caller, keyed or not.
+      const anon = (await handler(makeEvent(path))) as Response;
+      expect(await anon.text()).toBe("anonymous");
+      expect(callCount).toBe(2);
+
+      expect(errorSpy).toHaveBeenCalledWith("[cache] Bypassing cache.", expect.any(Error));
+      errorSpy.mockRestore();
+    });
+
+    it("restores the request when only `url` is read-only (never narrows partially)", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let callCount = 0;
+      const seen: Array<{ cookie: string | null; url: string }> = [];
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        (event) => {
+          callCount++;
+          seen.push({
+            cookie: event.req.headers.get("cookie"),
+            url: (event.url ?? new URL(event.req.url)).search,
+          });
+          return new Response("ok");
+        },
+        { maxAge: 10, allowQuery: ["page"] },
+      );
+
+      const headers = { cookie: "sid=secret" };
+      const res = (await handler(
+        readonlyUrlEvent(`${path}?page=2&token=abc`, headers),
+      )) as Response;
+
+      // `event.req` was swapped before the `url` assignment threw, so it is put back: the
+      // handler must not see a half-narrowed event where the two disagree.
+      expect(seen).toEqual([{ cookie: "sid=secret", url: "?page=2&token=abc" }]);
+      expect(res.headers.has("x-cache")).toBe(false);
+      expect(callCount).toBe(1);
+
+      // Nothing was stored under the query-narrowed key.
+      await handler(makeEvent(`${path}?page=2&token=abc`));
+      expect(callCount).toBe(2);
+
+      errorSpy.mockRestore();
+    });
+
+    it("reports the failure through `onError` when one is set", async () => {
+      const onError = vi.fn();
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10, onError });
+
+      await handler(readonlyReqEvent(path, {}));
+
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError.mock.calls[0]![0]).toMatchObject({ name: "NarrowRequestError" });
+    });
+  });
+
   it("by default hides Authorization from the handler so token content is never shared", async () => {
     let callCount = 0;
     const seen: (string | null)[] = [];

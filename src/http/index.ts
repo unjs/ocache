@@ -7,7 +7,7 @@ import { integrityOpts, resolveHandlerConfig } from "./config.ts";
 import { defaultHandleCacheHeaders, notModifiedHeaders } from "./conditional.ts";
 import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
-import { narrowRequest, resolveBypass } from "./request.ts";
+import { NarrowRequestError, narrowRequest, resolveBypass } from "./request.ts";
 import { validateEntry } from "./validate.ts";
 
 import type {
@@ -120,7 +120,22 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       return handler(event);
     }
 
-    const cached = (await cachedFn(event))! as Response | ResponseCacheEntry;
+    let cached: Response | ResponseCacheEntry;
+    try {
+      cached = (await cachedFn(event))! as Response | ResponseCacheEntry;
+    } catch (error) {
+      if (!(error instanceof NarrowRequestError)) {
+        throw error;
+      }
+      // Narrowing failed, so the key cannot cover what the handler reads. Serve the
+      // request uncached and unadvertised, exactly as an explicit bypass would.
+      if (opts.onError) {
+        opts.onError(error);
+      } else {
+        console.error("[cache] Bypassing cache.", error);
+      }
+      return toResponse(await handler(event), event);
+    }
 
     // Return bypassed responses without cache headers or body buffering.
     if (cached instanceof Response) {
