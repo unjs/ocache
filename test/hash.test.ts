@@ -88,6 +88,42 @@ describe("#crypto arms", () => {
 });
 
 describe("serialize", () => {
+  // Cache keys are built from URLs, headers, cookies, and call arguments, so the rendering has to
+  // stay unambiguous for text an attacker picks. Every place text is embedded is length-prefixed:
+  // a value that contains the characters the format uses as separators cannot move a boundary and
+  // land on a key that belongs to another input.
+  it("keeps chosen inputs from imitating a member boundary", () => {
+    const cases: unknown[][] = [
+      // The reported collision: a quote and a separator inside an array element.
+      [
+        ["alice','scope", "doc"],
+        ["alice", "scope','doc"],
+      ],
+      [["a", "b"], ["a','b"], ["a'", "'b"]],
+      // The same, moved into a key, a Map key, and a Set member.
+      [{ "a:1,b": 2 }, { a: 1, b: 2 }, { "a:1": ",b:2" }],
+      [new Map([["a:1,b", 2]]), new Map<string, number>([["a", 1], ["b", 2]])], // prettier-ignore
+      [new Set(["a,b"]), new Set(["a", "b"])],
+      // A tag is not a name a value can claim by spelling it out.
+      [new URL("http://a.example/x"), "URL(http://a.example/x)", ["URL(http://a.example/", "x)"]],
+      [/a/g, "RegExp(/a/g)"],
+      [new Error("boom"), "Error(Error: boom)"],
+      [Symbol("a,b"), "Symbol(a,b)", [Symbol("a"), Symbol("b")], Symbol()],
+    ];
+    for (const group of cases) {
+      const rendered = group.map((value) => serialize(value));
+      expect(new Set(rendered).size, rendered.join(" | ")).toBe(group.length);
+    }
+  });
+
+  // A function is rendered as source text, which is text a caller can also pass as a string.
+  it("keeps a function apart from a string of the same source", () => {
+    const fn = () => 1;
+    expect(serialize(fn)).not.toBe(
+      serialize(`${fn.name}(${fn.length})${Function.prototype.toString.call(fn)}`),
+    );
+  });
+
   it("sorts object, Map and Set members so order is not part of the identity", () => {
     expect(serialize({ a: 1, b: 2 })).toBe(serialize({ b: 2, a: 1 }));
     expect(

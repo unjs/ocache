@@ -12,13 +12,25 @@ export function hash(input: unknown): string {
 /**
  * Renders values in a deterministic, type-tagged storage format.
  *
+ * Text is length-prefixed, so distinct inputs never share a rendering.
  * Object, Map, and Set order does not affect the result.
  * Cycles use visit-order references.
  * Functions use source text, so equal-source closures are indistinguishable.
  */
 export function serialize(input: unknown): string {
   // Strings do not need cycle tracking.
-  return typeof input === "string" ? `'${input}'` : ser(input, new Map<object, string>());
+  return typeof input === "string" ? serString(input) : ser(input, new Map<object, string>());
+}
+
+/**
+ * Renders text as `'<code units>:<text>`.
+ *
+ * Every rendering that embeds caller-controlled text goes through this function. The length
+ * prefix is what makes the result unambiguous: the reader consumes exactly that many code units,
+ * so no chosen input can imitate the `,`, `:`, `}`, or `]` that separate members.
+ */
+function serString(value: string): string {
+  return `'${value.length}:${value}`;
 }
 
 function ser(value: unknown, seen: Map<object, string>): string {
@@ -27,13 +39,18 @@ function ser(value: unknown, seen: Map<object, string>): string {
   }
   switch (typeof value) {
     case "string": {
-      return `'${value}'`;
+      return serString(value);
     }
     case "bigint": {
       return `${value}n`;
     }
+    case "symbol": {
+      // A described symbol must not read as `Symbol()`, so the two cases stay apart.
+      return value.description === undefined ? "Symbol()" : `Symbol${serString(value.description)}`;
+    }
     case "function": {
-      return `${value.name}(${value.length})${Function.prototype.toString.call(value).replace(/\s*\n\s*/g, "")}`;
+      // The tag keeps a function apart from a string of its own source text.
+      return `Function${serString(`${value.name}(${value.length})${Function.prototype.toString.call(value).replace(/\s*\n\s*/g, "")}`)}`;
     }
     case "object": {
       const ref = seen.get(value);
@@ -69,7 +86,8 @@ function serObject(value: object, seen: Map<object, string>): string {
     return `Date(${Number.isNaN(value.getTime()) ? "null" : value.toISOString()})`;
   }
   if (value instanceof RegExp || value instanceof URL || value instanceof Error) {
-    return `${value.constructor.name}(${value})`;
+    // A URL, a pattern, and a message are all caller-controlled text.
+    return `${value.constructor.name}${serString(String(value))}`;
   }
   if (value instanceof Set) {
     const parts: string[] = [];
@@ -82,7 +100,7 @@ function serObject(value: object, seen: Map<object, string>): string {
     // Sort rendered pairs because Map keys may not be comparable.
     const parts: string[] = [];
     for (const [key, item] of value) {
-      parts.push(`${typeof key === "string" ? key : ser(key, seen)}:${ser(item, seen)}`);
+      parts.push(`${ser(key, seen)}:${ser(item, seen)}`);
     }
     return `Map{${parts.sort().join(",")}}`;
   }
@@ -111,7 +129,8 @@ function serProperties(tag: string, value: object, seen: Map<object, string>): s
   let parts = "";
   for (let index = 0; index < keys.length; index++) {
     const key = keys[index]!;
-    parts += index === 0 ? `${key}:` : `,${key}:`;
+    // A key is caller-controlled text like any other; render it the same way.
+    parts += index === 0 ? `${serString(key)}:` : `,${serString(key)}:`;
     parts += ser((value as Record<string, unknown>)[key], seen);
   }
   return `${tag}{${parts}}`;

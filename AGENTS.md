@@ -2,6 +2,8 @@
 
 ocache provides composable cache primitives. It works in any runtime that provides standard `Request` and `Response` objects.
 
+[KEEP COMMENTS SHORT AND ONLY IF NOT OBVIOUS FROM CODE]
+
 ## Project Structure
 
 ```
