@@ -7,8 +7,10 @@
  * Trace headers support propagation but must not affect rendered output.
  *
  * `host` is not one of them: `request.ts` replaces it with the keyed URL authority.
+ *
+ * `ReadonlySet` rather than `Object.freeze`, which does not stop `Set` mutation.
  */
-export const safeHeaderNames = new Set([
+export const safeHeaderNames: ReadonlySet<string> = /* @__PURE__ */ new Set([
   "if-modified-since",
   "if-none-match",
   "traceparent",

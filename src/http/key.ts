@@ -8,7 +8,7 @@ import { filterCookie, filterSearch } from "./filters.ts";
 import type { HTTPEvent } from "../types.ts";
 
 // Request bypass and revalidation helpers must use this same method list.
-export const cacheableMethods = ["GET", "HEAD"];
+export const cacheableMethods: readonly string[] = /* @__PURE__ */ Object.freeze(["GET", "HEAD"]);
 
 // This key identifies a resource without its HTTP method.
 export async function resolveKey<E extends HTTPEvent>(

@@ -7,15 +7,15 @@ import { appendVary, hasUnkeyedVary, hasVaryWildcard } from "./vary.ts";
 import type { CacheEntry, HTTPEvent, ResponseCacheEntry } from "../types.ts";
 
 // Buffered response bodies no longer match these transport headers.
-const transportHeaders = [
+const transportHeaders: readonly string[] = /* @__PURE__ */ Object.freeze([
   "content-encoding",
   "content-length",
   "content-range",
   "transfer-encoding",
-];
+]);
 
 // Response constructors reject non-null bodies for these statuses.
-const nullBodyStatuses = new Set([204, 205, 304]);
+const nullBodyStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([204, 205, 304]);
 
 // Deduplicated callers share this single body read.
 export async function serializeResponse<E extends HTTPEvent>(
@@ -122,7 +122,7 @@ export function deserializeEntry(entry: ResponseCacheEntry): {
 }
 
 // Fatal decoding detects binary data; `ignoreBOM` preserves leading BOM bytes.
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+const utf8Decoder = /* @__PURE__ */ new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /** Returns decoded UTF-8 or `undefined` for invalid UTF-8. */
 function decodeUtf8(bytes: Uint8Array): string | undefined {

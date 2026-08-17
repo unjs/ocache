@@ -14,7 +14,10 @@ export function defaultHandlerOptions() {
 }
 
 // Strip credentials unless their values are part of the key.
-export const authHeaderNames = ["authorization", "proxy-authorization"];
+export const authHeaderNames: readonly string[] = /* @__PURE__ */ Object.freeze([
+  "authorization",
+  "proxy-authorization",
+]);
 
 /** Configuration shared by all modules for one handler. */
 export interface HandlerConfig<E extends HTTPEvent> {

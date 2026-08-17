@@ -5,7 +5,7 @@ import type { HandlerConfig } from "./config.ts";
 import type { HTTPEvent, ResponseCacheEntry } from "../types.ts";
 
 // Store only complete representations that are safe to reuse.
-const cacheableStatuses = new Set([200, 203, 301, 308]);
+const cacheableStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([200, 203, 301, 308]);
 
 // Storage validation and cache-control synthesis must share this predicate.
 export function isCacheableStatus(status: number): boolean {
