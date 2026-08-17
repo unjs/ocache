@@ -76,9 +76,10 @@ function serObject(value: object, seen: Map<object, string>): string {
     }
     return `[${items}]`;
   }
-  const ctor = (value as { constructor?: { name?: string } }).constructor;
-  // Tag class instances, but keep common plain objects untagged.
-  if (ctor === Object || ctor === undefined) {
+  const ctor = (value as { constructor?: { name?: string } | null }).constructor;
+  // Tag class instances, but keep common plain objects untagged. Parsed input can carry an own
+  // `constructor` key, so a null one reads as a plain object like a null prototype does.
+  if (ctor === Object || ctor == null) {
     return serProperties("", value, seen);
   }
   if (value instanceof Date) {

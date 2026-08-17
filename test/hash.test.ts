@@ -252,4 +252,16 @@ describe("serialize", () => {
     const bare = Object.assign(Object.create(null), { a: 1 });
     expect(serialize(bare)).toBe(serialize({ a: 1 }));
   });
+
+  // Call arguments come from parsed payloads, where `constructor` is an ordinary key. Reading a
+  // tag off its value threw, which failed the call before the cached function ever ran.
+  it("renders an own `constructor` key as data instead of reading a tag off it", () => {
+    expect(() => serialize(JSON.parse('{"constructor":null}'))).not.toThrow();
+    for (const value of [null, 0, "x", undefined]) {
+      expect(serialize({ a: 1, constructor: value })).toBe(serialize({ constructor: value, a: 1 }));
+    }
+    // The key is still part of the identity, and no value of it can claim a class tag.
+    expect(serialize({ constructor: null })).not.toBe(serialize({ constructor: undefined }));
+    expect(serialize({ constructor: null })).not.toBe(serialize({}));
+  });
 });
