@@ -2325,6 +2325,52 @@ describe("storage", () => {
       expect(byBytes.get("c")).toBe(3);
     });
 
+    // A one-byte window keeps the whole ArrayBuffer alive, so charging `byteLength`
+    // would let `new Uint8Array(new ArrayBuffer(64 MB), 0, 1)` retain 64 MB for 1 byte.
+    it("charges a view for the buffer it retains, not for its window", () => {
+      const storage = createMemoryStorage({ maxBytes: 4096 });
+      storage.set("window", new Uint8Array(new ArrayBuffer(10_000), 0, 1));
+      expect(storage.get("window")).toBeNull();
+
+      // Views sharing one buffer are charged once, and a DataView is charged too.
+      const shared = new ArrayBuffer(3000);
+      const fits = createMemoryStorage({ maxBytes: 4096 });
+      fits.set("views", [new Uint8Array(shared), new DataView(shared)]);
+      expect(fits.get("views")).not.toBeNull();
+      fits.set("second", new Uint8Array(3000)); // 6000 > 4096 -> evicts "views"
+      expect(fits.get("views")).toBeNull();
+    });
+
+    // Charging only the key would make anything hidden behind a throwing getter free.
+    it("refuses a value whose size cannot be measured", () => {
+      const storage = createMemoryStorage({ maxBytes: 10_000 });
+      const throwingGetter = Object.defineProperty({}, "boom", {
+        get() {
+          throw new Error("no");
+        },
+        enumerable: true,
+      });
+      storage.set("a", "small");
+      storage.set("throws", throwingGetter);
+      expect(storage.get("throws")).toBeNull();
+      // The rest of the cache is untouched.
+      expect(storage.get("a")).toBe("small");
+
+      // Replacing a stored value with an unmeasurable one drops it, as an oversized set does.
+      storage.set("a", throwingGetter);
+      expect(storage.get("a")).toBeNull();
+
+      // `sizeOf` owns the charge, so it can still cache such a value.
+      const sized = createMemoryStorage({ maxBytes: 10_000, sizeOf: () => 16 });
+      sized.set("throws", throwingGetter);
+      expect(sized.get("throws")).toBe(throwingGetter);
+
+      // With no byte budget armed, nothing is measured.
+      const unbounded = createMemoryStorage({ maxBytes: 0 });
+      unbounded.set("throws", throwingGetter);
+      expect(unbounded.get("throws")).toBe(throwingGetter);
+    });
+
     it("estimates exotic values without throwing", () => {
       const storage = createMemoryStorage({ maxBytes: 10 * 1024 * 1024 });
       const cyclic: Record<string, unknown> = { name: "cyclic" };
@@ -2336,16 +2382,9 @@ describe("storage", () => {
           return "y";
         }
       }
-      const throwingGetter = Object.defineProperty({}, "boom", {
-        get() {
-          throw new Error("no");
-        },
-        enumerable: true,
-      });
       const values: unknown[] = [
         cyclic,
         new Instance(),
-        throwingGetter,
         new Uint8Array([1, 2, 3]),
         new DataView(new ArrayBuffer(8)),
         new ArrayBuffer(16),

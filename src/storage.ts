@@ -3,6 +3,8 @@ export interface StorageInterface {
   set<T = unknown>(key: string, value: T, opts?: { ttl?: number }): void | Promise<void>;
 }
 
+const SharedBuffer = globalThis.SharedArrayBuffer as SharedArrayBufferConstructor | undefined;
+
 /** Default entry limit for memory storage. */
 const DEFAULT_MEMORY_MAX_SIZE = 10_000;
 
@@ -25,6 +27,7 @@ export interface MemoryStorageOptions {
    * Defaults to `100 MB`.
    * Set `Infinity` or `0` to disable this limit.
    * An oversized entry replaces its old value with no stored value.
+   * An entry whose size cannot be measured is refused the same way.
    */
   maxBytes?: number;
 
@@ -33,7 +36,8 @@ export interface MemoryStorageOptions {
    *
    * Memory storage calls this hook only when {@link maxBytes} is active.
    * The built-in estimate does not count values deeper than eight levels.
-   * Provide `sizeOf` for custom deep shapes.
+   * Provide `sizeOf` for custom deep shapes and for values whose properties throw,
+   * which memory storage otherwise refuses to store.
    * Invalid results and errors use the built-in estimate.
    */
   sizeOf?: (value: unknown, key: string) => number;
@@ -83,10 +87,15 @@ export function createMemoryStorage(opts: MemoryStorageOptions = {}): StorageInt
       if (value === null || value === undefined) {
         return;
       }
-      const bytes = maxBytes ? entryBytes(key, value, sizeOf) : 0;
-      if (maxBytes && bytes > maxBytes) {
-        // Refuse oversized entries to prevent a single-write cache-flush attack.
-        return;
+      let bytes = 0;
+      if (maxBytes) {
+        const measured = entryBytes(key, value, sizeOf);
+        // Refuse oversized entries to prevent a single-write cache-flush attack, and
+        // unmeasurable ones because storing them at no charge removes the budget.
+        if (measured === undefined || measured > maxBytes) {
+          return;
+        }
+        bytes = measured;
       }
       const ttlMs = opts?.ttl ? opts.ttl * 1000 : undefined;
       map.set(key, {
@@ -124,7 +133,12 @@ const ENTRY_OVERHEAD = 64;
 const PROPERTY_OVERHEAD = 8;
 const MAX_ESTIMATE_DEPTH = 8;
 
-function entryBytes(key: string, value: unknown, sizeOf: MemoryStorageOptions["sizeOf"]): number {
+// Returns `undefined` when the value cannot be measured at all.
+function entryBytes(
+  key: string,
+  value: unknown,
+  sizeOf: MemoryStorageOptions["sizeOf"],
+): number | undefined {
   if (sizeOf) {
     try {
       const size = sizeOf(value, key);
@@ -138,8 +152,9 @@ function entryBytes(key: string, value: unknown, sizeOf: MemoryStorageOptions["s
   try {
     return estimateBytes(key) + ENTRY_OVERHEAD + estimateValue(value, 0, new Set());
   } catch {
-    // A getter or proxy may throw; charge the known key and entry overhead.
-    return estimateBytes(key) + ENTRY_OVERHEAD;
+    // A getter or proxy trap threw: the retained size is unknown, and charging only the
+    // key would make an arbitrarily large value free. The caller refuses the entry.
+    return undefined;
   }
 }
 
@@ -173,8 +188,16 @@ function estimateValue(value: unknown, depth: number, seen: Set<object>): number
     return 0;
   }
   seen.add(value);
-  // Use byte length for binary payloads.
-  if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) {
+  // A view retains its whole backing buffer, so charge the buffer, not the window.
+  if (ArrayBuffer.isView(value)) {
+    const buffer = value.buffer;
+    if (seen.has(buffer)) {
+      return 0;
+    }
+    seen.add(buffer);
+    return buffer.byteLength;
+  }
+  if (isBuffer(value)) {
     return value.byteLength;
   }
   const next = depth + 1;
@@ -197,6 +220,13 @@ function estimateValue(value: unknown, depth: number, seen: Set<object>): number
     }
   }
   return total;
+}
+
+// A `SharedArrayBuffer` is not an `ArrayBuffer`, and the global is absent in some runtimes.
+function isBuffer(value: object): value is ArrayBufferLike {
+  return (
+    value instanceof ArrayBuffer || (SharedBuffer !== undefined && value instanceof SharedBuffer)
+  );
 }
 
 function clearTimer(timers: Map<string, ReturnType<typeof setTimeout>>, key: string) {
