@@ -49,7 +49,7 @@ The `.agents/` layout matches `src/`. Before you edit an area, read the file tha
 
 Most findings in the deep dives came from violations of these rules.
 
-- **A handler may read exactly what the key covers.** `keyHeaderNames` controls both request narrowing in `request.ts` and key composition in `key.ts`. `filters.ts` computes the allowlist subsets once. Neither side may compute separate subsets. Narrowing uses an allowlist and removes undeclared headers. Only `safeHeaderNames` in `filters.ts` are exempt. Add a safe header only if no key could ever need to cover it.
+- **A handler may read exactly what the key covers.** `keyHeaderNames` controls both request narrowing in `request.ts` and key composition in `key.ts`. Both sides derive their allowlist subsets from the same pure helpers in `filters.ts`. Neither side may compute separate subsets. Narrowing uses an allowlist and removes undeclared headers. Only `safeHeaderNames` in `filters.ts` are exempt. Add a safe header only if no key could ever need to cover it.
 - **The storage decision and the advertisement must use the same predicates.** `validate.ts` uses `isCacheableStatus`, `hasVaryWildcard`, and `hasUnkeyedVary` to decide whether it may store a response. `entry.ts` uses the same predicates to decide whether it may advertise a lifetime. Never copy these checks into a call site.
 - **Never write an entry that has neither an expiry nor a storage TTL.** `storageTtl` is the only decision point. `remainingTtl` in `expireCache` derives from it.
 - **Storage must be per instance, never global.** Persistent backends also require deterministic keys across process restarts.

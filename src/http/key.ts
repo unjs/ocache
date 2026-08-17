@@ -3,7 +3,7 @@ import { hash } from "../hash.ts";
 import { escapeKey, escapeKeySegment } from "../cache.ts";
 
 import type { HandlerConfig } from "./config.ts";
-import { filterCookie, filteredSearch } from "./filters.ts";
+import { filterCookie, filterSearch } from "./filters.ts";
 
 import type { HTTPEvent } from "../types.ts";
 
@@ -23,7 +23,7 @@ export async function resolveKey<E extends HTTPEvent>(
     return escapeKeySegment(customKey);
   }
   const _url = event.url ?? new URL(event.req.url);
-  const _search = allowedQueryNames ? filteredSearch(config, event, _url) : _url.search;
+  const _search = allowedQueryNames ? filterSearch(_url, allowedQueryNames) : _url.search;
   const _path = _url.pathname + _search;
   let _pathname: string;
   try {

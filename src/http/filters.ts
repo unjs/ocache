@@ -1,9 +1,5 @@
 // Key composition and request narrowing must use these same filtered values.
 
-import type { HandlerConfig } from "./config.ts";
-
-import type { HTTPEvent } from "../types.ts";
-
 /**
  * Headers that remain visible unchanged without separate key components.
  *
@@ -21,22 +17,12 @@ export const safeHeaderNames = new Set([
   "x-request-id",
 ]);
 
-// Share one filtered query between key composition and URL rewriting.
-export function filteredSearch<E extends HTTPEvent>(
-  config: HandlerConfig<E>,
-  event: HTTPEvent,
-  url: URL,
-): string {
-  let search = config.searchCache.get(event);
-  if (search === undefined) {
-    search = filterSearch(url, config.allowedQueryNames!);
-    config.searchCache.set(event, search);
-  }
-  return search;
-}
-
-/** Returns an order-independent query with only allowed names. */
-function filterSearch(url: URL, names: string[]): string {
+/**
+ * Returns an order-independent query with only allowed names.
+ *
+ * Pure, so key composition and URL rewriting agree without shared per-request state.
+ */
+export function filterSearch(url: URL, names: string[]): string {
   const filtered = new URLSearchParams();
   for (const name of names) {
     for (const value of url.searchParams.getAll(name).sort()) {

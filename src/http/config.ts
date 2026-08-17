@@ -35,12 +35,6 @@ export interface HandlerConfig<E extends HTTPEvent> {
 
   /** Cache-status header name, or `undefined` to disable it. */
   statusHeader: string | undefined;
-
-  /** Filtered query values for this handler's requests. */
-  searchCache: WeakMap<HTTPEvent, string>;
-
-  /** Combined bypass results, evaluated once per request. */
-  bypassed: WeakMap<HTTPEvent, boolean>;
 }
 
 // Resolve the name before defaults so the default cannot hide the handler name.
@@ -96,8 +90,6 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
     keyHeaderNames,
     varyHeaderNames,
     statusHeader,
-    searchCache: new WeakMap<HTTPEvent, string>(),
-    bypassed: new WeakMap<HTTPEvent, boolean>(),
   };
 }
 

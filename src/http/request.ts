@@ -1,13 +1,13 @@
 // A handler may read only request data that its cache key covers.
 
 import type { HandlerConfig } from "./config.ts";
-import { filterCookie, filteredSearch, safeHeaderNames } from "./filters.ts";
+import { filterCookie, filterSearch, safeHeaderNames } from "./filters.ts";
 import { cacheableMethods } from "./key.ts";
 
 import type { HTTPEvent, ServerRequest } from "../types.ts";
 
 // Range requests bypass caching because the key does not cover byte ranges.
-function shouldBypassCache(event: HTTPEvent): boolean {
+export function isBypassedMethod(event: HTTPEvent): boolean {
   return !cacheableMethods.includes(event.req.method) || event.req.headers.has("range");
 }
 
@@ -16,20 +16,18 @@ export async function resolveBypass<E extends HTTPEvent>(
   config: HandlerConfig<E>,
   event: HTTPEvent,
 ): Promise<boolean> {
-  const bypass =
-    shouldBypassCache(event) || (await config.opts.shouldBypassCache?.(event as E)) === true;
-  config.bypassed.set(event, bypass);
-  return bypass;
+  return isBypassedMethod(event) || (await config.opts.shouldBypassCache?.(event as E)) === true;
 }
 
-// Leave bypassed requests unchanged, including their bodies and credentials.
+// Only reachable for a request `resolveBypass` already cleared; the built-in rule is
+// re-checked because it is pure, and rewriting a bypassed request would drop its body.
 // Do not restore mutations because a lazy response body may read the narrowed event later.
 // Throws `NarrowRequestError` when the event cannot be narrowed; never narrows partially.
 export function narrowRequest<E extends HTTPEvent>(
   config: HandlerConfig<E>,
   event: HTTPEvent,
 ): void {
-  if (config.bypassed.get(event) ?? shouldBypassCache(event)) {
+  if (isBypassedMethod(event)) {
     return;
   }
 
@@ -68,7 +66,7 @@ export function narrowRequest<E extends HTTPEvent>(
   let _reqUrl = event.req.url;
   if (allowedQueryNames) {
     const _filteredUrl = new URL(_url);
-    _filteredUrl.search = filteredSearch(config, event, _url);
+    _filteredUrl.search = filterSearch(_url, allowedQueryNames);
     _reqUrl = _filteredUrl.href;
   }
 

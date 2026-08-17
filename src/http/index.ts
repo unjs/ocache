@@ -99,8 +99,8 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     },
     // Serialization uses dynamic lifetimes from the complete entry.
     serialize: (entry) => serializeResponse(config, entry),
-    // Request narrowing reads this same combined bypass result.
-    shouldBypassCache: (event: HTTPEvent) => resolveBypass(config, event),
+    // `cachedHandler` answers bypassed requests itself, so this resolver never sees one.
+    shouldBypassCache: undefined,
     getKey: async (event: HTTPEvent) =>
       methodKey(await resolveKey(config, event), event.req.method),
     // Validate the serialized shape on both writes and reads.
@@ -109,9 +109,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     integrity: opts.integrity || hash([handler, integrityOpts(opts)]),
   };
 
-  // Bypassed calls return the live Response without serialization.
   const cachedFn = cachedFunction<Response>(async (event: HTTPEvent) => {
-    // Bypassed requests keep their credentials and complete query.
     narrowRequest(config, event);
 
     const rawValue = await handler(event as E);
@@ -126,9 +124,15 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       return handler(event);
     }
 
-    let cached: Response | ResponseCacheEntry;
+    // Bypassed requests keep their credentials and complete query, and their live
+    // response passes through unserialized: no buffering, no synthesized headers.
+    if (await resolveBypass(config, event)) {
+      return toResponse(await handler(event), event);
+    }
+
+    let response: ResponseCacheEntry;
     try {
-      cached = (await cachedFn(event))! as Response | ResponseCacheEntry;
+      response = (await cachedFn(event))! as unknown as ResponseCacheEntry;
     } catch (error) {
       if (!(error instanceof NarrowRequestError)) {
         throw error;
@@ -142,12 +146,6 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       return toResponse(await handler(event), event);
     }
-
-    // Return bypassed responses without cache headers or body buffering.
-    if (cached instanceof Response) {
-      return cached;
-    }
-    const response = cached;
 
     if (
       handleCacheHeaders(event, {
