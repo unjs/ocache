@@ -5432,6 +5432,52 @@ describe("defineCachedHandler", () => {
     expect(await b.text()).toBe("site:canonical");
   });
 
+  it("normalizes host to the keyed URL authority instead of the raw header", async () => {
+    const seen: (string | null)[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        const host = event.req.headers.get("host");
+        seen.push(host);
+        return new Response(`site:${host ?? "canonical"}`);
+      },
+      { maxAge: 10 },
+    );
+
+    // `makeEvent` resolves every URL to `http://localhost`, the shape of an adapter that
+    // builds `event.url` from the connection (or a fixed base) rather than from `Host`. Only
+    // that authority is in the key, so a raw `Host` reaching the handler is the h3#1524
+    // cross-tenant replay through the one header the allowlist still exempts.
+    const a = (await handler(makeEvent(path, { headers: { host: "a.example" } }))) as Response;
+    const b = (await handler(makeEvent(path, { headers: { host: "b.example" } }))) as Response;
+
+    expect(seen).toEqual(["localhost"]);
+    expect(await a.text()).toBe("site:localhost");
+    expect(await b.text()).toBe("site:localhost");
+  });
+
+  it("forwards the raw host when varies declares it, which keys the value", async () => {
+    const seen: (string | null)[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        const host = event.req.headers.get("host");
+        seen.push(host);
+        return new Response(`site:${host ?? "canonical"}`);
+      },
+      { maxAge: 10, varies: ["host"] },
+    );
+
+    const a = (await handler(makeEvent(path, { headers: { host: "a.example" } }))) as Response;
+    const b = (await handler(makeEvent(path, { headers: { host: "b.example" } }))) as Response;
+
+    // Declared ⇒ keyed ⇒ visible unchanged, the same contract every `varies` header has.
+    expect(seen).toEqual(["a.example", "b.example"]);
+    expect(await a.text()).toBe("site:a.example");
+    expect(await b.text()).toBe("site:b.example");
+    expect(b.headers.get("vary")).toContain("host");
+  });
+
   it("forwards host and the propagation headers, but not user-agent or baggage", async () => {
     const seen: Array<Record<string, string | null>> = [];
     const path = uniquePath();

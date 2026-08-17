@@ -35,10 +35,19 @@ export function narrowRequest<E extends HTTPEvent>(
 
   const { keyHeaderNames, allowedCookieNames, allowedQueryNames } = config;
 
+  // The same URL `resolveKey` derives the keyed authority from.
+  const _url = event.url ?? new URL(event.req.url);
+  const _hostIsKeyed = keyHeaderNames.includes("host");
+
   // Remove every header that is neither keyed nor explicitly safe.
   const filteredHeaders = [...event.req.headers.entries()].flatMap(([key, value]) => {
     const name = key.toLowerCase();
     if (name !== "cookie") {
+      // Undeclared `host` is covered by the keyed authority, not by its raw value,
+      // which the adapter may never have resolved from; replace it below.
+      if (name === "host" && !_hostIsKeyed) {
+        return [];
+      }
       return keyHeaderNames.includes(name) || safeHeaderNames.has(name)
         ? [[key, value] as [string, string]]
         : [];
@@ -50,11 +59,14 @@ export function narrowRequest<E extends HTTPEvent>(
     const cookie = filterCookie(value, allowedCookieNames);
     return cookie ? [["cookie", cookie] as [string, string]] : [];
   });
+  // An authority-less URL (`file:`, `data:`) leaves the handler no host at all.
+  if (!_hostIsKeyed && _url.host) {
+    filteredHeaders.push(["host", _url.host]);
+  }
 
   // Remove query values that the key does not cover.
   let _reqUrl = event.req.url;
   if (allowedQueryNames) {
-    const _url = event.url ?? new URL(event.req.url);
     const _filteredUrl = new URL(_url);
     _filteredUrl.search = filteredSearch(config, event, _url);
     _reqUrl = _filteredUrl.href;

@@ -5,14 +5,14 @@ import type { HandlerConfig } from "./config.ts";
 import type { HTTPEvent } from "../types.ts";
 
 /**
- * Headers that remain visible without separate key components.
+ * Headers that remain visible unchanged without separate key components.
  *
- * URL authority already covers `host`.
  * Conditional headers can produce only non-storable responses.
  * Trace headers support propagation but must not affect rendered output.
+ *
+ * `host` is not one of them: `request.ts` replaces it with the keyed URL authority.
  */
 export const safeHeaderNames = new Set([
-  "host",
   "if-modified-since",
   "if-none-match",
   "traceparent",
