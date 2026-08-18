@@ -79,6 +79,7 @@ describe("createBlobStorage", () => {
       expect(frame.version).toBe(1);
       // A payload, and it is text rather than bytes.
       expect(frame.flags).toBe(1);
+      expect(frame.flags & 0b0001_1100).toBe(0);
       expect(frame.metadata.payload).toBe("value.body");
       // The body left the JSON entirely, so it pays no escaping in either direction.
       expect(frame.metadata.value.body).toBeUndefined();
@@ -240,6 +241,34 @@ describe("createBlobStorage", () => {
 
       expect(await fn()).toBe("value");
       // The entry was not served and not thrown over: the value was resolved again.
+      expect(calls).toBe(2);
+    });
+
+    // Frames using unsupported fields must miss.
+    it.each([
+      ["a reserved compression id", 0b0000_0100],
+      ["the highest reserved compression id", 0b0001_1100],
+      ["a bit outside every defined field", 0b0010_0000],
+    ])("re-resolves a frame carrying %s", async (_label, bits) => {
+      const { raw, storage } = blobBackend();
+      let calls = 0;
+      const fn = cachedFunction(
+        () => {
+          calls++;
+          return "value";
+        },
+        { maxAge: 10, name: `blobFlag${bits}`, storage },
+      );
+
+      await fn();
+      expect(calls).toBe(1);
+      for (const [key, frame] of raw) {
+        const tagged = new Uint8Array(frame);
+        tagged[3]! |= bits;
+        raw.set(key, tagged);
+      }
+
+      expect(await fn()).toBe("value");
       expect(calls).toBe(2);
     });
 

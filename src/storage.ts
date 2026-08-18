@@ -307,6 +307,16 @@ const FLAG_PAYLOAD = 1;
 /** That payload is bytes rather than UTF-8 text. */
 const FLAG_PAYLOAD_BYTES = 2;
 
+/** Reserved compression id field, bits 2-4. Only `0` is implemented. */
+const COMPRESSION_MASK = 0b0001_1100;
+const COMPRESSION_SHIFT = 2;
+
+// Reserved: 0 none, 1 gzip, 2 deflate-raw, 3 brotli, 4 zstd, 5-7 unassigned.
+const COMPRESSION_NONE = 0;
+
+/** All bits defined by this frame layout. Unknown bits must miss. */
+const ALL_FLAGS = FLAG_PAYLOAD | FLAG_PAYLOAD_BYTES | COMPRESSION_MASK;
+
 const utf8Encoder = /* @__PURE__ */ new TextEncoder();
 // Fatal, so a corrupted payload misses instead of decoding to replacement characters.
 const utf8Decoder = /* @__PURE__ */ new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -369,7 +379,7 @@ function toBytes(value: BlobValue): Uint8Array {
 
 /** Returns the entry as one frame, with its declared payload appended after the metadata. */
 function encodeFrame(entry: CacheEntry): Uint8Array {
-  let flags = 0;
+  let flags = COMPRESSION_NONE << COMPRESSION_SHIFT;
   let payload: Uint8Array | undefined;
   let metadata: unknown = entry;
 
@@ -427,6 +437,12 @@ function decodeFrame(frame: Uint8Array): CacheEntry | null {
     return null;
   }
   const flags = frame[3]!;
+  if ((flags & ~ALL_FLAGS) !== 0) {
+    return null;
+  }
+  if ((flags & COMPRESSION_MASK) >> COMPRESSION_SHIFT !== COMPRESSION_NONE) {
+    return null;
+  }
   const headerLength = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(4);
   const payloadStart = FRAME_HEADER_BYTES + headerLength;
   if (payloadStart > frame.length) {
