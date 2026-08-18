@@ -2,6 +2,16 @@
 
 `defineCachedHandler` uses `cachedFunction<Response>` and divides work at the `serialize` boundary. The **resolver** narrows the request and returns the handler's live `Response`. Internal **`serialize`** consumes the body, creates `etag`, `cache-control`, and `Vary`, removes every `Set-Cookie`, and creates the stored `ResponseCacheEntry`. **`transform`** rebuilds a servable response and adds the cache-status header on read. `CachedEventHandlerOptions` uses `Omit` for all three hooks so caller options cannot conflict with this internal use.
 
+## What the default `toResponse` accepts
+
+The default conversion (`http/index.ts`) refuses any value a `Response` cannot carry, and throws `UnsupportedValueError`. It accepts a `Response`, a primitive (`string`, `number`, `boolean`, `bigint`) as a text body, and the body types `Response` holds as-is: any `ArrayBuffer` view, `ArrayBuffer`, `Blob`, `FormData`, `URLSearchParams`, and `ReadableStream`. Everything else — plain objects, arrays, `Map`, `null`, `undefined` — throws.
+
+The old default was `new Response(String(value))` for every non-`Response`. An h3-style handler returning a plain object stored the body `[object Object]` as a 200 with `content-type: text/plain`, a synthesized `cache-control`, and a valid weak `etag` for that text. Nothing on the storage path rejects it: the status is cacheable and the body is a non-empty string. The handler then did not run again for the rest of the lifetime, so the corruption was invisible at the origin and served from cache to every client, and `swr` extended it past `maxAge`. A byte view failed the same way through `String(bytes)` — the comma-joined digits, which is also why the accepted set includes body types rather than only primitives.
+
+Throwing is the fail-safe because the cache cannot serialize an object without inventing a content type, and a framework that has one connects it through `toResponse`. The throw happens inside the resolver, before `serialize`, so no entry is written; `cache.ts` evicts the key as it does for any failed resolution, and the request fails once instead of the cache replaying a wrong body. `undefined` throws for the same reason: a handler that stages its result on `event.res` needs the framework's `toResponse`, and "empty body" would be a guess.
+
+Keep the accepted set aligned with what `new Response(body)` treats as a body. Adding a type here means the cache stores it; a type left out fails loudly rather than silently stringifying.
+
 ## What may be stored
 
 Use one status check: `isCacheableStatus` over `{200, 203, 301, 308}`. These statuses provide a complete, reusable representation of the request. This check replaced three overlapping rules: `status >= 400`, `nullBodyStatuses`, and the implicit rule that anything below 400 was valid. `serialize` also uses the shared check. Every exclusion is required:

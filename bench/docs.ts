@@ -30,7 +30,7 @@ interface BenchFile {
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATE = join(ROOT, "bench/docs.md");
 const CHART_STAGE = join(ROOT, "bench/chart.ts");
-const PAGE = join(ROOT, "docs/11.benchmarks.md");
+const PAGE = join(ROOT, "docs/docs/11.benchmarks.md");
 
 // -- formatting -------------------------------------------------------------------------
 
