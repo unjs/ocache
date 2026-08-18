@@ -12,8 +12,8 @@ importers:
         specifier: ^0.0.4
         version: 0.0.4(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3)
       undocs:
-        specifier: npm:undocs-nightly@0.10.1-20260818-084150-1428cc3
-        version: undocs-nightly@0.10.1-20260818-084150-1428cc3(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(h3@2.0.1-rc.26(crossws@0.4.10(srvx@0.11.22)))(jiti@2.7.0)(lightningcss@1.33.0)(ocache@0.2.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3)
+        specifier: npm:undocs-nightly@0.10.1-20260818-142856-3b64b18
+        version: undocs-nightly@0.10.1-20260818-142856-3b64b18(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(h3@2.0.1-rc.26(crossws@0.4.10(srvx@0.11.22)))(jiti@2.7.0)(lightningcss@1.33.0)(ocache@0.2.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3)
 
 packages:
 
@@ -1274,8 +1274,8 @@ packages:
   ufo@1.6.4:
     resolution: {integrity: sha512-JFNbkD1Svwe0KvGi8GOeLcP4kAWQ609twvCdcHxq1oSL8svv39ZuSvajcD8B+5D0eL4+s1Is2D/O6KN3qcTeRA==}
 
-  undocs-nightly@0.10.1-20260818-084150-1428cc3:
-    resolution: {integrity: sha512-GmamYYEHrd6dkVYIY/YTbfA79s6MXrxJkWhACB/9b1j5CLTKK145AeKV+Pn7rHSwjsgX5ERkYoylg/NceEXvdw==}
+  undocs-nightly@0.10.1-20260818-142856-3b64b18:
+    resolution: {integrity: sha512-qaODDgcilXCyeiAdP+qUKfJZiEC/FUPAVJFa6RuHqa98fP00Dx6CtReGwE/n8v8k8HDfAmX+zZNvAKiv9rgPSA==}
     hasBin: true
 
   unenv@2.0.0-rc.24:
@@ -2491,7 +2491,7 @@ snapshots:
 
   ufo@1.6.4: {}
 
-  undocs-nightly@0.10.1-20260818-084150-1428cc3(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(h3@2.0.1-rc.26(crossws@0.4.10(srvx@0.11.22)))(jiti@2.7.0)(lightningcss@1.33.0)(ocache@0.2.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3):
+  undocs-nightly@0.10.1-20260818-142856-3b64b18(@oxc-project/types@0.143.0)(chokidar@5.0.0)(csstype@3.2.3)(dotenv@17.4.2)(giget@3.3.1)(h3@2.0.1-rc.26(crossws@0.4.10(srvx@0.11.22)))(jiti@2.7.0)(lightningcss@1.33.0)(ocache@0.2.0)(oxc-parser@0.116.0(@emnapi/core@1.11.3)(@emnapi/runtime@1.11.3))(rolldown@1.2.3):
     dependencies:
       '@floating-ui/dom': 1.8.0
       '@fontsource-variable/geist': 5.3.0
