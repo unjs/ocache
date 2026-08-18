@@ -1116,6 +1116,39 @@ describe("handler cache key name resolution", () => {
   });
 });
 
+// The readable prefix in front of the hash is cosmetic — the hash covers authority and path —
+// but changing how it renders moves every stored key, so it is pinned here. `resolveKey` reads
+// `url.pathname` rather than parsing a second URL to strip the query; these are the bytes that
+// equivalence has to preserve.
+describe("handler cache key bytes", () => {
+  it.each([
+    ["/", "/cache:handlers:pinned:index.I_gqi1bizF1F0MVqXSaZkH53Z8wpybgvG250Q4DiqXc.json"],
+    [
+      "/dashboard",
+      "/cache:handlers:pinned:dashboard.laS1vgh5mhUtNhuNebDEvAKfFhcg_Ui2bmATmS7OD8c.json",
+    ],
+    [
+      // Percent escapes decode before the prefix is cut, so this is not `bloghello20world`.
+      "/blog/hello%20world",
+      "/cache:handlers:pinned:bloghelloworld.ADm_DZ5_WI0xkMgc3hWpdHxKgBpNfS5cCu_Ud0LVlOc.json",
+    ],
+    // The query stays out of the prefix and inside the hash.
+    ["/a?b=1", "/cache:handlers:pinned:a.gSn7sLLSZNsQdqcP-bHlQXNF3xJh69t8b4iUR0_boQI.json"],
+    [
+      "/products/42",
+      "/cache:handlers:pinned:products42.tFNI--lUMujksKjTbUEA9IW3PlSjHGo2JeJUlzvAEoI.json",
+    ],
+  ])("keys %s to a stable string", async (path, expected) => {
+    const handler = _defineCachedHandler(() => new Response("v"), {
+      name: "pinned",
+      maxAge: 60,
+      storage: createMemoryStorage(),
+    });
+    const keys = await handler.resolveKeys({ req: new Request(`https://acme.example${path}`) });
+    expect(keys[0]).toBe(expected);
+  });
+});
+
 // `buildCacheKey` joins `[base, group, name, key]` with `:` and used to escape everything but
 // `name` — harmless while every handler keyed as the literal `_`, but `name` now comes from
 // `fn.name`, which is not a controlled alphabet (`named.bind(null)` alone yields `bound named`).

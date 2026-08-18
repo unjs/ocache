@@ -21,8 +21,8 @@ This matters more than it sounds. Two earlier attempts produced numbers that wer
 noisy but **wrong in direction**:
 
 - A single-pass `mitata` run reported a custom `getKey` as the _slowest_ handler variant.
-  Paired measurement shows it is the _fastest_ by 9 µs. Finding 1 below is the opposite of
-  what the first run said.
+  Paired measurement shows it is the _fastest_, by several microseconds. Finding 1 below is
+  the opposite of what the first run said.
 - Measuring each side of the comparison in its own loop and taking each side's own minimum
   produced a hit-cost curve that _fell_ as the payload grew, which cannot be true. This is
   fixed in `harness/calibrate.ts`; the fix is why the curve is now flat.
@@ -47,37 +47,61 @@ Absolutes drift between sessions: the same plain configuration read +25.8 µs in
 run that produced findings 3 and 4. Deltas within one run are stable, so compare those, and
 never a delta from one run against an absolute from another.
 
-## 1. Default key derivation is ~9 µs, and a third of it is cosmetic
+Every `+24 µs` plain figure below predates finding 1's fix, which took roughly 2 µs off it.
+The deltas measured **against** plain — findings 4 and 9 — are unaffected, because the fix
+is on a path every one of those rows shares.
 
-**measured, partly prototyped**
+## 1. Default key derivation is ~2.5 µs, and the cosmetic third of it is now gone
 
-| configuration                           | added per hit |
-| --------------------------------------- | ------------: |
-| plain (default key derivation)          |      +24.3 µs |
-| `getKey: () => "k"`                     |      +15.1 µs |
-| `getKey: () => "p/42"` (needs escaping) |      +20.5 µs |
+**measured, fixed**
 
-Supplying any custom key skips `resolveKey`, which is worth 9 µs — 38% of the total
-overhead. Within it, `key.ts` builds a **second `URL`** purely to produce the readable
-prefix in front of the hash:
+The earlier version of this finding read the plain-versus-custom-key gap at the handler
+level and attributed all of it to `resolveKey`. Timing `resolveKey` on its own says
+otherwise, and the correction matters because the 9 µs headline was the number anyone would
+have acted on:
+
+| configuration                     | `resolveKey` alone | handler, added per hit |
+| --------------------------------- | -----------------: | ---------------------: |
+| plain, before                     |           +2.55 µs |               +23.4 µs |
+| plain, after                      |       **+1.81 µs** |           **+20.1 µs** |
+| `getKey: () => "k"`               |            ~0.0 µs |               +15.3 µs |
+| `getKey: () => "p/42"` (escaping) |           +0.82 µs |               +18.7 µs |
+
+`resolveKey` alone is paired against event construction at 20 000 iterations; the handler
+column is the 4 000-iteration pairing this document opens by describing, run with both
+implementations loaded into **one process** so the two rows share a baseline and a heap.
+
+So default key derivation costs **2.5 µs**, not 9, and the escaping path costs **1.2 µs**,
+not 5.4. The advice that a custom `product42` is cheaper than `product:42` still holds; the
+size of the gap does not. The rest of the 5-7 µs between plain and a one-character custom
+key is downstream of derivation — the derived key is 53 characters where `"k"` is one, and
+it is rebuilt per call — but each part of that sits at the handler pairing's noise floor.
+Do not quote it as key-derivation cost.
+
+**What changed.** `key.ts` built a **second `URL`** purely to produce the readable prefix in
+front of the hash:
 
 ```ts
 escapeKey(decodeURI(new URL(_path, "http://localhost").pathname)).slice(0, 16) || "index";
 ```
 
-The hash already covers `[authority, path]`, so this parse contributes nothing to key
-identity — it only makes stored keys readable. Replacing it with a substring to the first
-`?` measured **24.3 → 22.0 µs**, a 2.3 µs (9%) saving, with keys still unique across paths
-and hosts.
+The hash already covers `[authority, path]`, so that parse contributed nothing to key
+identity. It now reads `_url.pathname`, which is the same string: `pathname` is already
+parsed and cannot hold a raw `?`, and `escapeKey` strips the leading `/` that re-parsing
+added to an opaque path. Checked over 193 462 http(s) URLs — percent escapes, dot segments,
+backslashes, non-ASCII — with **zero** differing prefixes, so unlike the substring variant
+this document previously proposed, **no stored entry moves**. `test/index.test.ts` now pins
+the key bytes. `resolveKey` also returns the hashed path directly when no header and no
+cookie is keyed, which is the default, instead of joining a one-element array.
 
-The catch is that it is a key-format change: percent-encoded paths get a different prefix
-(`x20yz` rather than `xyz`), so every existing entry misses once after deploy. Worth doing
-alongside another format change, not on its own.
+Two smaller things were measured and left alone. Dropping `decodeURI` as well saves a
+further 0.16 µs and _would_ move every percent-encoded path's prefix — not worth a format
+change. The `hash([authority, _path])` itself is 0.94 µs of the remaining 1.81, and it is
+identity, not cosmetics.
 
-The escaping path costs a further 5.4 µs: a custom key containing any non-word character
-fails the `escapeKey(raw) === raw` check in `escapeKeySegment` and pays an extra `hash`.
-Callers who supply their own keys should know that `product42` is meaningfully cheaper than
-`product:42`.
+Handler-level deltas here are order-sensitive by ±2 µs: whichever variant runs second in a
+process reads high, which is the positional artefact described above. Both orders were run;
+the plain row came out lower after the change in all seven runs, by 1.2-5.8 µs.
 
 ## 2. Binary bodies pay base64 on every hit, and far more on every store
 
@@ -319,7 +343,10 @@ paired harness.
 
 ## Reproducing
 
-Findings 1, 4, 6 and 9 come from paired measurements of `defineCachedHandler` variants;
+Findings 4, 6 and 9 come from paired measurements of `defineCachedHandler` variants;
+finding 1 from those plus a direct pairing of `resolveKey` against event construction, and
+an A/B that imports the old and the new `key.ts` into one process — attributing a handler
+delta to one function is what the first version of that finding got wrong;
 finding 2 from paired hit/store timings plus direct timing of the encode and decode
 functions; finding 3 from the same pairing with a fresh key per call, so every call stores;
 finding 5 from `new Response` with the body held constant; finding 7 from a store against a

@@ -29,16 +29,21 @@ export async function resolveKey<E extends HTTPEvent>(
   const _path = _url.pathname + _search;
   let _pathname: string;
   try {
-    _pathname =
-      escapeKey(decodeURI(new URL(_path, "http://localhost").pathname)).slice(0, 16) || "index";
+    // `_url.pathname` is already the parsed path, so this reads it rather than parsing a
+    // second URL to strip the query. `decodeURI` still throws on a malformed escape.
+    _pathname = escapeKey(decodeURI(_url.pathname)).slice(0, 16) || "index";
   } catch {
     _pathname = "-";
   }
   // Include resolved URL authority to isolate hosts served by one handler.
   const _hashedPath = `${_pathname}.${hash([authority(_url), _path])}`;
-  const _headers = keyHeaderNames
-    .map((header) => [header, event.req.headers.get(header)])
-    .map(([name, value]) => `${escapeKey(name as string)}.${hash(value)}`);
+  // Most handlers key on neither, and a lone component joins to itself.
+  if (keyHeaderNames.length === 0 && !allowedCookieNames) {
+    return _hashedPath;
+  }
+  const _headers = keyHeaderNames.map(
+    (header) => `${escapeKey(header)}.${hash(event.req.headers.get(header))}`,
+  );
   // Hash the sorted cookie subset, never the raw header.
   const _cookies = allowedCookieNames
     ? [`cookie.${hash(filterCookie(event.req.headers.get("cookie"), allowedCookieNames))}`]
