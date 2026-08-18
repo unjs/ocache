@@ -8,4 +8,4 @@ allowBuilds:
   "@parcel/watcher": true
   vue-demi: false
 minimumReleaseAgeExclude:
-  - undocs-nightly@0.10.1-20260810-080950-9339f88 || 0.10.1-20260817-221446-007ca31
+  - undocs-nightly@0.10.1-20260810-080950-9339f88 || 0.10.1-20260817-221446-007ca31 || 0.10.1-20260818-084150-1428cc3

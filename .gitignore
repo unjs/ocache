@@ -7,3 +7,7 @@ dist
 tsconfig.tsbuildinfo
 *.log*
 *.env*
+.deepsec
+# Local preview output of `pnpm bench:chart`. The published charts are inlined into
+# `docs/11.benchmarks.md` by `pnpm bench:docs`, so nothing here is shipped.
+bench/charts

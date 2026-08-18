@@ -21,6 +21,10 @@
     ".": "./dist/index.mjs"
   },
   "scripts": {
+    "bench": "node --expose-gc bench/index.ts",
+    "bench:chart": "node bench/chart.ts",
+    "bench:docs": "node bench/docs.ts",
+    "bench:micro": "node --expose-gc bench/micro.ts",
     "build": "obuild",
     "bundle": "node test/bundle.ts",
     "dev": "vitest dev",

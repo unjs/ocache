@@ -28,6 +28,12 @@ src/
 lib/                # Shipped as-is (not built): the two arms of the `#crypto` import
 ├── digest.node.mjs # `node` condition -> node:crypto
 └── digest.mjs      # default condition -> portable sha256
+
+bench/              # Two layers: what a hit costs, and what a hit buys
+├── micro.ts        # mitata: per-call cost of the hit path, instant origin + Map storage
+├── index.ts        # CLI + load runner over the scenarios
+├── harness/        # clock, origin, storage profiles, driver, metrics, report, calibrate
+└── scenarios/      # 5 handler + 2 function workloads
 ```
 
 Each mechanism belongs in the module whose name describes it. `http/index.ts` contains only the connection to `cachedFunction`, the `CacheOptions` hooks, the resolver, the serve path, and the revalidation helpers. The `http/` dependency graph is a DAG. `cache-control.ts`, `vary.ts`, `conditional.ts`, and `config.ts` do not import from the directory.
@@ -61,6 +67,7 @@ Most findings in the deep dives came from violations of these rules.
 
 - Never edit content inside `<!-- automd -->` in README.md. `pnpm fmt` generates this content.
 - User guides are in `docs/`. If a behavior change changes a documented string or default, update the relevant guide. `8.cache-control.md` and `9.isr.md` are closest to these internals.
+- **`docs/11.benchmarks.md` is generated. Never edit it.** Edit the prose in `bench/docs.md` and run `pnpm bench:docs`. Every number on that page is substituted from a results JSON, so hand-editing it makes the page disagree with the run it claims to report.
 
 ## Dev Commands
 
@@ -68,6 +75,30 @@ Most findings in the deep dives came from violations of these rules.
 - `pnpm typecheck` — `tsc --noEmit --skipLibCheck`
 - `pnpm lint` — `oxlint` + `oxfmt --check`
 - `pnpm build` — build with obuild
+- `pnpm bench` — load scenarios, baseline vs cached, storage sweep. See `bench/README.md`
+- `pnpm bench:micro` — per-call cost of the hit path
+- `pnpm bench:chart` — results JSON -> SVG charts, plus the site's `docs/.docs/public/bench.svg`
+- `pnpm bench:docs` — results JSON -> `docs/11.benchmarks.md`, charts inlined
+
+## Benchmarks
+
+`bench/README.md` documents the method; `bench/findings.md` records what it has shown so
+far. Three stages: `bench/index.ts` produces results JSON, `bench/chart.ts` renders it to
+SVG, `bench/docs.ts` fills `bench/docs.md` and writes the docs page.
+
+`bench/chart.ts` also writes the landing summary the docs site links,
+`docs/.docs/public/bench.svg` (the `combined` chart; `--no-landing` skips it). It is
+generated: re-run the stage instead of editing it, and keep the path stable because the
+site links it.
+
+Two rules matter when changing anything there: the driver is open-loop and measures latency
+from the intended arrival time, and every configuration runs from the same seed so a
+baseline row and a cached row differ only in whether ocache is in the path. A change that
+makes the numbers better by weakening either one is not a result.
+
+Micro-measurements here must be paired and GC-controlled. Single-pass timing has produced
+results that were wrong in direction, not merely noisy — see the method section of
+`bench/findings.md` before trusting or adding a number.
 
 ## Design Decisions
 
