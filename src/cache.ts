@@ -26,11 +26,12 @@ type PendingResolution<T> = {
 
 // A purge must reach the in-flight resolutions of the instance it targets.
 // This registry keeps that channel off the public `CachedFunction` type.
-const fences = new WeakMap<object, (key: string) => void>();
+// Allocated on the first definition, so importing the module allocates nothing.
+let fences: WeakMap<object, (key: string) => void> | undefined;
 
 /** Stops in-flight resolutions for `key` from writing after a purge. Internal. */
 export function fencePending(cachedFn: object, key: string): void {
-  fences.get(cachedFn)?.(key);
+  fences?.get(cachedFn)?.(key);
 }
 
 export type CachedFunction<T, ArgsT extends unknown[]> = {
@@ -346,7 +347,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   };
 
   // Cancel the storage write of every resolution that started before the purge.
-  fences.set(cachedFn, (key: string) => {
+  (fences ??= new WeakMap()).set(cachedFn, (key: string) => {
     const current = pending.get(key);
     if (current) {
       current.fenced = true;
