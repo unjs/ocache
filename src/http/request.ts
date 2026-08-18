@@ -1,5 +1,6 @@
 // A handler may read only request data that its cache key covers.
 
+import { resolveSignal } from "../cache.ts";
 import type { HandlerConfig } from "./config.ts";
 import { filterCookie, filterSearch } from "./filters.ts";
 import { cacheableMethods } from "./key.ts";
@@ -78,6 +79,9 @@ export function narrowRequest<E extends HTTPEvent>(
     const req: ServerRequest = new Request(_reqUrl, {
       method: originalReq.method,
       headers: filteredHeaders,
+      // The resolution timeout cancels shared work, never the client: one resolution
+      // serves every deduplicated waiter. Undefined leaves a signal that never aborts.
+      signal: resolveSignal(event),
     });
     // Preserve adapter runtime context.
     if ((originalReq as any).runtime) {

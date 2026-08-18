@@ -8239,4 +8239,107 @@ describe("maxResolveTime", () => {
     expect(armed.length).toBe(25);
     expect(armed.every((handle) => cleared.has(handle))).toBe(true);
   });
+
+  // Rejecting the waiters frees the key; aborting the signal frees whatever the abandoned
+  // resolver is still holding open. The handler path is where that signal is reachable:
+  // `event.req.signal` on the narrowed request is the resolution's own, not the client's.
+  describe("cancellation", () => {
+    const makeEvent = () => ({ req: new Request("http://localhost/deadline") });
+
+    it("aborts the handler's request signal at the deadline", async () => {
+      let signal: AbortSignal | undefined;
+      const handler = defineCachedHandler(
+        (event: HTTPEvent) => {
+          signal = event.req.signal;
+          return new Promise<Response>(() => {});
+        },
+        { maxAge: 10, name: "abortAtDeadline", maxResolveTime: 0.02 },
+      );
+
+      await expect(handler(makeEvent())).rejects.toThrow(/timed out/);
+      expect(signal!.aborted).toBe(true);
+      // The reason is the very error the waiters saw, so a `fetch` rejects with it too.
+      expect((signal!.reason as Error).name).toBe("TimeoutError");
+    });
+
+    // The deadline rejects before it aborts, so a resolver that fails fast on abort cannot
+    // change the error its waiters see.
+    it("rejects waiters with TimeoutError even when the handler fails on abort", async () => {
+      const handler = defineCachedHandler(
+        (event: HTTPEvent) =>
+          new Promise<Response>((_resolve, reject) => {
+            event.req.signal.addEventListener("abort", () => {
+              const error = new Error("The operation was aborted.");
+              error.name = "AbortError";
+              reject(error);
+            });
+          }),
+        { maxAge: 10, name: "abortRejects", maxResolveTime: 0.02 },
+      );
+
+      await expect(handler(makeEvent())).rejects.toMatchObject({ name: "TimeoutError" });
+    });
+
+    it("leaves the signal unaborted for a resolution that settles", async () => {
+      let signal: AbortSignal | undefined;
+      const handler = defineCachedHandler(
+        (event: HTTPEvent) => {
+          signal = event.req.signal;
+          return new Response("ok");
+        },
+        { maxAge: 10, name: "abortNever", maxResolveTime: 0.02 },
+      );
+
+      expect(await ((await handler(makeEvent())) as Response).text()).toBe("ok");
+      // Well past the deadline: the cleared timer can no longer abort a finished resolution.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(signal!.aborted).toBe(false);
+    });
+
+    it.each([0, Number.POSITIVE_INFINITY])(
+      "%s disables the deadline and arms no abort",
+      async (timeout) => {
+        let signal: AbortSignal | undefined;
+        const handler = defineCachedHandler(
+          (event: HTTPEvent) => {
+            signal = event.req.signal;
+            return new Response("ok");
+          },
+          { maxAge: 10, name: `abortDisabled${timeout}`, maxResolveTime: timeout },
+        );
+
+        expect(await ((await handler(makeEvent())) as Response).text()).toBe("ok");
+        await new Promise((r) => setTimeout(r, 30));
+        expect(signal!.aborted).toBe(false);
+      },
+    );
+
+    // One resolution serves every deduplicated waiter, so the leader's client disconnecting
+    // must not cancel work the followers are waiting for. The client's signal never crosses
+    // into the narrowed request.
+    it("does not forward the client's signal", async () => {
+      const client = new AbortController();
+      let signal: AbortSignal | undefined;
+      let release: ((value: Response) => void) | undefined;
+      const handler = defineCachedHandler(
+        (event: HTTPEvent) => {
+          signal = event.req.signal;
+          return new Promise<Response>((resolve) => (release = resolve));
+        },
+        { maxAge: 10, name: "clientAbort", maxResolveTime: 10 },
+      );
+
+      const call = handler({
+        req: new Request("http://localhost/deadline", { signal: client.signal }),
+      });
+      await vi.waitFor(() => expect(signal).toBeDefined());
+
+      client.abort();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(signal!.aborted).toBe(false);
+
+      release!(new Response("ok"));
+      expect(await ((await call) as Response).text()).toBe("ok");
+    });
+  });
 });

@@ -29,6 +29,16 @@ type PendingResolution<T> = {
 // Allocated on the first definition, so importing the module allocates nothing.
 let fences: WeakMap<object, (key: string) => Promise<void> | undefined> | undefined;
 
+// The narrowed request of a resolution carries that resolution's deadline signal.
+// This registry keeps that channel off the resolver signature, which passes only the
+// caller's arguments. Allocated on the first deadline, like `fences`.
+let resolveSignals: WeakMap<HTTPEvent, AbortSignal> | undefined;
+
+/** The deadline signal of the resolution this event leads, if it leads one. */
+export function resolveSignal(event: HTTPEvent): AbortSignal | undefined {
+  return resolveSignals?.get(event);
+}
+
 // Stops in-flight resolutions for `key` from writing after a purge.
 // Await the result: a write that already reached storage cannot be fenced, so the
 // purge must land after it.
@@ -215,6 +225,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           entry.mtime = undefined;
           entry.expires = undefined;
         }
+        // Cancellable work may release its resources when the deadline abandons it.
+        // Never derive this from a caller's signal: one resolution serves every waiter.
+        const controller = maxResolveTime ? new AbortController() : undefined;
+        if (controller && event) {
+          (resolveSignals ??= new WeakMap()).set(event, controller.signal);
+        }
         // Share serialization because it may consume a one-use stream.
         const resolution = (async () => {
           const value = await resolver();
@@ -241,7 +257,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         })();
         // Reject all waiters on timeout and prevent a late result from reaching storage.
         current = {
-          promise: maxResolveTime ? withDeadline(resolution, maxResolveTime) : resolution,
+          promise: maxResolveTime
+            ? withDeadline(resolution, maxResolveTime, controller)
+            : resolution,
         };
         pending.set(key, current);
       }
@@ -532,16 +550,23 @@ function requireStorage(
   return resolveStorage(options);
 }
 
-// Reject stalled work without cancelling it.
+// Reject stalled work, then ask it to stop.
 // Attach both settle handlers to clear the timer and absorb late rejections.
 // Avoid `Promise.race` because its extra microtasks change SWR timing.
-function withDeadline<T>(work: Promise<T>, seconds: number): Promise<T> {
+function withDeadline<T>(
+  work: Promise<T>,
+  seconds: number,
+  controller?: AbortController,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       const error = new Error(`[cache] Resolver timed out after ${seconds}s.`);
       // Match the platform timeout error name.
       error.name = "TimeoutError";
+      // Reject before aborting, so the waiters' error is decided first: a resolver that
+      // rejects on abort settles `work` one microtask too late to be seen here.
       reject(error);
+      controller?.abort(error);
     }, seconds * 1000);
     // Do not keep the process alive for a deadline timer.
     if (timer && typeof timer === "object" && "unref" in timer) {
