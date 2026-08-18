@@ -4349,6 +4349,51 @@ describe("defineCachedHandler", () => {
     expect(r2.headers.get("vary")).toBe("accept-language");
   });
 
+  it("echoes the validators and cache policy on a 304 response", async () => {
+    const path = uniquePath();
+    const lastModified = new Date("2020-01-01").toUTCString();
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "last-modified": lastModified } }),
+      { maxAge: 100, swr: false },
+    );
+
+    const r1 = (await handler(makeEvent(path))) as Response;
+    const etag = r1.headers.get("etag")!;
+
+    const r2 = (await handler(makeEvent(path, { headers: { "if-none-match": etag } }))) as Response;
+
+    expect(r2.status).toBe(304);
+    // A client must be able to update its stored response from the 304 alone.
+    expect(r2.headers.get("etag")).toBe(etag);
+    expect(r2.headers.get("last-modified")).toBe(lastModified);
+    expect(r2.headers.get("cache-control")).toBe(r1.headers.get("cache-control"));
+  });
+
+  it("headersOnly echoes the validators and cache policy on a 304 response", async () => {
+    const path = uniquePath();
+    const lastModified = new Date("2020-01-01").toUTCString();
+    const handler = defineCachedHandler(
+      () =>
+        new Response("body", {
+          headers: {
+            etag: '"v1"',
+            "last-modified": lastModified,
+            "cache-control": "max-age=60",
+          },
+        }),
+      { maxAge: 60, headersOnly: true },
+    );
+
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": '"v1"' } }),
+    )) as Response;
+
+    expect(res.status).toBe(304);
+    expect(res.headers.get("etag")).toBe('"v1"');
+    expect(res.headers.get("last-modified")).toBe(lastModified);
+    expect(res.headers.get("cache-control")).toBe("max-age=60");
+  });
+
   it("only varies the cache key by allowlisted query params (allowQuery)", async () => {
     let callCount = 0;
     const path = uniquePath();
@@ -6521,7 +6566,11 @@ describe("defineCachedHandler", () => {
     expect(res.status).toBe(304);
     expect(createResponse).toHaveBeenCalledWith(null, {
       status: 304,
-      headers: { "x-cache": "HIT" },
+      headers: {
+        "x-cache": "HIT",
+        "cache-control": "max-age=10",
+        etag: '"test-etag"',
+      },
     });
   });
 

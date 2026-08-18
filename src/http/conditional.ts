@@ -91,9 +91,24 @@ function entityTags(value: string): string[] {
 }
 
 /**
- * Returns the cached headers that a 304 response must repeat.
+ * Headers a 304 repeats from the representation it stands in for (RFC 9110 §15.4.5).
  *
- * `Vary` preserves variant dimensions per RFC 7232 section 4.1.
+ * The validators let a client update the stored response it revalidated, and the
+ * policy fields refresh its freshness lifetime. `Vary` preserves the variant
+ * dimensions (RFC 7232 §4.1).
+ */
+const notModifiedHeaderNames: readonly string[] = /* @__PURE__ */ Object.freeze([
+  "cache-control",
+  "content-location",
+  "date",
+  "etag",
+  "expires",
+  "last-modified",
+  "vary",
+]);
+
+/**
+ * Returns the cached headers that a 304 response must repeat.
  */
 export function notModifiedHeaders(
   headers: ResponseCacheEntry["headers"] | Headers,
@@ -109,9 +124,11 @@ export function notModifiedHeaders(
   if (statusValue !== undefined) {
     notModified[statusHeader!] = statusValue;
   }
-  const varyValue = read("vary");
-  if (varyValue !== undefined) {
-    notModified.vary = varyValue;
+  for (const name of notModifiedHeaderNames) {
+    const value = read(name);
+    if (value !== undefined) {
+      notModified[name] = value;
+    }
   }
   return Object.keys(notModified).length > 0 ? notModified : undefined;
 }
