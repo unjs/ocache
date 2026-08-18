@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none" role="img" aria-labelledby="ocache-logo-title">
+  <title id="ocache-logo-title">ocache</title>
+  <defs>
+    <linearGradient id="ocache-ring" x1="40" y1="32" x2="216" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22d3ee" />
+      <stop offset="1" stop-color="#0e7490" />
+    </linearGradient>
+  </defs>
+  <!-- "o" as a revalidation cycle: open ring + arrowhead -->
+  <path d="M200.73 86A84 84 0 1 1 128 44" stroke="url(#ocache-ring)" stroke-width="30" stroke-linecap="round" />
+  <path d="M120 22 158 44 120 66Z" fill="url(#ocache-ring)" />
+  <!-- cached entries, narrowing by tier -->
+  <g fill="#06b6d4">
+    <rect x="86" y="95" width="84" height="18" rx="9" />
+    <rect x="96" y="119" width="64" height="18" rx="9" opacity=".72" />
+    <rect x="106" y="143" width="44" height="18" rx="9" opacity=".45" />
+  </g>
+</svg>
