@@ -127,6 +127,34 @@ Result of one cache call.
 
 ---
 
+### `composeStorage`
+
+```ts
+function composeStorage(
+  layers: ReadonlyArray<StorageInterface | StorageLayer>,
+  opts: ComposeStorageOptions =
+```
+
+Combines several backends into one tiered [`StorageInterface`](#storageinterface).
+
+Reads try each layer in order and stop at the first hit, promoting it into every earlier
+layer. Writes and deletes reach every layer. A layer that throws is skipped rather than
+failing the operation, so a shared remote layer can be down while a local one still serves.
+
+This is a backend, not a cache option: the cache above it sees one store with one
+declaration, so nothing in the key, the entry, or the purge path changes.
+
+**Example:**
+
+```ts
+const storage = composeStorage([
+  { storage: createMemoryStorage({ maxBytes: 64 * 1024 * 1024 }), ttl: 60 },
+  createBlobStorage(redis),
+]);
+```
+
+---
+
 ### `createBlobStorage`
 
 ```ts

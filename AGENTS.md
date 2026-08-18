@@ -25,7 +25,7 @@ src/
 ├── error.ts        # Every error class and user-visible error message
 ├── hash.ts         # `hash`/`serialize`: cache keys + integrity, digest via `#crypto`
 ├── base64.ts       # Binary-body codec: one implementation picked per runtime
-└── storage.ts      # Storage interface, built-in memory storage, `createBlobStorage` frame codec
+└── storage.ts      # Storage interface, memory storage, `createBlobStorage` frame, `composeStorage` layers
 
 lib/                # Shipped as-is (not built): the two arms of the `#crypto` import
 ├── digest.node.mjs # `node` condition -> node:crypto
@@ -44,14 +44,14 @@ Each mechanism belongs in the module whose name describes it. `http/index.ts` co
 
 The `.agents/` layout matches `src/`. Before you edit an area, read the file that covers it. These files record measured symptoms, rejected alternatives, and reasons for the current design. Code comments only refer to these details.
 
-| File                       | Covers                                                                                                 |
-| -------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `.agents/cache.md`         | `cache.ts`: `name`, option merging, lifetimes/storage TTL, dedup + deadline, hooks, purge, `waitUntil` |
-| `.agents/http/key.md`      | `http/key.ts`: key shape (name, method, authority) + the revalidation helpers                          |
-| `.agents/http/request.md`  | `http/request.ts` (+ `config.ts`, `filters.ts`): bypass, narrowing, cookies/credentials                |
-| `.agents/http/response.md` | `http/entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`, `base64.ts`           |
-| `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`, the blob frame               |
-| `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable             |
+| File                       | Covers                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `.agents/cache.md`         | `cache.ts`: `name`, option merging, lifetimes/storage TTL, dedup + deadline, hooks, purge, `waitUntil`   |
+| `.agents/http/key.md`      | `http/key.ts`: key shape (name, method, authority) + the revalidation helpers                            |
+| `.agents/http/request.md`  | `http/request.ts` (+ `config.ts`, `filters.ts`): bypass, narrowing, cookies/credentials                  |
+| `.agents/http/response.md` | `http/entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`, `base64.ts`             |
+| `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`, the blob frame, layered stacks |
+| `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable               |
 
 ## Cross-module invariants
 
@@ -79,10 +79,13 @@ Most findings in the deep dives came from violations of these rules.
 - `pnpm typecheck` — `tsc --noEmit --skipLibCheck`
 - `pnpm lint` — `oxlint` + `oxfmt --check`
 - `pnpm build` — build with obuild
+- `pnpm bundle` — bundle-size probe against the ceilings in `test/bundle.ts`
 - `pnpm bench` — load scenarios, baseline vs cached, storage sweep. See `bench/README.md`
 - `pnpm bench:micro` — per-call cost of the hit path
 - `pnpm bench:chart` — results JSON -> SVG charts, plus the site's `docs/.docs/public/bench.svg`
 - `pnpm bench:docs` — results JSON -> `docs/11.benchmarks.md`, charts inlined
+
+When the probe fails, **re-base the ceilings** in `test/bundle.ts` on the measured numbers with ~5% headroom, on all six rows rather than only the failing ones, and add a line to the comment block above them saying what the change cost. They are tripwires for an accidental blow-up, not a size target to shrink code against; a ceiling already reached says nothing about the next change. Only investigate first when a single change moved `min`/`minGzip` by more than a few hundred bytes — those two are what a consumer downloads.
 
 ## Benchmarks
 

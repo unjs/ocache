@@ -22,6 +22,11 @@ export function storageRequiredError(caller: string): Error {
   return error("StorageRequiredError", `${caller}() requires \`options.storage\`.`);
 }
 
+/** A composed stack with no layers would silently cache nothing. */
+export function composeLayersError(): Error {
+  return error("ComposeLayersError", "composeStorage() requires at least one layer.");
+}
+
 /** The backend returned something that is not an entry. */
 export function malformedEntryError(): Error {
   return error("MalformedEntryError", "Malformed data read from cache.");

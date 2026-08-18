@@ -1,5 +1,7 @@
 // Docs: @docs/3.storage.md
 
+import { composeLayersError } from "./error.ts";
+
 import type { CacheEntry } from "./types.ts";
 
 export interface StorageInterface {
@@ -478,6 +480,161 @@ function decodeFrame(frame: Uint8Array): CacheEntry | null {
     // Corrupt metadata or a payload that is not the UTF-8 it was written as.
     return null;
   }
+}
+
+/** One layer of a {@link composeStorage} stack. */
+export interface StorageLayer {
+  /** The backend holding this layer's entries. */
+  storage: StorageInterface;
+
+  /**
+   * Largest storage TTL written to this layer, in seconds.
+   *
+   * Caps whatever lifetime the cache asks for, and is the only lifetime a promotion has.
+   * A layer without one holds a promoted entry until its own backend evicts it.
+   */
+  ttl?: number;
+}
+
+/** Options for {@link composeStorage}. */
+export interface ComposeStorageOptions {
+  /**
+   * Whether a hit from a later layer is written back to every earlier one. Defaults to `true`.
+   *
+   * Promotions run in the background. A later `set` for the same key waits for one, so a
+   * purge cannot be undone by a promotion already in flight.
+   */
+  promote?: boolean;
+
+  /**
+   * Called for each layer that throws, instead of `console.error`.
+   *
+   * A layer failure is never fatal: a read falls through to the next layer and a write
+   * continues to the others.
+   */
+  onError?: (error: unknown, key: string) => void;
+}
+
+/**
+ * Combines several backends into one tiered {@link StorageInterface}.
+ *
+ * Reads try each layer in order and stop at the first hit, promoting it into every earlier
+ * layer. Writes and deletes reach every layer. A layer that throws is skipped rather than
+ * failing the operation, so a shared remote layer can be down while a local one still serves.
+ *
+ * This is a backend, not a cache option: the cache above it sees one store with one
+ * declaration, so nothing in the key, the entry, or the purge path changes.
+ *
+ * @example
+ * ```ts
+ * const storage = composeStorage([
+ *   { storage: createMemoryStorage({ maxBytes: 64 * 1024 * 1024 }), ttl: 60 },
+ *   createBlobStorage(redis),
+ * ]);
+ * ```
+ */
+export function composeStorage(
+  layers: ReadonlyArray<StorageInterface | StorageLayer>,
+  opts: ComposeStorageOptions = {},
+): StorageInterface {
+  if (layers.length === 0) {
+    throw composeLayersError();
+  }
+  const tiers: StorageLayer[] = layers.map((layer) =>
+    "storage" in layer ? layer : { storage: layer },
+  );
+  const promote = opts.promote !== false;
+  const onError =
+    opts.onError ??
+    ((error: unknown, key: string) => {
+      console.error(`[cache] Storage layer error for ${key}.`, error);
+    });
+
+  // Promotions in flight, per key. A `set` waits for one so a purge lands after the write it
+  // raced, which is what `cache.ts` does for resolver writes.
+  const promotions = new Map<string, Promise<void>>();
+
+  const writeLayer = async (
+    tier: StorageLayer,
+    key: string,
+    value: unknown,
+    setOpts?: { ttl?: number },
+  ) => {
+    try {
+      await tier.storage.set(key, value, layerOpts(tier, setOpts));
+    } catch (error) {
+      onError(error, key);
+    }
+  };
+
+  // Write a hit back toward the front. The value is not copied: an earlier layer that holds
+  // values by reference now shares the object the caller received, which is what memory
+  // storage already does for every hit of its own.
+  const promoteEntry = (key: string, value: unknown, hitIndex: number) => {
+    const earlier = promotions.get(key);
+    const promotion = (async () => {
+      await earlier;
+      await Promise.all(tiers.slice(0, hitIndex).map((tier) => writeLayer(tier, key, value)));
+    })();
+    promotions.set(key, promotion);
+    void promotion.then(() => {
+      if (promotions.get(key) === promotion) {
+        promotions.delete(key);
+      }
+    });
+  };
+
+  return {
+    // One stored form is chosen for the whole stack, so the weakest layer decides: a stack
+    // holding a `Uint8Array` a serializing layer would return as `{"0":255,...}` declares
+    // nothing, and every layer stores base64 instead. See `.agents/storage.md`.
+    binary: tiers.every((tier) => tier.storage.binary === true),
+
+    // An entry only has to fit the layer that ends up holding it, so the largest ceiling
+    // bounds buffering and a layer too small refuses its own copy. One layer that declares
+    // no ceiling means the stack has none.
+    maxEntryBytes: tiers.every((tier) => tier.storage.maxEntryBytes != null)
+      ? Math.max(...tiers.map((tier) => tier.storage.maxEntryBytes!))
+      : undefined,
+
+    async get(key) {
+      for (let i = 0; i < tiers.length; i++) {
+        let value: unknown;
+        try {
+          value = await tiers[i]!.storage.get(key);
+        } catch (error) {
+          // A layer that is down must not hide the layers behind it.
+          onError(error, key);
+          continue;
+        }
+        if (value === null || value === undefined) {
+          continue;
+        }
+        if (promote && i > 0) {
+          promoteEntry(key, value, i);
+        }
+        return value as any;
+      }
+      return null;
+    },
+
+    async set(key, value, setOpts) {
+      // Land after any promotion of this key, so a delete cannot be undone by one it raced.
+      await promotions.get(key);
+      await Promise.all(tiers.map((tier) => writeLayer(tier, key, value, setOpts)));
+    },
+  };
+}
+
+/** Returns the options for one layer, with its own TTL cap applied. */
+function layerOpts(
+  tier: StorageLayer,
+  setOpts: { ttl?: number } | undefined,
+): { ttl?: number } | undefined {
+  if (tier.ttl == null) {
+    return setOpts;
+  }
+  return { ...setOpts, ttl: setOpts?.ttl == null ? tier.ttl : Math.min(setOpts.ttl, tier.ttl) };
 }
 
 /**

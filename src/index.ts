@@ -17,8 +17,11 @@ export {
   type MemoryStorageOptions,
   type BlobBackend,
   type BlobValue,
+  type StorageLayer,
+  type ComposeStorageOptions,
   createMemoryStorage,
   createBlobStorage,
+  composeStorage,
 } from "./storage.ts";
 
 export type {
