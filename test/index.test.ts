@@ -7102,7 +7102,7 @@ describe("defineCachedHandler", () => {
   it("uses custom createResponse hook", async () => {
     const path = uniquePath();
     const createResponse = vi.fn(
-      (body: string | Uint8Array | null, init: ResponseInit) =>
+      (body: string | Uint8Array | ReadableStream<Uint8Array> | null, init: ResponseInit) =>
         new Response(body as BodyInit | null, init),
     );
     const handler = defineCachedHandler(() => new Response("ok"), {
@@ -7118,7 +7118,7 @@ describe("defineCachedHandler", () => {
   it("uses custom createResponse for 304", async () => {
     const path = uniquePath();
     const createResponse = vi.fn(
-      (body: string | Uint8Array | null, init: ResponseInit) =>
+      (body: string | Uint8Array | ReadableStream<Uint8Array> | null, init: ResponseInit) =>
         new Response(body as BodyInit | null, init),
     );
     const handler = defineCachedHandler(
@@ -9358,5 +9358,300 @@ describe("waitUntil option", () => {
     const withHook = defineCachedFunction(resolver, { ...opts, waitUntil: () => {} });
     expect(await withHook()).toBe("value");
     expect(calls).toBe(1);
+  });
+});
+
+describe("streaming responses (opt-in)", () => {
+  let testId = 0;
+  function uniquePath() {
+    return `/stream-${++testId}-${Date.now()}`;
+  }
+  function makeEvent(path: string, opts?: RequestInit) {
+    return { req: new Request(`http://localhost${path}`, opts) };
+  }
+
+  // A body the test drives chunk by chunk, standing in for a slow origin.
+  function controlledStream() {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
+      },
+    });
+    return {
+      stream,
+      push: (text: string) => controller.enqueue(encoder.encode(text)),
+      close: () => controller.close(),
+      error: (reason: unknown) => controller.error(reason),
+    };
+  }
+
+  // The fill outlives the response, so tests await it through the host hook instead of
+  // sleeping: `waitUntil` receives both the fill and the storage write it starts.
+  function backgroundTasks() {
+    const promises: Promise<unknown>[] = [];
+    return {
+      waitUntil: (promise: Promise<unknown>) => {
+        promises.push(promise);
+      },
+      async settle() {
+        while (promises.length > 0) {
+          await Promise.allSettled(promises.splice(0));
+        }
+      },
+    };
+  }
+
+  async function readChunk(reader: ReadableStreamDefaultReader<Uint8Array>) {
+    const { value } = await reader.read();
+    return new TextDecoder().decode(value);
+  }
+
+  it("returns the response before the handler's body ends", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    const handler = defineCachedHandler(() => new Response(origin.stream), {
+      maxAge: 10,
+      stream: true,
+      waitUntil: tasks.waitUntil,
+    });
+
+    // Resolves while the origin body is still open; without streaming this would hang.
+    const res = (await handler(makeEvent(path))) as Response;
+    const reader = res.body!.getReader();
+
+    origin.push("first ");
+    expect(await readChunk(reader)).toBe("first ");
+    origin.push("second");
+    expect(await readChunk(reader)).toBe("second");
+    origin.close();
+    expect((await reader.read()).done).toBe(true);
+    await tasks.settle();
+  });
+
+  it("fills the entry from the streamed body", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    let calls = 0;
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return new Response(origin.stream);
+      },
+      { maxAge: 10, stream: true, waitUntil: tasks.waitUntil },
+    );
+
+    const streamed = (await handler(makeEvent(path))) as Response;
+    origin.push("hello ");
+    origin.push("world");
+    origin.close();
+    expect(await streamed.text()).toBe("hello world");
+    await tasks.settle();
+
+    const hit = (await handler(makeEvent(path))) as Response;
+    expect(await hit.text()).toBe("hello world");
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+    expect(calls).toBe(1);
+  });
+
+  it("stamps the cache status but synthesizes no etag on the streamed response", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    const handler = defineCachedHandler(() => new Response(origin.stream), {
+      maxAge: 10,
+      stream: true,
+      waitUntil: tasks.waitUntil,
+    });
+
+    const streamed = (await handler(makeEvent(path))) as Response;
+    // The synthesized validator digests a body that does not exist yet.
+    expect(streamed.headers.get("etag")).toBe(null);
+    expect(streamed.headers.get("x-cache")).toBe("MISS");
+    // Header synthesis that needs no body still happens.
+    expect(streamed.headers.get("cache-control")).toBe("max-age=10");
+
+    origin.push("body");
+    origin.close();
+    await streamed.text();
+    await tasks.settle();
+
+    // The stored entry carries the validator every later hit is served with.
+    const hit = (await handler(makeEvent(path))) as Response;
+    expect(hit.headers.get("etag")).toMatch(/^W\/"/);
+  });
+
+  it("keeps a handler's own etag on the streamed response", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    const handler = defineCachedHandler(
+      () => new Response(origin.stream, { headers: { etag: '"origin"' } }),
+      { maxAge: 10, stream: true, waitUntil: tasks.waitUntil },
+    );
+
+    const streamed = (await handler(makeEvent(path))) as Response;
+    expect(streamed.headers.get("etag")).toBe('"origin"');
+    origin.push("body");
+    origin.close();
+    await streamed.text();
+    await tasks.settle();
+  });
+
+  it("serves a deduplicated follower from the complete entry", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    let calls = 0;
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return new Response(origin.stream);
+      },
+      { maxAge: 10, stream: true, waitUntil: tasks.waitUntil },
+    );
+
+    const leader = handler(makeEvent(path));
+    const follower = handler(makeEvent(path));
+
+    const streamed = (await leader) as Response;
+    origin.push("shared");
+    origin.close();
+
+    // The follower cannot read the leader's stream, so it waits for the stored body.
+    const buffered = (await follower) as Response;
+    expect(await buffered.text()).toBe("shared");
+    expect(buffered.headers.get("etag")).toMatch(/^W\/"/);
+    expect(await streamed.text()).toBe("shared");
+    expect(calls).toBe(1);
+    await tasks.settle();
+  });
+
+  it("never streams a background refresh to a stale caller", async () => {
+    const path = uniquePath();
+    const refresh = controlledStream();
+    const tasks = backgroundTasks();
+    let calls = 0;
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return calls === 1 ? new Response("stored") : new Response(refresh.stream);
+      },
+      { maxAge: 10, swr: true, stream: true, waitUntil: tasks.waitUntil },
+    );
+
+    expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("stored");
+    await tasks.settle();
+    await handler.expire(makeEvent(path));
+
+    // The refresh body is still open. A stale caller must be served the stored value, so
+    // this read would hang if the background refresh had reached this request's channel.
+    const stale = (await handler(makeEvent(path))) as Response;
+    expect(await stale.text()).toBe("stored");
+    expect(stale.headers.get("x-cache")).toBe("STALE");
+    expect(calls).toBe(2);
+
+    refresh.push("refreshed");
+    refresh.close();
+    await tasks.settle();
+  });
+
+  it("truncates the response and stores nothing when the body fails mid-stream", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    const onError = vi.fn();
+    let calls = 0;
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return calls === 1 ? new Response(origin.stream) : new Response("recovered");
+      },
+      { maxAge: 10, stream: true, waitUntil: tasks.waitUntil, onError },
+    );
+
+    const streamed = (await handler(makeEvent(path))) as Response;
+    const reader = streamed.body!.getReader();
+    origin.push("partial");
+    expect(await readChunk(reader)).toBe("partial");
+
+    origin.error(new Error("origin failed"));
+    // Never a clean close: the client can tell the representation is incomplete.
+    await expect(reader.read()).rejects.toThrow("origin failed");
+    await tasks.settle();
+    expect(onError).toHaveBeenCalled();
+
+    // Nothing partial reached storage.
+    const next = (await handler(makeEvent(path))) as Response;
+    expect(await next.text()).toBe("recovered");
+    expect(calls).toBe(2);
+  });
+
+  it("streams an over-limit body to completion and stores nothing", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    const onError = vi.fn();
+    let calls = 0;
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return calls === 1 ? new Response(origin.stream) : new Response("refilled");
+      },
+      { maxAge: 10, stream: true, maxBodySize: 4, waitUntil: tasks.waitUntil, onError },
+    );
+
+    const streamed = (await handler(makeEvent(path))) as Response;
+    origin.push("over");
+    origin.push("flowing");
+    origin.close();
+    // The caller keeps the whole body, exactly as an over-limit buffered body passes through.
+    expect(await streamed.text()).toBe("overflowing");
+    await tasks.settle();
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({ name: "ResponseTooLargeError" });
+
+    // Nothing was stored, so the next request runs the handler again.
+    const next = (await handler(makeEvent(path))) as Response;
+    expect(await next.text()).toBe("refilled");
+    expect(next.headers.get("x-cache")).toBe("MISS");
+    expect(calls).toBe(2);
+  });
+
+  it("buffers the whole body when streaming is not enabled", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const handler = defineCachedHandler(() => new Response(origin.stream), { maxAge: 10 });
+
+    let settled = false;
+    const pending = (handler(makeEvent(path)) as Promise<Response>).then((res) => {
+      settled = true;
+      return res;
+    });
+
+    origin.push("slow");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    origin.close();
+    expect(await (await pending).text()).toBe("slow");
+  });
+
+  it("leaves a bodiless response on the buffered path", async () => {
+    const path = uniquePath();
+    const tasks = backgroundTasks();
+    const handler = defineCachedHandler(() => new Response(null, { status: 200 }), {
+      maxAge: 10,
+      stream: true,
+      waitUntil: tasks.waitUntil,
+    });
+
+    const res = (await handler(makeEvent(path))) as Response;
+    expect(await res.text()).toBe("");
+    // A buffered fill still synthesizes the validator.
+    expect(res.headers.get("etag")).toMatch(/^W\/"/);
+    await tasks.settle();
   });
 });

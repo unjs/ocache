@@ -85,9 +85,17 @@ type SizeName = "raw" | "min" | "minGzip";
 // already 0.3 kB over on both platforms and every other row sat at 98-100%. Same ~5% headroom
 // as the last re-base, on all six rows rather than only the two that were failing, so the next
 // change measures against a tripwire instead of tripping on arrival.
+//
+// Re-based again at opt-in response streaming, measured against the numbers above: +4.88 kB
+// raw, +1.49 kB min, +0.45 kB gzip on both platforms (61_288 / 24_721 / 9_799 neutral and
+// 57_112 / 22_470 / 8_406 node became 66_172 / 26_212 / 10_261 and 61_996 / 23_962 / 8_858).
+// That is the one row of this table a consumer cannot opt out of: `stream.ts` and the
+// streaming arm of `http/entry.ts` are reached through a runtime flag, so they stay in the
+// graph of a handler that never sets `stream`. `raw` carries the rest — the option's JSDoc and
+// the comments on the fill/serve split. Same ~5% headroom on all six rows.
 const BUDGETS: Record<Platform, Record<SizeName, number>> = {
-  neutral: { raw: 64_500, min: 26_000, minGzip: 10_300 },
-  node: { raw: 60_000, min: 23_600, minGzip: 8850 },
+  neutral: { raw: 69_500, min: 27_500, minGzip: 10_800 },
+  node: { raw: 65_000, min: 25_200, minGzip: 9300 },
 };
 
 // Absolute so the generated entry can live anywhere and still resolve ocache from source.

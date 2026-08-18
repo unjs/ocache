@@ -2,6 +2,8 @@
 
 `defineCachedHandler` uses `cachedFunction<Response>` and divides work at the `serialize` boundary. The **resolver** narrows the request and returns the handler's live `Response`. Internal **`serialize`** consumes the body, creates `etag`, `cache-control`, and `Vary`, removes every `Set-Cookie`, and creates the stored `ResponseCacheEntry`. **`transform`** rebuilds a servable response and adds the cache-status header on read. `CachedEventHandlerOptions` uses `Omit` for all three hooks so caller options cannot conflict with this internal use.
 
+Under the opt-in `stream` option, `serialize` publishes the headers and a live body to the request waiting on the resolution before it reads a byte, and buffers the same chunks into the entry described here. The stored shape, every predicate below, and every read path are unchanged; what a streamed response gives up is what needs the finished body. See `.agents/http/stream.md`.
+
 ## What the default `toResponse` accepts
 
 The default conversion (`http/index.ts`) refuses any value a `Response` cannot carry, and throws `UnsupportedValueError`. It accepts a `Response`, a primitive (`string`, `number`, `boolean`, `bigint`) as a text body, and the body types `Response` holds as-is: any `ArrayBuffer` view, `ArrayBuffer`, `Blob`, `FormData`, `URLSearchParams`, and `ReadableStream`. Everything else — plain objects, arrays, `Map`, `null`, `undefined` — throws.

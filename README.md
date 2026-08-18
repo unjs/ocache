@@ -349,6 +349,16 @@ The deadline signal of the resolution this event leads, if it leads one.
 
 ---
 
+### `resolveStatus`
+
+```ts
+function resolveStatus(event: HTTPEvent): CacheStatus | undefined;
+```
+
+The status of the foreground resolution this event leads, if it leads one.
+
+---
+
 ### `StorageOption`
 
 ```ts

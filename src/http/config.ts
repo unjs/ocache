@@ -98,10 +98,19 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
   };
 }
 
-/** Removes storage-location and host-plumbing options from the integrity input. */
+/**
+ * Removes storage-location and host-plumbing options from the integrity input.
+ *
+ * `stream` joins them because it decides only when a caller is handed the body, never what
+ * is stored: a streamed and a buffered fill write the same entry, so turning it on must not
+ * make every existing entry cold.
+ */
 export function integrityOpts<E extends HTTPEvent>(
   opts: CachedEventHandlerOptions<E>,
-): Omit<CachedEventHandlerOptions<E>, "base" | "group" | "name" | "storage" | "waitUntil"> {
-  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, ...rest } = opts;
+): Omit<
+  CachedEventHandlerOptions<E>,
+  "base" | "group" | "name" | "storage" | "waitUntil" | "stream"
+> {
+  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, stream: _st, ...rest } = opts;
   return rest;
 }

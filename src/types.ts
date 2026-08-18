@@ -348,10 +348,31 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
 
   /**
    * Creates a Response from stored data.
-   * The body is text, binary bytes, or `null`.
+   * The body is text, binary bytes, `null`, or a `ReadableStream` under {@link stream}.
    * Defaults to `new Response(body, init)`.
    */
-  createResponse?: (body: string | Uint8Array | null, init: ResponseInit) => Response;
+  createResponse?: (
+    body: string | Uint8Array | ReadableStream<Uint8Array> | null,
+    init: ResponseInit,
+  ) => Response;
+
+  /**
+   * Streams the first response while the cache entry fills. Defaults to `false`.
+   *
+   * Without this, the request that fills an entry waits for the handler's complete body,
+   * because the body has to be buffered before it can be stored. With it, that one request
+   * receives the body as it is read and the entry is written once the read completes.
+   * Later requests are served from the stored entry as usual.
+   *
+   * This trades error recovery for time to first byte. The response starts before the
+   * handler finishes, so a failure part-way through can only reach the client as a
+   * truncated body, and the streamed response carries no synthesized `etag` — the
+   * validator digests a body that does not exist yet. Nothing partial is ever stored.
+   *
+   * Deduplicated and later requests still wait for the complete entry. Raise
+   * {@link maxResolveTime} for a body that takes longer than the deadline to produce.
+   */
+  stream?: boolean;
 
   /**
    * Largest response body, in bytes, that may be buffered for storage.

@@ -86,6 +86,9 @@ function describeValue(value: unknown): string {
  *
  * The error carries the live response so the request that produced it can still be
  * served. That response holds a one-use stream, so only one caller may claim it.
+ *
+ * A streamed response carries none: its caller received the whole body as it was read,
+ * so there is nothing left to hand over and nothing to release.
  */
 export class ResponseTooLargeError extends Error {
   override name = "ResponseTooLargeError";
@@ -94,10 +97,13 @@ export class ResponseTooLargeError extends Error {
   #event: HTTPEvent | undefined;
   #response: Response | undefined;
 
-  constructor(limit: number, event: HTTPEvent | undefined, response: Response) {
+  constructor(limit: number, event: HTTPEvent | undefined, response?: Response) {
     super(`${PREFIX} Response body exceeds the ${limit} byte cache limit.`);
     this.#event = event;
     this.#response = response;
+    if (!response) {
+      return;
+    }
     // Nothing claims the response of a background revalidation. Release its stream one
     // macrotask later, because the rejection only ever reaches a caller through microtasks.
     const timer = setTimeout(() => {

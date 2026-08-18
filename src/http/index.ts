@@ -17,6 +17,7 @@ import { defaultHandleCacheHeaders, notModifiedHeaders, readConditions } from ".
 import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
 import { isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
+import { closeStreamChannel, openStreamChannel } from "./stream.ts";
 import { isCacheableStatus, validateEntry } from "./validate.ts";
 
 import type {
@@ -91,7 +92,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const createResponse =
     opts.createResponse ||
-    ((body: string | Uint8Array | null, init: ResponseInit) =>
+    ((body: string | Uint8Array | ReadableStream<Uint8Array> | null, init: ResponseInit) =>
       new Response(body as BodyInit | null, init));
 
   const handleCacheHeaders = opts.handleCacheHeaders || defaultHandleCacheHeaders;
@@ -199,8 +200,39 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     }
 
     let response: ResponseCacheEntry;
+    // Register interest before the resolution starts. `serialize` hands the live body back
+    // through this channel when this request is the one waiting on that resolution.
+    const streaming = opts.stream ? openStreamChannel(event) : undefined;
+    const settled = cachedFn(event) as Promise<unknown> as Promise<ResponseCacheEntry>;
     try {
-      response = (await cachedFn(event))! as unknown as ResponseCacheEntry;
+      if (streaming) {
+        // Whichever comes first: the live body, or a resolution that never offered one.
+        const streamed = await Promise.race([streaming, settled.then(() => undefined)]);
+        if (streamed) {
+          // The fill outlives this response: it still has to finish reading the body,
+          // serialize it, and write the entry. Register it so a serverless host stays alive
+          // for the write, and absorb its rejection — this caller already has the headers,
+          // and a failed read reaches it as a truncated body.
+          const fill = settled.then(
+            () => {},
+            (error) => {
+              if (opts.onError) {
+                opts.onError(error);
+              } else {
+                console.error("[cache] Cache fill error.", error);
+              }
+            },
+          );
+          if (opts.waitUntil) {
+            opts.waitUntil(fill);
+          } else {
+            event.req.waitUntil?.(fill);
+          }
+          // No conditional handling: a streamed response has no validator to compare.
+          return createResponse(streamed.body, streamed.init);
+        }
+      }
+      response = (await settled)!;
     } catch (error) {
       if (error instanceof ResponseTooLargeError) {
         // Claim before any await: the leader and its followers all see this one error.
@@ -225,6 +257,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         console.error("[cache] Bypassing cache.", error);
       }
       return toResponse(await handler(event), event);
+    } finally {
+      // Stop listening once this request is served another way. A published stream nothing
+      // reads would queue the whole body. Taking the listener already closed the channel,
+      // so this is a no-op on the streamed path.
+      if (streaming) {
+        closeStreamChannel(event);
+      }
     }
 
     // Only a handler sets `last-modified`, so a stored entry often has none.
