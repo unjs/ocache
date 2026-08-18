@@ -1246,6 +1246,80 @@ describe("cache key name escaping", () => {
   });
 });
 
+// `group` was the other unescaped segment: a `:` in it moved the boundary one segment left,
+// so group `a:b` + name `c` + key `d` built the very string group `a` + name `b` + key `c:d`
+// builds. Two consumers sharing a backend then shared one entry.
+describe("cache key group escaping", () => {
+  it("leaves an ordinary group byte-identical", async () => {
+    const fn = defineCachedFunction(() => "v", { name: "myFn", getKey: () => "k" });
+    expect((await fn.resolveKeys())[0]).toBe("/cache:functions:myFn:k.json");
+
+    const grouped = defineCachedFunction(() => "v", {
+      name: "myFn",
+      getKey: () => "k",
+      group: "my_group2",
+    });
+    expect((await grouped.resolveKeys())[0]).toBe("/cache:my_group2:myFn:k.json");
+  });
+
+  it("keeps a `:` in the group out of the key's segment structure", async () => {
+    const keys = await resolveCacheKeys({
+      options: { group: "a:b", name: "c", getKey: () => "d" },
+    });
+    // base : group : name : key — four segments, whatever the group contained.
+    expect(keys[0]!.split(":")).toHaveLength(4);
+    expect(keys[0]).toMatch(/^\/cache:ab\.[\w-]+:c:d\.json$/);
+  });
+
+  it("does not collide a group boundary with a name/key boundary", async () => {
+    const storage = createMemoryStorage();
+    const wide = _defineCachedFunction(() => "A", {
+      group: "a:b",
+      name: "c",
+      getKey: () => "d",
+      maxAge: 60,
+      storage,
+    });
+    const narrow = _defineCachedFunction(() => "B", {
+      group: "a",
+      name: "b",
+      getKey: () => "c:d",
+      maxAge: 60,
+      storage,
+    });
+
+    const wideKey = (await wide.resolveKeys())[0]!;
+    const narrowKey = (await narrow.resolveKeys())[0]!;
+    expect(wideKey).not.toBe(narrowKey);
+
+    expect(await wide()).toBe("A");
+    expect(await narrow()).toBe("B");
+    // Both entries survive: neither write landed on the other's key.
+    expect(await storage.get(wideKey)).toMatchObject({ value: "A" });
+    expect(await storage.get(narrowKey)).toMatchObject({ value: "B" });
+  });
+
+  it("round-trips an escaped group through resolveKeys/invalidate/expire", async () => {
+    const storage = createMemoryStorage();
+    let calls = 0;
+    const opts = { group: "tenant:acme", name: "page", getKey: () => "k", maxAge: 60, storage };
+    const fn = _defineCachedFunction(() => `v${++calls}`, opts);
+
+    expect(await fn()).toBe("v1");
+
+    const key = (await fn.resolveKeys())[0]!;
+    expect(await storage.get(key)).toMatchObject({ value: "v1" });
+    expect((await resolveCacheKeys({ options: opts }))[0]).toBe(key);
+
+    await fn.expire();
+    expect(await storage.get(key)).toMatchObject({ value: "v1", stale: true });
+
+    await invalidateCache({ options: opts });
+    expect(await storage.get(key)).toBeNull();
+    expect(await fn()).toBe("v2");
+  });
+});
+
 describe("getMaxAge (dynamic per-entry TTL)", () => {
   it("derives maxAge from the resolved value for the freshness check", async () => {
     let callCount = 0;
@@ -7111,10 +7185,18 @@ describe("resolveCacheKeys", () => {
 
   it("uses custom base, group, and name", async () => {
     const keys = await resolveCacheKeys({
+      options: { base: "/my-cache", group: "apphandlers", name: "myFn", getKey: (k: string) => k },
+      args: ["k"],
+    });
+    expect(keys).toEqual(["/my-cache:apphandlers:myFn:k.json"]);
+  });
+
+  it("escapes a group that carries a separator", async () => {
+    const keys = await resolveCacheKeys({
       options: { base: "/my-cache", group: "app/handlers", name: "myFn", getKey: (k: string) => k },
       args: ["k"],
     });
-    expect(keys).toEqual(["/my-cache:app/handlers:myFn:k.json"]);
+    expect(keys[0]).toMatch(/^\/my-cache:apphandlers\.[\w-]+:myFn:k\.json$/);
   });
 
   it("matches the key used internally by defineCachedFunction", async () => {

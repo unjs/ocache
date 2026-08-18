@@ -578,8 +578,9 @@ function buildCacheKey(
   opts: Pick<CacheOptions, "group" | "name">,
   base: string,
 ): string {
-  const group = opts.group || "functions";
-  // Function names may contain cache-key separators.
+  // `group` and `name` are single segments; neither alphabet is controlled, so both are
+  // escaped. `base` keeps its raw `:` tier separators and `key` is terminal.
+  const group = escapeKeySegment(opts.group || "functions");
   const name = escapeKeySegment(opts.name || "_");
   return [base, group, name, key + ".json"].filter(Boolean).join(":").replace(/:\/$/, ":index");
 }

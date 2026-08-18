@@ -2,7 +2,7 @@
 
 This file describes `defineCachedFunction`, `cachedFunction`, and the standalone helpers. The HTTP layer uses all of this behavior. See `.agents/http/key.md` and `.agents/http/response.md`.
 
-## Cache key `name`
+## Cache key `name` and `group`
 
 `resolveName(opts.name, fn)` → `opts.name || fn.name || anon_<hash(fn)>`. `cache.ts` exports this function. `http/config.ts` uses the same function and passes the wrapped `EventHandler` as `fn`. The two paths must not use different name rules.
 
@@ -10,6 +10,8 @@ This file describes `defineCachedFunction`, `cachedFunction`, and the standalone
 - Anonymous functions use a source hash. This prevents distinct inline functions from sharing one key and repeatedly replacing each other. **Caveat**: a source hash cannot distinguish functions that have the same source but different closed-over variables. Pass an explicit `name` or `getKey` in this case. Do not use per-instance counters, `WeakMap` identity, or randomness. Persistent backends require deterministic keys across process restarts.
 - The standalone `resolveCacheKeys`, `invalidateCache`, and `expireCache` helpers cannot see `fn`. Always pass the same `name` that the cached function used.
 - Escape the segment with `escapeKeySegment` inside `buildCacheKey`. This location makes every path use the same rule. The rule removes non-word characters. If it changes the input, it adds `.<hash(raw)>`. Previously, `name` was the last raw segment. This was harmless while all handlers used `"_"`. It became unsafe when names came from `fn.name`, which has no controlled alphabet. For example, `named.bind(null)` has the name `bound named`. A handler named `page:HEAD` produced exactly the key used by the HEAD variant of a handler named `page`. The defect affected only names with an escapable character. It affected about one `anon_<hash>` in five because the base64url alphabet includes `-`. `name` is outside the integrity hash. A moved entry therefore causes one cold read. The cache does not find the entry, so it never rejects the entry after finding it.
+- **`group` is a segment too.** It was the last raw one after `name` was fixed. A `:` in it moved the boundary one segment left, so `group: "a:b"` + `name: "c"` + key `d` built exactly the string `group: "a"` + `name: "b"` + key `c:d` builds: `/cache:a:b:c:d.json`. Two consumers sharing a backend then shared one entry, which is eviction at best and disclosure when integrity also matches. Reachable wherever `group` carries structure, such as a per-tenant `group` built as `"tenant:" + id`. Escaping happens in `buildCacheKey` for the same reason `name` does: one rule, every path. Ordinary groups are `\w+`, so the default `"functions"` and `"handlers"` keys are byte-identical and only a group with an escapable character moves.
+- `base` and `key` are deliberately **not** escaped. `base` is a prefix whose `:` separates the tiers of `base: string[]`. `key` is the terminal namespace: with `group` and `name` colon-free, `base:group:name:key.json` parses one way only, so no custom `getKey` result can reach another function's keyspace. `http/key.ts` still escapes its custom key because the method component precedes it there, so a raw `:` could forge a `HEAD:` variant; see `.agents/http/key.md`. A caller's `getKey` owns uniqueness _within_ its own keyspace.
 
 ## Option merging
 
