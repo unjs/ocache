@@ -51,6 +51,7 @@ Most findings in the deep dives came from violations of these rules.
 
 - **A handler may read exactly what the key covers.** `keyHeaderNames` controls both request narrowing in `request.ts` and key composition in `key.ts`. Both sides derive their allowlist subsets from the same pure helpers in `filters.ts`. Neither side may compute separate subsets. Narrowing uses an allowlist and removes undeclared headers. There are **no exemptions**: `host` is rewritten to the keyed authority, and every other undeclared header is removed. A handler must never read a header no key covers, including conditional and trace headers. `handleCacheHeaders` receives the request validators through `CacheConditions`, captured before narrowing.
 - **The storage decision and the advertisement must use the same predicates.** `validate.ts` uses `isCacheableStatus`, `hasVaryWildcard`, and `hasUnkeyedVary` to decide whether it may store a response. `entry.ts` uses the same predicates to decide whether it may advertise a lifetime. Never copy these checks into a call site.
+- **One declaration bounds both buffering and storage.** `StorageInterface.maxEntryBytes` is the backend's per-entry ceiling and the only source of the derived `maxBodySize` default in `http/entry.ts`. Never restate that number as a constant. A body larger than the derived limit is refused **while the stream is read**, because `set` can only refuse an entry the process has already built.
 - **Never write an entry that has neither an expiry nor a storage TTL.** `storageTtl` is the only decision point. `remainingTtl` in `expireCache` derives from it.
 - **Storage must be per instance, never global.** Persistent backends also require deterministic keys across process restarts.
 - `cache.ts` and `storage.ts` export the shared internal functions `resolveName`, `definedOptions`, and `resolveStorage`. The function and handler paths must use these functions so they cannot differ. Both paths must resolve `name` **before** they merge defaults.
@@ -59,7 +60,7 @@ Most findings in the deep dives came from violations of these rules.
 ## Docs
 
 - Never edit content inside `<!-- automd -->` in README.md. `pnpm fmt` generates this content.
-- User guides are in `docs/1.guide/`. If a behavior change changes a documented string or default, update the relevant guide. `8.cache-control.md` and `9.isr.md` are closest to these internals.
+- User guides are in `docs/`. If a behavior change changes a documented string or default, update the relevant guide. `8.cache-control.md` and `9.isr.md` are closest to these internals.
 
 ## Dev Commands
 

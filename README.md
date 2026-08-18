@@ -14,11 +14,11 @@ Composable caching primitives with TTL, stale-while-revalidate, and HTTP respons
 
 ## Features
 
-- 🗃️ **[Function caching](https://ocache.unjs.io/guide/functions)** — wrap any function with TTL, stale-while-revalidate, and request deduplication.
-- 🌐 **[HTTP response caching](https://ocache.unjs.io/guide/handler)** — automatic `etag` and `304 Not Modified` support.
-- 🔑 **[Smart cache keys](https://ocache.unjs.io/guide/query-params)** — derived from arguments or request URL, with per-header and per-query variance.
-- 🔌 **[Pluggable storage](https://ocache.unjs.io/guide/storage)** — bring your own backend via a minimal `get`/`set` interface.
-- ♻️ **[Invalidation & expiration](https://ocache.unjs.io/guide/invalidation)** — remove or mark entries stale on demand, with SWR background refresh.
+- 🗃️ **[Function caching](https://ocache.unjs.io/functions)** — wrap any function with TTL, stale-while-revalidate, and request deduplication.
+- 🌐 **[HTTP response caching](https://ocache.unjs.io/handler)** — automatic `etag` and `304 Not Modified` support.
+- 🔑 **[Smart cache keys](https://ocache.unjs.io/query-params)** — derived from arguments or request URL, with per-header and per-query variance.
+- 🔌 **[Pluggable storage](https://ocache.unjs.io/storage)** — bring your own backend via a minimal `get`/`set` interface.
+- ♻️ **[Invalidation & expiration](https://ocache.unjs.io/invalidation)** — remove or mark entries stale on demand, with SWR background refresh.
 
 ## Usage
 
@@ -45,7 +45,7 @@ const data = await cachedFetch("https://api.example.com/data");
 ```
 
 > [!NOTE]
-> Learn more in the [Caching Functions](https://ocache.unjs.io/guide/functions) guide, and see [Invalidation & Expiration](https://ocache.unjs.io/guide/invalidation) and [Storage](https://ocache.unjs.io/guide/storage).
+> Learn more in the [Caching Functions](https://ocache.unjs.io/functions) guide, and see [Invalidation & Expiration](https://ocache.unjs.io/invalidation) and [Storage](https://ocache.unjs.io/storage).
 
 ### Caching HTTP Handlers
 
@@ -74,7 +74,7 @@ const handler = defineCachedHandler(
 ```
 
 > [!NOTE]
-> Learn more in the [Caching HTTP Handlers](https://ocache.unjs.io/guide/handler) guide, and see [Query Parameters](https://ocache.unjs.io/guide/query-params), [Cookies](https://ocache.unjs.io/guide/cookies), [Cache-Control & Eligibility](https://ocache.unjs.io/guide/cache-control), and [Incremental Static Regeneration](https://ocache.unjs.io/guide/isr).
+> Learn more in the [Caching HTTP Handlers](https://ocache.unjs.io/handler) guide, and see [Query Parameters](https://ocache.unjs.io/query-params), [Cookies](https://ocache.unjs.io/cookies), [Cache-Control & Eligibility](https://ocache.unjs.io/cache-control), and [Incremental Static Regeneration](https://ocache.unjs.io/isr).
 
 ## API
 
