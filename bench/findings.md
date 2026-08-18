@@ -325,24 +325,36 @@ letting `set` refuse the binary case it already refuses would recover the range.
 invariant in `AGENTS.md` — one declaration bounds both buffering and storage — still holds;
 what changes is that the bound stops assuming every body is binary.
 
-## 8. `waitUntil` is unreachable for cached functions
+## 8. `waitUntil` was unreachable for cached functions
 
-**observed, plus the load runs**
+**observed, fixed**
 
-`cache.ts` registers background revalidation through `event?.req.waitUntil?.(...)`, and
+`cache.ts` registered background revalidation through `event?.req.waitUntil?.(...)`, and
 `event` is only set when `args[0]` is an HTTP-event shape. A plain `defineCachedFunction`
-using SWR therefore leaves its revalidation as an unowned floating promise: no host can
+using SWR therefore left its revalidation as an unowned floating promise: no host could
 await it, and a serverless runtime may freeze the process before it lands.
 
-This is not only a bookkeeping problem. In `results/steady.md`, `fanout-aggregate` — the
-scenario built to show SWR — has the **lowest offload in the suite** (77.5%) and a p99 of
-325 ms against a 220 ms origin, when its own `expect` string says stale serves should push
-p99 _below_ origin latency. `og-image` reports `stale=0` despite the option being set, so
-its misses block for the full 180 ms render and pin p99 at 188 ms. Whatever the cause,
-SWR is the least substantiated claim in the benchmark set, and it is where the harness has
-to drain background work by other means.
+`CacheOptions.waitUntil` now takes the host hook directly, and one helper in `get` picks a
+single owner per call — the option if present, otherwise `event.req.waitUntil` — so a
+promise is never registered twice. `fanout-aggregate` passes it, which is the only way a
+function scenario's refreshes can reach the driver's background queue instead of the
+`settle()` fallback.
 
-An explicit `waitUntil` option on `CacheOptions` would close the function-path half of it.
+The earlier version of this finding also blamed two load-run numbers on the missing hook.
+Both were misattributed, and re-running `fanout-aggregate` with the hook wired reproduces
+the stored rows exactly — same 242 origin calls, same 77.5% offload, p99 325.5 ms against
+325 ms. Registration decides ownership, not scheduling, so it cannot move a latency number:
+
+- `fanout-aggregate`'s 77.5% offload and 325 ms p99 are the scenario's own configuration.
+  Its p50 is **0.04 ms** against a 220 ms origin, which is SWR working. `maxAge: 5` over a
+  16 s window keeps re-opening the refresh cycle, and a key's first touch has no stale entry
+  to serve, so p99 is bounded by the origin. The `expect` string, which promised a p99
+  _below_ origin latency, was the thing that was wrong; it now describes p50 and p90.
+- `og-image` reports `stale=0` because it sets `maxAge: 3600` on a 25 s run. Nothing can
+  reach the stale window, and its 7 misses are first fills, which SWR never helps with.
+
+The remaining honest version of the second half is narrower: before the hook existed, the
+harness had no way to observe a cached function's background work at all.
 
 ## 9. Things that look like wins and are not
 

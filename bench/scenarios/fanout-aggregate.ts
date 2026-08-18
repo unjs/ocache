@@ -22,7 +22,7 @@ const scenario: Scenario = {
   kind: "function",
   summary: "3 parallel upstreams, 220 ms slowest, 500 keys, SWR with a long stale window",
   expect:
-    "Stale serves should push p99 below the origin's own latency. The tiered run should recover most of a slow backend's read cost while paying write amplification on misses.",
+    "Stale serves answer in microseconds, so p50 and p90 should collapse while p99 stays bounded by the origin: a key's first touch has no stale entry and blocks. The tiered run should recover most of a slow backend's read cost while paying write amplification on misses.",
   origin: { ioMs: 220, cpuMs: 4, concurrency: 30 },
   payloadBytes: 6 * 1024,
   keyspace: KEYSPACE,
@@ -52,6 +52,9 @@ const scenario: Scenario = {
       getKey: (id: string) => id,
       base: ctx.base,
       storage: ctx.storage,
+      // A cached function has no event, so the refresh reaches the driver only through
+      // this hook. Without it the background work escapes the run's accounting.
+      waitUntil: ctx.waitUntil,
     });
 
     const run = ctx.mode === "baseline" ? aggregate : cached;

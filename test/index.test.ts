@@ -9092,3 +9092,143 @@ describe("maxResolveTime", () => {
     });
   });
 });
+
+// `cache.ts` registered every background promise through `event?.req.waitUntil?.(...)`, and
+// `event` is only set when the first argument is an HTTP-event shape. A plain cached function
+// using SWR therefore left its refresh as an unowned floating promise: no host could await it,
+// and a serverless runtime could freeze the process before the write landed. `CacheOptions`
+// now carries the hook so the function path can hand background work to a host too.
+describe("waitUntil option", () => {
+  it("registers the storage write of a miss", async () => {
+    const registered: Promise<unknown>[] = [];
+    const fn = defineCachedFunction(() => "value", {
+      maxAge: 10,
+      name: "optWrite",
+      getKey: () => "k",
+      waitUntil: (p) => registered.push(p),
+    });
+
+    expect(await fn()).toBe("value");
+    expect(registered.length).toBeGreaterThan(0);
+    // Awaiting what the hook received is enough to see the entry in storage.
+    await Promise.all(registered);
+    expect(await testStorage.get("/cache:functions:optWrite:k.json")).toBeTruthy();
+  });
+
+  it("registers the SWR background refresh of a plain cached function", async () => {
+    const registered: Promise<unknown>[] = [];
+    let calls = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 5));
+        return `v${calls}`;
+      },
+      {
+        maxAge: 0.001,
+        swr: true,
+        staleMaxAge: 100,
+        name: "optSwr",
+        getKey: () => "k",
+        waitUntil: (p) => registered.push(p),
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    await Promise.all(registered.splice(0, registered.length));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The stale read returns immediately and the refresh runs in the background.
+    expect(await fn()).toBe("v1");
+    expect(registered.length).toBeGreaterThan(0);
+    await Promise.all(registered);
+    expect(calls).toBe(2);
+    expect(await fn()).toBe("v2");
+  });
+
+  it("registers the eviction that follows a failed resolution", async () => {
+    const registered: Promise<unknown>[] = [];
+    let calls = 0;
+    const fn = defineCachedFunction(
+      async () => {
+        calls++;
+        if (calls > 1) {
+          throw new Error("upstream down");
+        }
+        return "value";
+      },
+      {
+        maxAge: 0.001,
+        name: "optEvict",
+        getKey: () => "k",
+        waitUntil: (p) => registered.push(p),
+        onError: () => {},
+      },
+    );
+
+    expect(await fn()).toBe("value");
+    await Promise.all(registered.splice(0, registered.length));
+    expect(await testStorage.get("/cache:functions:optEvict:k.json")).toBeTruthy();
+
+    await new Promise((r) => setTimeout(r, 10));
+    await expect(fn()).rejects.toThrow("upstream down");
+    expect(registered.length).toBeGreaterThan(0);
+    await Promise.allSettled(registered);
+    expect(await testStorage.get("/cache:functions:optEvict:k.json")).toBeFalsy();
+  });
+
+  // One promise, one owner. Registering with both hooks would double-count background work
+  // for a host that also drains it.
+  it("takes precedence over the event's host hook", async () => {
+    const fromOption: Promise<unknown>[] = [];
+    const fromEvent = vi.fn();
+    const fn = defineCachedFunction<string, [any]>(() => "value", {
+      maxAge: 10,
+      name: "optPrecedence",
+      getKey: () => "k",
+      waitUntil: (p) => fromOption.push(p),
+    });
+
+    const req = new Request("http://localhost/test");
+    (req as any).waitUntil = fromEvent;
+    await fn({ req });
+
+    expect(fromOption.length).toBeGreaterThan(0);
+    expect(fromEvent).not.toHaveBeenCalled();
+  });
+
+  it("reaches the handler path too", async () => {
+    const registered: Promise<unknown>[] = [];
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      name: "optHandler",
+      waitUntil: (p) => registered.push(p),
+    });
+
+    const res = (await handler({ req: new Request("http://localhost/x") })) as Response;
+    expect(await res.text()).toBe("ok");
+    expect(registered.length).toBeGreaterThan(0);
+    await Promise.all(registered);
+
+    const second = (await handler({ req: new Request("http://localhost/x") })) as Response;
+    expect(second.headers.get("x-cache")).toBe("HIT");
+  });
+
+  // The hook decides who owns background work, not what the function computes, so it stays
+  // out of the integrity hash: adopting it must not invalidate the entries already stored.
+  it("does not change the integrity of stored entries", async () => {
+    let calls = 0;
+    const resolver = async () => {
+      calls++;
+      return "value";
+    };
+    const opts = { maxAge: 10, name: "optIntegrity", getKey: () => "k" };
+
+    await defineCachedFunction(resolver, { ...opts })();
+    expect(calls).toBe(1);
+
+    const withHook = defineCachedFunction(resolver, { ...opts, waitUntil: () => {} });
+    expect(await withHook()).toBe("value");
+    expect(calls).toBe(1);
+  });
+});

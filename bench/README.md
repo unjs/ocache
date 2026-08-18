@@ -82,7 +82,10 @@ built by spreading `redis-az`, so the pair is provably identical on the wire and
 nothing but the codec. Add a new one the same way, never by retyping the latency fields.
 
 **`waitUntil` is wired and drained.** Background revalidations count as origin calls and as
-CPU. Without that, SWR looks free.
+CPU. Without that, SWR looks free. A handler scenario carries the hook on the request
+(`makeEvent`); a function scenario has no request, so it passes `ctx.waitUntil` as the
+`waitUntil` cache option instead. Either way the promise lands in the driver's background
+queue rather than in the loop's own settling.
 
 **Prewarm.** A working set of thousands of keys never fills inside a short measured window,
 so each run first issues `3 × keyspace` requests with the origin and storage set to

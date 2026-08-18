@@ -133,6 +133,15 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     event?: HTTPEvent,
   ): Promise<ResolvedCacheEntry<T>> {
     const validateCtx = { args };
+    // One owner for background work: the explicit hook, else the event's host hook.
+    // Never both, so a promise is registered once. A cached function has no event.
+    const waitUntil = (promise: Promise<unknown>) => {
+      if (opts.waitUntil) {
+        opts.waitUntil(promise);
+      } else {
+        event?.req.waitUntil?.(promise);
+      }
+    };
     // The extension separates a key from a parent namespace with the same prefix.
     const bases = normalizeBases(opts.base);
 
@@ -286,7 +295,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
                 onError("[cache] Cache eviction error.", error);
               },
             );
-            event?.req.waitUntil?.(evictPromise);
+            waitUntil(evictPromise);
           }
         }
         throw error;
@@ -341,7 +350,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             })();
             // Register before the next await so no purge can slip in unnoticed.
             trackWrite(key, promise);
-            event?.req.waitUntil?.(promise);
+            waitUntil(promise);
           } else if (hitIndex >= 0) {
             // Remove an old entry when its replacement cannot be stored.
             const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
@@ -349,7 +358,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
                 onError("[cache] Cache eviction error.", error);
               },
             );
-            event?.req.waitUntil?.(evictPromise);
+            waitUntil(evictPromise);
           }
         } finally {
           // Hold the slot until the write is decided so a purge can still fence it.
@@ -363,7 +372,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     if (entry.value === undefined) {
       await _resolvePromise;
     } else if (expired) {
-      event?.req.waitUntil?.(_resolvePromise);
+      waitUntil(_resolvePromise);
     }
 
     // Keep status non-enumerable so storage cannot persist it.
@@ -738,14 +747,16 @@ function remainingTtl(
 }
 
 /**
- * Removes storage-location options from the integrity input.
+ * Removes storage-location and host-plumbing options from the integrity input.
  *
  * A backend change does not change the cached computation.
  * Hashing storage objects is also expensive and cannot capture closed-over configuration.
+ * `waitUntil` only decides who owns background work, so adopting it or moving between
+ * runtimes must not invalidate entries.
  */
 function integrityOpts(
   opts: CacheOptions<any, any>,
-): Omit<CacheOptions, "base" | "group" | "name" | "storage"> {
-  const { base: _, group: _g, name: _n, storage: _s, ...rest } = opts;
+): Omit<CacheOptions, "base" | "group" | "name" | "storage" | "waitUntil"> {
+  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, ...rest } = opts;
   return rest;
 }

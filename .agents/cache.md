@@ -113,4 +113,10 @@ Without the fence, a resolver that started before the purge wrote its pre-purge 
 
 ## `waitUntil`
 
-`event.req` may provide `waitUntil`, as srvx and Cloudflare `ServerRequest` do. Four sites call it as `event?.req.waitUntil?.(p)`: cache write, SWR background refresh, and both evictions. All four read it after `http/request.ts` replaces the request with a narrowed `Request`. The replacement must copy `waitUntil` and bind it to the original request. See `.agents/http/request.md`.
+`event.req` may provide `waitUntil`, as srvx and Cloudflare `ServerRequest` do. Four sites register background work through the local `waitUntil` helper in `get`: cache write, SWR background refresh, and both evictions. The helper resolves one owner per call — `opts.waitUntil` if the caller supplied it, otherwise `event?.req.waitUntil?.(p)` — and never calls both, so a host that drains its own queue cannot count one promise twice.
+
+`opts.waitUntil` exists because `event` is only set when `args[0]` is an HTTP-event shape. A plain cached function had no way to reach a host at all: its SWR refresh was an unowned floating promise, which a serverless runtime may freeze before the write lands. The bench harness could only recover this work by draining the loop (`settle()`), and `bench/scenarios/fanout-aggregate.ts` now passes the option so its refreshes reach the driver like a handler's do.
+
+The option is excluded from `integrityOpts` in both `cache.ts` and `http/config.ts`. It selects an owner for background work, not a computation, so adopting it or moving between runtimes must not invalidate stored entries.
+
+The event arm reads `waitUntil` after `http/request.ts` replaces the request with a narrowed `Request`. The replacement must copy `waitUntil` and bind it to the original request. See `.agents/http/request.md`.

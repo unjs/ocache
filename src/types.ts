@@ -214,6 +214,20 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * ```
    */
   storage?: StorageOption;
+  /**
+   * Registers background work with the host: cache writes, SWR refreshes, and evictions.
+   *
+   * A cached function has no event to read `req.waitUntil` from, so a serverless host may
+   * freeze the process before an SWR refresh lands. Pass the platform hook here.
+   * Takes precedence over `event.req.waitUntil` when both are present, so one promise is
+   * never registered twice.
+   *
+   * @example
+   * ```ts
+   * const cached = cachedFunction(fn, { swr: true, waitUntil: (p) => ctx.waitUntil(p) });
+   * ```
+   */
+  waitUntil?: (promise: Promise<any>) => void;
   /** Receives handled cache, hook, and background errors. */
   onError?: (error: unknown) => void;
 }

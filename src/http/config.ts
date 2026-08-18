@@ -98,10 +98,10 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
   };
 }
 
-/** Removes storage-location options from the integrity input. */
+/** Removes storage-location and host-plumbing options from the integrity input. */
 export function integrityOpts<E extends HTTPEvent>(
   opts: CachedEventHandlerOptions<E>,
-): Omit<CachedEventHandlerOptions<E>, "base" | "group" | "name" | "storage"> {
-  const { base: _, group: _g, name: _n, storage: _s, ...rest } = opts;
+): Omit<CachedEventHandlerOptions<E>, "base" | "group" | "name" | "storage" | "waitUntil"> {
+  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, ...rest } = opts;
   return rest;
 }
