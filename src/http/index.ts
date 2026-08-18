@@ -11,7 +11,7 @@ import { resolveStorage } from "../storage.ts";
 import { requiresRevalidation } from "./cache-control.ts";
 import { integrityOpts, resolveHandlerConfig } from "./config.ts";
 import { defaultHandleCacheHeaders, notModifiedHeaders, readConditions } from "./conditional.ts";
-import { deserializeEntry, serializeResponse } from "./entry.ts";
+import { ResponseTooLargeError, deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
 import { NarrowRequestError, isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
 import { isCacheableStatus, validateEntry } from "./validate.ts";
@@ -97,8 +97,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       return override ? { ...dynamic, ...override } : dynamic;
     },
-    // Serialization uses dynamic lifetimes from the complete entry.
-    serialize: (entry) => serializeResponse(config, entry),
+    // Serialization uses dynamic lifetimes from the complete entry. The storage read
+    // that precedes it has already resolved `_opts.storage`, whose declared per-entry
+    // ceiling bounds how much of a body may be buffered.
+    serialize: (entry, ctx) =>
+      serializeResponse(config, entry, _opts.storage, ctx.args[0] as HTTPEvent),
     // `cachedHandler` answers bypassed requests itself, so this resolver never sees one.
     shouldBypassCache: undefined,
     getKey: async (event: HTTPEvent) =>
@@ -157,6 +160,18 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     try {
       response = (await cachedFn(event))! as unknown as ResponseCacheEntry;
     } catch (error) {
+      if (error instanceof ResponseTooLargeError) {
+        // Claim before any await: the leader and its followers all see this one error.
+        const live = error.claim(event);
+        if (opts.onError) {
+          opts.onError(error);
+        } else {
+          console.error("[cache] Bypassing cache.", error);
+        }
+        // The body was never stored, so serve it live. A follower cannot read the
+        // leader's one-use stream and runs the handler for its own request instead.
+        return live ?? toResponse(await handler(event), event);
+      }
       if (!(error instanceof NarrowRequestError)) {
         throw error;
       }

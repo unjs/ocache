@@ -296,6 +296,16 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    */
   createResponse?: (body: string | Uint8Array | null, init: ResponseInit) => Response;
 
+  /**
+   * Largest response body, in bytes, that may be buffered for storage.
+   *
+   * Defaults to the largest body the storage backend could store, derived from the
+   * per-entry ceiling it declares. Memory storage declares its `maxBytes`.
+   * A larger response streams through uncached, exactly as a bypassed request does.
+   * Set `Infinity` or `0` to buffer every response the backend accepts.
+   */
+  maxBodySize?: number;
+
   /** Returns `true` to answer matching conditional headers with 304. */
   handleCacheHeaders?: (event: E, conditions: CacheConditions) => boolean;
 

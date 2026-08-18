@@ -5454,6 +5454,267 @@ describe("defineCachedHandler", () => {
   // and run the handler anyway: the handler then read the credentials and excluded query
   // values that the key does not cover, and the result was stored under — and advertised
   // for — that key. The request must instead be served exactly as an explicit bypass.
+  // The memory-storage ceiling can only refuse an entry that the process has already
+  // buffered, decoded, and possibly base64-expanded, so one attacker-selected upstream
+  // response could exhaust memory despite a configured budget. `maxBodySize` bounds the
+  // read itself, and an over-limit response streams through uncached, like a bypass.
+  describe("maxBodySize", () => {
+    /** A response whose body is produced one chunk per pull, so reads are observable. */
+    function lazyResponse(chunk: string, count: number, pulls: { n: number }) {
+      let sent = 0;
+      const stream = new ReadableStream({
+        pull(controller) {
+          if (sent++ >= count) {
+            controller.close();
+            return;
+          }
+          pulls.n++;
+          controller.enqueue(new TextEncoder().encode(chunk));
+        },
+      });
+      return new Response(stream);
+    }
+
+    it("streams an over-limit body through uncached", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let callCount = 0;
+      const path = uniquePath();
+      const body = "x".repeat(8192);
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(body);
+        },
+        { maxAge: 10, maxBodySize: 4096 },
+      );
+
+      const res = (await handler(makeEvent(path))) as Response;
+
+      // The caller still receives the complete body...
+      expect(await res.text()).toBe(body);
+      // ...but serialization never finished, so nothing was synthesized or stored.
+      expect(res.headers.has("x-cache")).toBe(false);
+      expect(res.headers.has("etag")).toBe(false);
+      expect(res.headers.has("cache-control")).toBe(false);
+      const [key] = await handler.resolveKeys(makeEvent(path));
+      expect(await testStorage.get(key!)).toBeFalsy();
+
+      // The next request resolves again rather than replaying a stored entry.
+      const res2 = (await handler(makeEvent(path))) as Response;
+      expect(await res2.text()).toBe(body);
+      expect(callCount).toBe(2);
+
+      expect(errorSpy).toHaveBeenCalledWith("[cache] Bypassing cache.", expect.any(Error));
+      errorSpy.mockRestore();
+    });
+
+    it("stops reading at the limit instead of buffering the whole body", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const pulls = { n: 0 };
+      const path = uniquePath();
+      const chunk = "y".repeat(1024);
+      const handler = defineCachedHandler(() => lazyResponse(chunk, 1000, pulls), {
+        maxAge: 10,
+        maxBodySize: 4096,
+      });
+
+      const res = (await handler(makeEvent(path))) as Response;
+
+      // 1 MB was available; the cache read ~5 chunks before it refused the body.
+      expect(pulls.n).toBeLessThan(16);
+      // The rest of the stream still reaches the caller.
+      expect(await res.text()).toBe(chunk.repeat(1000));
+      expect(pulls.n).toBe(1000);
+      errorSpy.mockRestore();
+    });
+
+    it("caches a body at the limit", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const body = "z".repeat(4096);
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(body);
+        },
+        { maxAge: 10, maxBodySize: 4096 },
+      );
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      expect(await r1.text()).toBe(body);
+      expect(await r2.text()).toBe(body);
+      expect(r2.headers.get("x-cache")).toBe("HIT");
+      expect(callCount).toBe(1);
+    });
+
+    it("derives the default limit from the backend's declared ceiling", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      // 8192 byte entries -> at most 8192 / (8/3) = 3072 body bytes.
+      const storage = createMemoryStorage({ maxBytes: 8192 });
+      useTestStorage(storage);
+      const path = uniquePath();
+      const handler = defineCachedHandler((event) => new Response("w".repeat(size(event))), {
+        maxAge: 10,
+      });
+      const size = (event: HTTPEvent) => Number(new URL(event.req.url).searchParams.get("n"));
+
+      const big = (await handler(makeEvent(`${path}?n=3073`))) as Response;
+      expect((await big.text()).length).toBe(3073);
+      expect(big.headers.has("x-cache")).toBe(false);
+
+      const small = (await handler(makeEvent(`${path}?n=3072`))) as Response;
+      expect((await small.text()).length).toBe(3072);
+      expect(small.headers.get("x-cache")).toBe("MISS");
+      errorSpy.mockRestore();
+    });
+
+    it("leaves the body unbounded when the backend declares no ceiling", async () => {
+      // A backend with no `maxEntryBytes` states no limit, so nothing is derived from it.
+      const map = new Map<string, unknown>();
+      useTestStorage({
+        get: (key) => (map.get(key) ?? null) as any,
+        set: (key, value) => {
+          map.set(key, value);
+        },
+      });
+      const path = uniquePath();
+      const body = "u".repeat(512 * 1024);
+      const handler = defineCachedHandler(() => new Response(body), { maxAge: 10 });
+
+      const res = (await handler(makeEvent(path))) as Response;
+
+      expect((await res.text()).length).toBe(body.length);
+      expect(res.headers.get("x-cache")).toBe("MISS");
+      const [key] = await handler.resolveKeys(makeEvent(path));
+      expect(await testStorage.get(key!)).toBeTruthy();
+    });
+
+    it("disables the limit when maxBodySize is 0 or Infinity", async () => {
+      for (const maxBodySize of [0, Number.POSITIVE_INFINITY, -1]) {
+        // The derived limit would be 3072 bytes; an explicit value replaces it.
+        useTestStorage(createMemoryStorage({ maxBytes: 8192 }));
+        const path = uniquePath();
+        const handler = defineCachedHandler(() => new Response("v".repeat(4096)), {
+          maxAge: 10,
+          maxBodySize,
+        });
+
+        const res = (await handler(makeEvent(path))) as Response;
+
+        // Serialization ran to completion: the body was buffered, only storage refused it.
+        expect((await res.text()).length).toBe(4096);
+        expect(res.headers.get("x-cache")).toBe("MISS");
+        expect(res.headers.get("etag")).toMatch(/^W\//);
+      }
+    });
+
+    it("runs the handler again for a deduplicated follower", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let callCount = 0;
+      const order: string[] = [];
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const path = uniquePath();
+      const body = "q".repeat(8192);
+      const handler = defineCachedHandler(
+        async () => {
+          order.push(`run-${++callCount}`);
+          // Only the leader waits: the follower's own run happens after the release.
+          if (callCount === 1) {
+            await started;
+          }
+          return new Response(body);
+        },
+        { maxAge: 10, maxBodySize: 4096 },
+      );
+
+      const leader = handler(makeEvent(path)) as Promise<Response>;
+      const follower = handler(makeEvent(path)) as Promise<Response>;
+      // Let the second request reach the cache before the first response exists.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      order.push("release");
+      release();
+      const [r1, r2] = await Promise.all([leader, follower]);
+
+      // The follower joined the leader's resolution: its own run comes after the release.
+      expect(order).toEqual(["run-1", "release", "run-2"]);
+
+      // One live stream cannot be shared, so each caller gets a complete body of its own.
+      expect(await r1.text()).toBe(body);
+      expect(await r2.text()).toBe(body);
+      expect(callCount).toBe(2);
+      const [key] = await handler.resolveKeys(makeEvent(path));
+      expect(await testStorage.get(key!)).toBeFalsy();
+      errorSpy.mockRestore();
+    });
+
+    it("releases the stream of an unclaimed background revalidation", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let cancelled = false;
+      let first = true;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          if (first) {
+            first = false;
+            return new Response("small");
+          }
+          // An endless body: only the cache's own release can end this stream.
+          return new Response(
+            new ReadableStream({
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode("z".repeat(4096)));
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+          );
+        },
+        { maxAge: 10, swr: true, staleMaxAge: 60, maxBodySize: 4096 },
+      );
+
+      expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("small");
+      await handler.expire(makeEvent(path));
+
+      // A stale read revalidates in the background, so no caller can claim that response.
+      const stale = (await handler(makeEvent(path))) as Response;
+      expect(await stale.text()).toBe("small");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(cancelled).toBe(true);
+      expect(errorSpy).toHaveBeenCalledWith("[cache] SWR handler error.", expect.any(Error));
+      errorSpy.mockRestore();
+    });
+
+    it("removes a stored entry that an over-limit response replaces", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      let big = false;
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response(big ? "b".repeat(8192) : "small"), {
+        maxAge: 10,
+        maxBodySize: 4096,
+      });
+
+      expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("small");
+      const [key] = await handler.resolveKeys(makeEvent(path));
+      expect(await testStorage.get(key!)).toBeTruthy();
+
+      big = true;
+      await handler.expire(makeEvent(path));
+      const res = (await handler(makeEvent(path))) as Response;
+
+      // The stale entry no longer represents the resource, so it does not survive.
+      expect((await res.text()).length).toBe(8192);
+      expect(await testStorage.get(key!)).toBeFalsy();
+      errorSpy.mockRestore();
+    });
+  });
+
   describe("an event that cannot be narrowed", () => {
     /** An event whose `req` is a getter: assigning to it throws in strict mode. */
     function readonlyReqEvent(path: string, headers: Record<string, string>) {

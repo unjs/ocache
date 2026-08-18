@@ -1,6 +1,14 @@
 export interface StorageInterface {
   get<T = unknown>(key: string): T | null | Promise<T | null>;
   set<T = unknown>(key: string, value: T, opts?: { ttl?: number }): void | Promise<void>;
+
+  /**
+   * Largest byte charge one entry may have, when the backend enforces a ceiling.
+   *
+   * The HTTP layer derives its response-body limit from this value so that a body the
+   * backend could never store is refused before it is buffered.
+   */
+  maxEntryBytes?: number;
 }
 
 const SharedBuffer = globalThis.SharedArrayBuffer as SharedArrayBufferConstructor | undefined;
@@ -65,6 +73,9 @@ export function createMemoryStorage(opts: MemoryStorageOptions = {}): StorageInt
   }
 
   return {
+    // Declare the per-entry ceiling so callers can refuse oversized values earlier.
+    maxEntryBytes: maxBytes,
+
     get(key) {
       const entry = map.get(key);
       if (!entry) {
