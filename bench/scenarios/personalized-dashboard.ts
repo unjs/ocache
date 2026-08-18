@@ -2,8 +2,8 @@
 //
 // The case where caching mostly cannot help, kept in the set on purpose. Keys are
 // per user, so the working set is as large as the active user base and the head is only
-// the users who reload often. `allowCookies: ["tier"]` doubles that keyspace and emits
-// `Vary: Cookie`; the session cookie is stripped, because nothing in the key covers it.
+// the users who reload often. `allowCookies: ["tier"]` emits `Vary: Cookie`; each user's
+// stable tier is keyed while the unkeyed session cookie is stripped.
 //
 // A share of requests is for a user this process has never seen. Without that churn the
 // scenario is a lie: prewarm would cover the whole user base once and report a hit ratio
@@ -33,7 +33,7 @@ const scenario: Scenario = {
     "Session churn caps the hit ratio no matter how long the cache runs. Watch what the misses cost: a slow storage profile pays for a read it does not get to use.",
   origin: { ioMs: 45, cpuMs: 3, concurrency: 20 },
   payloadBytes: 15 * 1024,
-  keyspace: USERS * 2,
+  keyspace: USERS,
   storageProfiles: ["memory", "redis-az"],
   load: {
     steady: { rps: 220, durationMs: 10_000, warmupMs: 3000 },

@@ -9,10 +9,11 @@ import type { RunRow } from "./run.ts";
 import type { Scenario } from "./scenario.ts";
 
 const ms = (value: number) => (value >= 100 ? value.toFixed(0) : value.toFixed(2));
-const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 export function renderScenario(scenario: Scenario, rows: RunRow[]): string {
-  const baseline = rows.find((r) => r.mode === "baseline");
+  const baselines = new Map(
+    rows.filter((row) => row.mode === "baseline").map((row) => [row.offeredRps, row]),
+  );
   const out: string[] = [];
   out.push(`### ${scenario.title} \`${scenario.id}\``);
   out.push("");
@@ -25,7 +26,7 @@ export function renderScenario(scenario: Scenario, rows: RunRow[]): string {
   );
   out.push("");
   out.push(
-    "| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |",
+    "| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |",
   );
   out.push("|---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|");
   for (const row of rows) {
@@ -35,25 +36,27 @@ export function renderScenario(scenario: Scenario, rows: RunRow[]): string {
         : `${row.mode === "tiered" ? "tiered mem+" : ""}${row.profile}`;
     out.push(
       `| ${label} | ${row.offeredRps} | ${row.achievedRps.toFixed(0)}${row.overloaded ? " ⚠" : ""} ` +
-        `| ${ms(row.p50)} | ${ms(row.p90)} | ${ms(row.p99)} | ${ms(row.p999)} ` +
-        `| ${row.originCalls} | ${row.mode === "baseline" ? "-" : pct(row.offload)} ` +
+        `| ${row.shed} | ${ms(row.p50)} | ${ms(row.p90)} | ${ms(row.p99)} | ${ms(row.p999)} ` +
+        `| ${row.originCallsPerRequest.toFixed(3)} ` +
         `| ${scenario.kind === "function" ? "-" : `${row.status.hit}/${row.status.stale}/${row.status.miss}/${row.status.notModified}`} ` +
         `| ${row.cpuPerRequestMs.toFixed(3)} | ${ms(row.process.loopDelayP99Ms)} |`,
     );
   }
   out.push("");
 
-  if (baseline) {
+  if (baselines.size > 0) {
     out.push(
-      "| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |",
+      "| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |",
     );
-    out.push("|---|--:|--:|--:|--:|--:|--:|");
+    out.push("|---|--:|--:|--:|--:|--:|--:|--:|");
     for (const row of rows) {
       if (row.mode === "baseline") continue;
+      const baseline = baselines.get(row.offeredRps);
+      if (!baseline) continue;
       const speedup = row.p99 > 0 ? baseline.p99 / row.p99 : 0;
       out.push(
         `| ${row.mode === "tiered" ? "tiered mem+" : ""}${row.profile} ` +
-          `| ${speedup.toFixed(2)}x | ${baseline.originCalls - row.originCalls} ` +
+          `| ${row.offeredRps} | ${speedup.toFixed(2)}x | ${baseline.originCalls - row.originCalls} ` +
           `| ${row.storage.reads} | ${ms(row.storage.readMs)} | ${row.storage.writes} ` +
           `| ${(row.storage.bytesWritten / 1024 / 1024).toFixed(1)} MiB |`,
       );
@@ -67,7 +70,7 @@ export function renderScenario(scenario: Scenario, rows: RunRow[]): string {
   if (scenario.kind === "function") {
     out.push(">");
     out.push(
-      "> A cached function has no response header to report a status through, so read `offload` instead. SWR shows up as a p50 that stays at storage latency while origin calls continue in the background.",
+      "> A cached function has no response header to report a status through, so read `origin calls/req` instead. SWR shows up as a p50 that stays at storage latency while origin calls continue in the background.",
     );
   }
   out.push(">");

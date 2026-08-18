@@ -48,7 +48,7 @@ export async function runLoad(opts: {
   spec: LoadSpec;
   rng: Rng;
   request: Request;
-  /** Runs once when the warmup window closes, to reset counters. */
+  /** Runs after warmup work has drained, before measured arrivals begin. */
   onWarmupEnd?: () => void;
   /** Background promises registered through `waitUntil`. */
   background?: Promise<unknown>[];
@@ -56,91 +56,91 @@ export async function runLoad(opts: {
 }): Promise<DriverResult> {
   const { spec, rng, request } = opts;
   const maxInflight = opts.maxInflight ?? 60_000;
-  const totalMs = spec.warmupMs + spec.durationMs;
-
-  const arrivals: number[] = [];
-  for (let t = 0; t < totalMs;) {
-    t += exponentialMs(rng, spec.rps);
-    if (t < totalMs) arrivals.push(t);
-  }
-
   const latency = new Samples();
   const status = new StatusTally();
-  let completed = 0;
-  let errors = 0;
-  let shed = 0;
-  let inflight = 0;
-  let overloaded = false;
-  let warmupDone = false;
-
   const inflightPromises = new Set<Promise<void>>();
-  const t0 = performance.now();
+  let inflight = 0;
+  let requestIndex = 0;
 
-  const dispatch = (index: number, dueAt: number) => {
-    inflight++;
-    const measured = dueAt - t0 >= spec.warmupMs;
-    const promise = request(index).then(
-      (cacheStatus) => {
-        inflight--;
-        completed++;
-        if (measured) {
-          latency.add(performance.now() - dueAt);
-          status.record(cacheStatus);
-        }
-      },
-      () => {
-        inflight--;
-        errors++;
-      },
-    );
-    inflightPromises.add(promise);
-    void promise.finally(() => inflightPromises.delete(promise));
-  };
-
-  for (let i = 0; i < arrivals.length; i++) {
-    const dueAt = t0 + arrivals[i]!;
-    const ahead = dueAt - performance.now();
-    if (ahead > 0.2) {
-      await delay(ahead);
-    } else if (i % YIELD_EVERY === 0) {
-      // Behind schedule: still yield, or the driver starves the work it is measuring.
-      await delay(0);
+  const drain = async () => {
+    while (inflightPromises.size > 0) {
+      await Promise.all(inflightPromises);
     }
-    if (!warmupDone && arrivals[i]! >= spec.warmupMs) {
-      warmupDone = true;
-      opts.onWarmupEnd?.();
-    }
-    if (inflight >= maxInflight) {
-      overloaded = true;
-      shed++;
-      continue;
-    }
-    dispatch(i, dueAt);
-  }
-
-  // Drain in-flight work, then the background revalidations it started. SWR is only
-  // honest if its `waitUntil` work is counted; otherwise it looks free.
-  while (inflightPromises.size > 0) {
-    await Promise.all(inflightPromises);
-  }
-  if (opts.background) {
-    for (let i = 0; i < 10 && opts.background.length > 0; i++) {
+    while (opts.background && opts.background.length > 0) {
       const pending = opts.background.splice(0, opts.background.length);
       await Promise.allSettled(pending);
     }
-  }
-  await settle();
+    await settle();
+  };
 
-  const wallMs = performance.now() - t0;
+  const runWindow = async (durationMs: number, measured: boolean) => {
+    const arrivals: number[] = [];
+    for (let t = 0; t < durationMs;) {
+      t += exponentialMs(rng, spec.rps);
+      if (t < durationMs) arrivals.push(t);
+    }
+
+    let completed = 0;
+    let errors = 0;
+    let shed = 0;
+    let overloaded = false;
+    const t0 = performance.now();
+
+    const dispatch = (index: number, dueAt: number) => {
+      inflight++;
+      const promise = request(index).then(
+        (cacheStatus) => {
+          inflight--;
+          completed++;
+          if (measured) {
+            latency.add(performance.now() - dueAt);
+            status.record(cacheStatus);
+          }
+        },
+        () => {
+          inflight--;
+          errors++;
+        },
+      );
+      inflightPromises.add(promise);
+      void promise.finally(() => inflightPromises.delete(promise));
+    };
+
+    for (let i = 0; i < arrivals.length; i++) {
+      const dueAt = t0 + arrivals[i]!;
+      const ahead = dueAt - performance.now();
+      if (ahead > 0.2) {
+        await delay(ahead);
+      } else if (i % YIELD_EVERY === 0) {
+        await delay(0);
+      }
+      if (inflight >= maxInflight) {
+        overloaded = true;
+        shed++;
+        requestIndex++;
+        continue;
+      }
+      dispatch(requestIndex++, dueAt);
+    }
+    await drain();
+    return { completed, errors, shed, overloaded, wallMs: performance.now() - t0 };
+  };
+
+  if (spec.warmupMs > 0) {
+    await runWindow(spec.warmupMs, false);
+  }
+  opts.onWarmupEnd?.();
+  const measured = await runWindow(spec.durationMs, true);
+
   return {
     offeredRps: spec.rps,
     achievedRps: (latency.count / spec.durationMs) * 1000,
-    completed,
-    errors,
-    shed,
-    overloaded,
+    completed: measured.completed,
+    errors: measured.errors,
+    shed: measured.shed,
+    overloaded: measured.overloaded,
     latency,
     status,
-    wallMs,
+    wallMs: measured.wallMs,
   };
 }

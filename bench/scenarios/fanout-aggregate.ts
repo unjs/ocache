@@ -11,10 +11,12 @@
 
 import { defineCachedFunction } from "../../src/index.ts";
 import { createZipf } from "../harness/random.ts";
+import { filler } from "../harness/scenario.ts";
 
 import type { Scenario } from "../harness/scenario.ts";
 
 const KEYSPACE = 500;
+const PARTS = [filler(2048), filler(2048), filler(2048)];
 
 const scenario: Scenario = {
   id: "fanout-aggregate",
@@ -35,13 +37,10 @@ const scenario: Scenario = {
 
   create(ctx) {
     const pick = createZipf(ctx.rng, KEYSPACE, 1.2);
-    const aggregate = (id: string) =>
-      ctx.origin.run(() => ({
-        id,
-        profile: { id, name: `user-${id}` },
-        orders: Array.from({ length: 20 }, (_, i) => ({ i, total: i * 3 })),
-        recommendations: Array.from({ length: 30 }, (_, i) => `sku-${i}`),
-      }));
+    const aggregate = async (_id: string) => {
+      const parts = await Promise.all(PARTS.map((part) => ctx.origin.run(() => part)));
+      return parts.join("");
+    };
 
     const cached = defineCachedFunction(aggregate, {
       name: "aggregate-profile",
@@ -60,7 +59,7 @@ const scenario: Scenario = {
     const run = ctx.mode === "baseline" ? aggregate : cached;
     return async () => {
       const value = await run(`u${pick()}`);
-      if (!value.id) throw new Error("empty aggregate");
+      if (value.length !== scenario.payloadBytes) throw new Error("invalid aggregate");
       return null;
     };
   },

@@ -122,9 +122,23 @@ describe("benchmark harness", () => {
       },
       [
         row({ offeredRps: 10, p99: 100, originCalls: 10 }),
-        row({ offeredRps: 20, p99: 200, originCalls: 20 }),
-        row({ mode: "cached", profile: "memory", offeredRps: 10, p99: 50, originCalls: 2 }),
-        row({ mode: "cached", profile: "memory", offeredRps: 20, p99: 50, originCalls: 4 }),
+        row({ offeredRps: 20, p99: 200, originCalls: 20, originCallsPerRequest: 2 }),
+        row({
+          mode: "cached",
+          profile: "memory",
+          offeredRps: 10,
+          p99: 50,
+          originCalls: 2,
+          originCallsPerRequest: 0.2,
+        }),
+        row({
+          mode: "cached",
+          profile: "memory",
+          offeredRps: 20,
+          p99: 50,
+          originCalls: 4,
+          originCallsPerRequest: 0.4,
+        }),
       ],
     );
     expect(report).toContain("| memory | 10 | 2.00x | 8 |");

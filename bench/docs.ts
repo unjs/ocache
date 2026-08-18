@@ -94,7 +94,14 @@ function groupByScenario(rows: RunRow[]): Group[] {
 
 /** p99 improvement of one cached row over its own scenario's baseline. */
 function speedup(group: Group, row: RunRow): number {
-  return group.baseline && row.p99 > 0 ? group.baseline.p99 / row.p99 : 0;
+  return group.baseline && row.offeredRps === group.baseline.offeredRps && row.p99 > 0
+    ? group.baseline.p99 / row.p99
+    : 0;
+}
+
+function originReduction(group: Group, row: RunRow): number {
+  const baseline = group.baseline?.originCallsPerRequest ?? 0;
+  return baseline === 0 ? 0 : Math.max(0, 1 - row.originCallsPerRequest / baseline);
 }
 
 function median(values: number[]): number {
@@ -154,13 +161,15 @@ function values(data: BenchFile): Record<string, string> {
     "speedup-min": ratio(Math.min(...speedups)),
     "speedup-max": ratio(Math.max(...speedups)),
     "speedup-median": ratio(median(speedups)),
-    "offload-min": pct(Math.min(...cached.map(({ row }) => row.offload))),
-    "offload-max": pct(Math.max(...cached.map(({ row }) => row.offload))),
+    "offload-min": pct(Math.min(...cached.map(({ group, row }) => originReduction(group, row)))),
+    "offload-max": pct(Math.max(...cached.map(({ group, row }) => originReduction(group, row)))),
     "top-scenario": best.group.id,
     "top-speedup": ratio(Math.max(...speedups)),
     "worst-scenario": worst.group.id,
     "worst-speedup": ratio(worst.best),
-    "worst-offload": pct(Math.max(...worst.group.cached.map((row) => row.offload))),
+    "worst-offload": pct(
+      Math.max(...worst.group.cached.map((row) => originReduction(worst.group, row))),
+    ),
 
     "cpu-top-scenario": drop.group.id,
     "cpu-top-baseline": cpu(drop.baseline),
@@ -188,7 +197,7 @@ function tables(data: BenchFile): Record<string, string> {
       "no-cache p99 (ms)",
       "cached p99 (ms)",
       "p99 vs no cache",
-      "offload",
+      "origin-call reduction",
     ],
     ["left", "right", "right", "right", "right", "right"],
     groups.map((group) => [
@@ -204,7 +213,7 @@ function tables(data: BenchFile): Record<string, string> {
         ratio,
       ),
       span(
-        group.cached.map((row) => row.offload),
+        group.cached.map((row) => originReduction(group, row)),
         pct,
       ),
     ]),
@@ -275,7 +284,7 @@ function renderCharts(input: string): Map<string, string> {
 function chartOrder(data: BenchFile, charts: Map<string, string>): string[] {
   const wanted = [
     "combined",
-    "offload",
+    "origin-call-reduction",
     "sustained",
     ...groupByScenario(data.rows).map((group) => `latency-${group.id}`),
     "hit-cost",
@@ -324,6 +333,15 @@ function figure(name: string, svg: string): string {
 
 const input = resolve(process.argv[2] ?? join(ROOT, "bench/results/steady.json"));
 const data = JSON.parse(readFileSync(input, "utf8")) as BenchFile;
+for (const row of data.rows ?? []) {
+  if (!Number.isFinite(row.originCallsPerRequest)) {
+    row.originCallsPerRequest = row.completed === 0 ? 0 : row.originCalls / row.completed;
+  }
+}
+if (data.load !== "steady") {
+  console.error(`bench:docs requires a steady run, received ${data.load}`);
+  process.exit(1);
+}
 if (!Array.isArray(data.rows) || data.rows.length === 0) {
   console.error(`${input} has no rows`);
   process.exit(1);

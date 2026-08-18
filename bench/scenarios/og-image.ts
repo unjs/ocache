@@ -6,7 +6,7 @@
 // and never rebuilds the response at all.
 
 import { defineCachedHandler } from "../../src/index.ts";
-import { createZipf } from "../harness/random.ts";
+import { createRng, createZipf } from "../harness/random.ts";
 import { binaryFiller, makeEvent } from "../harness/scenario.ts";
 
 import type { HTTPEvent } from "../../src/types.ts";
@@ -38,14 +38,14 @@ const scenario: Scenario = {
 
   create(ctx) {
     const pick = createZipf(ctx.rng, KEYSPACE, 1.3);
-    // Validators the client learned from an earlier response.
-    const etags = new Map<number, string>();
+    const conditionalRng = createRng(0x6f_67_69_6d);
+    const validators = new Set<number>();
 
     const handler = (event: HTTPEvent) =>
       ctx.origin.run(() => {
         const slug = Number(event.url!.pathname.split("/").pop()!.replace(".png", "")) || 0;
         return new Response(IMAGES[slug % IMAGES.length]! as unknown as BodyInit, {
-          headers: { "content-type": "image/png" },
+          headers: { "content-type": "image/png", etag: `"og-${slug}"` },
         });
       });
 
@@ -61,16 +61,16 @@ const scenario: Scenario = {
     const serve = ctx.mode === "cached" ? cached : handler;
     return async () => {
       const slug = pick();
-      const known = etags.get(slug);
-      const conditional = known !== undefined && ctx.rng() < CONDITIONAL_SHARE;
+      const conditionalDraw = conditionalRng();
+      const conditional = validators.has(slug) && conditionalDraw < CONDITIONAL_SHARE;
       const event = makeEvent(
         `https://shop.example/og/${slug}.png`,
-        conditional ? { headers: { "if-none-match": known } } : undefined,
+        conditional ? { headers: { "if-none-match": `"og-${slug}"` } } : undefined,
         ctx.waitUntil,
       );
+      // Traffic follows scheduled request order, not mode-dependent completion order.
+      validators.add(slug);
       const res = (await serve(event)) as Response;
-      const etag = res.headers.get("etag");
-      if (etag) etags.set(slug, etag);
       await res.arrayBuffer();
       return res.status === 304 ? "304" : res.headers.get("x-cache");
     };

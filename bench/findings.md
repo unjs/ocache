@@ -12,10 +12,11 @@ is estimated. Each finding carries its status:
 
 ## How these numbers were produced
 
-Per-hit costs are **paired**: one repetition times the handler alone and then the cached
-handler back to back, and keeps the difference. Nine repetitions, `global.gc()` before each
-side, median of the differences. Absolute figures use the minimum, because scheduler and GC
-noise can only add time. `pnpm bench` runs under `--expose-gc` for this reason.
+Per-hit costs are **paired**: each repetition times the handler and cached handler back to
+back, alternating which runs first, and keeps the difference. Ten repetitions,
+`global.gc()` before each side, with the two central pairs averaged. The absolute figures
+come from those same pairs, so their difference is the displayed overhead. `pnpm bench` runs
+under `--expose-gc` for this reason.
 
 This matters more than it sounds. Two earlier attempts produced numbers that were not just
 noisy but **wrong in direction**:
@@ -187,10 +188,10 @@ sides). From `results/steady.md`:
 
 | scenario                        | body          | hit p50 | MiB written |
 | ------------------------------- | ------------- | ------: | ----------: |
-| `og-image` / `redis-az`         | 64 KiB binary | 1.56 ms |       0.586 |
-| `og-image` / `redis-az-bytes`   | 64 KiB binary | 1.38 ms |       0.440 |
-| `ssr-product-page` / `redis-az` | 40 KiB text   | 1.27 ms |       3.033 |
-| `ssr-product-page` / `-bytes`   | 40 KiB text   | 1.23 ms |       2.996 |
+| `og-image` / `redis-az`         | 64 KiB binary | 1.57 ms |       0.167 |
+| `og-image` / `redis-az-bytes`   | 64 KiB binary | 1.33 ms |       0.126 |
+| `ssr-product-page` / `redis-az` | 40 KiB text   | 1.18 ms |       1.516 |
+| `ssr-product-page` / `-bytes`   | 40 KiB text   | 1.18 ms |       1.498 |
 
 **The storage volume is the result, not the microseconds.** `og-image` writes 25% fewer bytes
 — which is the 4/3 base64 expansion, gone — and that is a number no CPU tuning reaches: it is
@@ -345,16 +346,13 @@ promise is never registered twice. `fanout-aggregate` passes it, which is the on
 function scenario's refreshes can reach the driver's background queue instead of the
 `settle()` fallback.
 
-The earlier version of this finding also blamed two load-run numbers on the missing hook.
-Both were misattributed, and re-running `fanout-aggregate` with the hook wired reproduces
-the stored rows exactly — same 242 origin calls, same 77.5% offload, p99 325.5 ms against
-325 ms. Registration decides ownership, not scheduling, so it cannot move a latency number:
+The earlier version of this finding also blamed load-run numbers on the missing hook.
+That was misattributed: registration decides ownership, not scheduling, so it cannot move a
+latency number. The scenario now performs the three upstream calls it declares. Its current
+memory row makes 729 upstream calls for 1,075 requests, a 77.4% reduction against the
+baseline's three calls per request. Its **0.05 ms** p50 against a 220 ms upstream is SWR
+working; p99 remains 480 ms because a key's first touch has no stale entry and blocks.
 
-- `fanout-aggregate`'s 77.5% offload and 325 ms p99 are the scenario's own configuration.
-  Its p50 is **0.04 ms** against a 220 ms origin, which is SWR working. `maxAge: 5` over a
-  16 s window keeps re-opening the refresh cycle, and a key's first touch has no stale entry
-  to serve, so p99 is bounded by the origin. The `expect` string, which promised a p99
-  _below_ origin latency, was the thing that was wrong; it now describes p50 and p90.
 - `og-image` reports `stale=0` because it sets `maxAge: 3600` on a 25 s run. Nothing can
   reach the stale window, and its 7 misses are first fills, which SWR never helps with.
 
@@ -380,8 +378,8 @@ harness had no way to observe a cached function's background work at all.
 - **Multi-tier `base` prefixes are not a second backend.** They are key prefixes on one
   `StorageInterface`, so memory-in-front-of-Redis needs a routing wrapper the library does
   not ship. The harness has one in `harness/storage.ts`, and the load runs show what it is
-  worth: on `fanout-aggregate` over `kv-edge`, adding a memory tier moves p50 from 7.07 ms
-  to 0.05 ms and time blocked on reads from 9015 ms to 454 ms, for 6% more reads and 23%
+  worth: on `fanout-aggregate` over `kv-edge`, adding a memory tier moves p50 from 8.47 ms
+  to 0.05 ms and time blocked on reads from 9653 ms to 458 ms, for 6% more reads and 23%
   more writes. That is the largest single improvement measured anywhere in this directory,
   and users cannot reach it with what the package exports.
 
@@ -390,15 +388,15 @@ harness had no way to observe a cached function's background work at all.
 **measured, from the load runs**
 
 Per-hit CPU is only the whole story on memory storage. Median hit latency for
-`markdown-render` at 89.6% offload, by backend (`results/steady.md`):
+`markdown-render` at 89.6% origin-call reduction, by backend (`results/steady.md`):
 
 | backend        |  hit p50 | 24 µs as a share |
 | -------------- | -------: | ---------------: |
-| `memory`       |  0.07 ms |             ~34% |
-| `redis-local`  |  0.26 ms |              ~9% |
-| `redis-az`     |  0.92 ms |              ~3% |
-| `sql`          |  2.80 ms |              ~1% |
-| `object-store` | 35.98 ms |           ~0.07% |
+| `memory`       |  0.06 ms |             ~40% |
+| `redis-local`  |  0.25 ms |             ~10% |
+| `redis-az`     |  0.87 ms |              ~3% |
+| `sql`          |  2.55 ms |              ~1% |
+| `object-store` | 32.59 ms |           ~0.07% |
 
 So findings 1, 4 and 5 pay off for in-process caching and are close to irrelevant behind a
 network hop. Finding 3 is the exception: it is miss-path cost, which no backend hides. Finding 2
@@ -406,21 +404,19 @@ was the other one — 102 µs of base64 decode at 40 KiB was 11% of a `redis-az`
 any backend — and that is the argument for having fixed it rather than tuning a hit path that a
 network hop already dominates.
 
-**The tail belongs to the miss path.** `ssr-product-page` on memory improves p50 by 311x
-(52.85 → 0.17 ms) and p99 by only 2.88x (137 → 47.5 ms). p90 is where the 13% miss
-population starts. No amount of hit-path µs moves that number; finding 3 is the one that
-could. On a slow backend the effect swallows the benefit outright — `api-list` on `kv-edge`
-is 1.23x at p99 and 105 ms against 112 ms at p99.9, which is nothing.
+**The tail belongs to the miss path.** `ssr-product-page` on memory improves p50 by 334x
+(51.89 → 0.16 ms) and p99 by only 2.90x (122 → 42.2 ms). p90 is where the miss population
+starts. No amount of hit-path µs moves that number; finding 3 is the one that could. On a
+slow backend the effect nearly swallows the benefit — `api-list` on `kv-edge` is only 1.46x
+at p99.
 
 The corollary is the more useful one for users: **ocache's own cost is not what decides
 whether caching helps.** The break-even table in the generated report is set by the
 backend's median read, and a handler cheaper than that read is faster with no cache at all.
 
-That table is also produced by `bench:micro`, which is single-pass. Its per-payload row for
-an 8 KiB handler reads +19.3 µs against the +24.3 µs measured here, and its curve is
-non-monotonic in payload size — exactly the failure this document opens by describing.
-Treat the report's break-even numbers as directional until they are regenerated from the
-paired harness.
+That table is produced by the paired, GC-controlled calibration in
+`harness/calibrate.ts`. It alternates measurement order and reports the median pair, so the
+absolute columns and their displayed difference describe one estimator.
 
 ## Reproducing
 
@@ -434,8 +430,8 @@ plus direct timing of the encode and decode functions, and an A/B against a copy
 carrying the old codec; finding 3 from the same pairing with a fresh key per call, so
 every call stores;
 finding 5 from `new Response` with the body held constant; finding 7 from a store against a
-1 MB `maxEntryBytes`. Pairing follows `timePair` in `harness/calibrate.ts` — nine repeats,
-`globalThis.gc()` between sides, median of the per-repeat deltas — and needs
+1 MB `maxEntryBytes`. Pairing follows `timePair` in `harness/calibrate.ts` — ten repeats,
+alternating order, `globalThis.gc()` between sides, and the two central pairs averaged — and needs
 `node --expose-gc`, which the `pnpm bench` scripts set.
 
 Load-run figures come from `results/steady.md`, regenerated in full for finding 2b — one
@@ -443,5 +439,5 @@ run, one seed, every scenario, so rows in it may be compared with each other. Th
 `personalized-dashboard` row that used to predate the scenario's 15% session churn is part of
 that regeneration and is current again.
 
-`pnpm bench:micro` covers the hit path less precisely — it is a single-pass tool, so treat
-it as directional and re-measure anything you intend to act on.
+`pnpm bench:micro` remains a separate mitata view of the hit path; re-measure any number you
+intend to act on with the paired calibration method above.

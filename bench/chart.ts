@@ -409,16 +409,29 @@ function tickLabel(value: number): string {
   return value.toFixed(Math.ceil(-Math.log10(value)));
 }
 
-// -- chart: origin offload --------------------------------------------------------------
+// -- chart: origin-call reduction ------------------------------------------------------
 
 /**
  * One bar per cached configuration, grouped by scenario.
  *
  * Magnitude against a fixed 0-100% domain, so one hue is the whole encoding; baseline rows
- * are excluded because their offload is zero by construction.
+ * are excluded because their reduction is zero by construction.
  */
+function originReduction(baseline: RunRow, cached: RunRow): number {
+  return baseline.originCallsPerRequest === 0
+    ? 0
+    : Math.max(0, 1 - cached.originCallsPerRequest / baseline.originCallsPerRequest);
+}
+
 function offloadChart(rows: RunRow[]): string {
-  const cached = rows.filter((r) => r.mode !== "baseline");
+  const baselines = new Map(
+    rows
+      .filter((row) => row.mode === "baseline")
+      .map((row) => [`${row.scenario}:${row.offeredRps}`, row]),
+  );
+  const cached = rows.filter(
+    (row) => row.mode !== "baseline" && baselines.has(`${row.scenario}:${row.offeredRps}`),
+  );
   if (cached.length === 0) return "";
 
   const groups = groupByScenario(cached).map(
@@ -427,8 +440,8 @@ function offloadChart(rows: RunRow[]): string {
   const x0 = labelWidth(groups.flatMap(([, , labels]) => labels)) + 28;
   const x1 = 660;
   const head = header(
-    "Origin offload",
-    "Share of requests served entirely from cache, so they never reached the origin. This — not the speedup — is the number that maps to your origin bill. The no-cache rows are 0% by definition and are left out.",
+    "Origin-call reduction",
+    "Reduction in origin invocations per admitted request against the matching no-cache row, including deduplication and background refreshes. This — not the speedup — maps to origin work. The no-cache rows are left out.",
   );
   const out = [head.svg];
 
@@ -451,9 +464,11 @@ function offloadChart(rows: RunRow[]): string {
           anchor: "end",
         }),
       );
-      const w = row.offload * (x1 - x0);
+      const baseline = baselines.get(`${row.scenario}:${row.offeredRps}`)!;
+      const reduction = originReduction(baseline, row);
+      const w = reduction * (x1 - x0);
       out.push(bar(x0, y, w, 14, "s1"));
-      out.push(text(x0 + w + 8, y + 11, pct(row.offload), { fill: "ink2", size: 11 }));
+      out.push(text(x0 + w + 8, y + 11, pct(reduction), { fill: "ink2", size: 11 }));
       y += 20;
     }
     y += 8;
@@ -465,12 +480,12 @@ function offloadChart(rows: RunRow[]): string {
     rules.push(line(x, top - 4, x, bottom, tick === 0 ? "axis" : "grid"));
     out.push(text(x, bottom + 15, `${tick * 100}%`, { fill: "muted", size: 10, anchor: "middle" }));
   }
-  out.push(text(x0, bottom + 31, "offload", { fill: "muted", size: 10 }));
+  out.push(text(x0, bottom + 31, "origin-call reduction", { fill: "muted", size: 10 }));
 
   return svgDoc(
     bottom + 44,
-    "Origin offload",
-    "Share of requests served from cache without reaching the origin, for each scenario and storage backend.",
+    "Origin-call reduction",
+    "Reduction in origin invocations per admitted measured request for each scenario and storage backend.",
     out[0] + rules.join("") + out.slice(1).join(""),
   );
 }
@@ -617,7 +632,7 @@ function sustainedChart(entries: BenchFile["sustained"]): string {
 
 const SUMMARY_ROW_H = 24;
 const SUMMARY_X1 = 556;
-/** Fixed columns to the right of the plot: speedup, then the offload track and its share. */
+/** Fixed columns to the right of the plot: speedup, then origin-call reduction. */
 const SPEEDUP_X = 664;
 const OFFLOAD_X0 = 676;
 const OFFLOAD_W = 66;
@@ -713,8 +728,10 @@ function combinedChart(data: BenchFile): string {
   const strip: Array<[string, string]> = [
     [times(median(pairs.map((pair) => pair.speedup))), "median p99 latency improvement"],
     [
-      `${Math.round(median(pairs.map((pair) => pair.cached.offload)) * 100)}%`,
-      "median origin offload",
+      `${Math.round(
+        median(pairs.map((pair) => originReduction(pair.baseline, pair.cached))) * 100,
+      )}%`,
+      "median origin-call reduction",
     ],
   ];
   // A share, not a multiplier: two of these numbers are percentages already, and a
@@ -746,7 +763,9 @@ function combinedChart(data: BenchFile): string {
     ]),
   );
   out.push(text(SPEEDUP_X, top - 10, "faster", { fill: "muted", size: 10, anchor: "end" }));
-  out.push(text(OFFLOAD_X, top - 10, "origin offload", { fill: "muted", size: 10, anchor: "end" }));
+  out.push(
+    text(OFFLOAD_X, top - 10, "origin-call reduction", { fill: "muted", size: 10, anchor: "end" }),
+  );
 
   for (let v = min; v <= max; v *= 10) {
     out.push(line(x(v), top - 4, x(v), bottom, "grid"));
@@ -792,11 +811,12 @@ function combinedChart(data: BenchFile): string {
         anchor: "end",
       }),
     );
-    // Track behind the offload bar: the domain is a fixed 0-100%, so the gap is the number too.
+    // The domain is fixed at 0-100%, so the gap is meaningful too.
+    const reduction = originReduction(pair.baseline, pair.cached);
     out.push(bar(OFFLOAD_X0, y - 5, OFFLOAD_W, 10, "grid"));
-    out.push(bar(OFFLOAD_X0, y - 5, OFFLOAD_W * pair.cached.offload, 10, "s2"));
+    out.push(bar(OFFLOAD_X0, y - 5, OFFLOAD_W * reduction, 10, "s2"));
     out.push(
-      text(OFFLOAD_X, y + 4, `${Math.round(pair.cached.offload * 100)}%`, {
+      text(OFFLOAD_X, y + 4, `${Math.round(reduction * 100)}%`, {
         fill: "ink2",
         size: 11,
         anchor: "end",
@@ -816,7 +836,7 @@ function combinedChart(data: BenchFile): string {
   return svgDoc(
     bottom + 44,
     "ocache under load",
-    `p99 latency with and without ocache for ${pairs.length} workloads, the share of requests served without reaching the origin, and the medians across all of them.`,
+    `p99 latency with and without ocache for ${pairs.length} workloads, origin-call reduction against each no-cache baseline, and the medians across all of them.`,
     out.join(""),
   );
 }
@@ -832,6 +852,11 @@ if (!input) {
 }
 
 const data = JSON.parse(readFileSync(input, "utf8")) as BenchFile;
+for (const row of data.rows ?? []) {
+  if (!Number.isFinite(row.originCallsPerRequest)) {
+    row.originCallsPerRequest = row.completed === 0 ? 0 : row.originCalls / row.completed;
+  }
+}
 if (!Array.isArray(data.rows) || data.rows.length === 0) {
   console.error(`${input} has no rows`);
   process.exit(1);
@@ -858,15 +883,15 @@ const combined = combinedChart(data);
 
 emit(
   "combined",
-  "The whole run in one figure: p99 latency with and without ocache, the share of requests that never reached the origin, and the medians across every workload.",
-  "ocache under load: p99 latency with and without cache, and origin offload, per workload",
+  "The whole run in one figure: p99 latency with and without ocache, origin-call reduction, and medians across every workload.",
+  "ocache under load: p99 latency with and without cache, and origin-call reduction, per workload",
   () => combined,
 );
 
 emit(
-  "offload",
-  "Share of requests served from cache without reaching the origin, for each scenario and storage backend.",
-  "Origin offload per scenario and storage backend",
+  "origin-call-reduction",
+  "Reduction in origin invocations per admitted measured request, for each scenario and storage backend.",
+  "Origin-call reduction per scenario and storage backend",
   () => offloadChart(data.rows),
 );
 

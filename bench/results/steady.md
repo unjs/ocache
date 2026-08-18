@@ -1,6 +1,6 @@
 # ocache benchmark
 
-Node v24.19.0 · seed 1 · load `steady` · 572s
+Node v24.19.0 · seed 1 · load `steady` · 605s
 
 Storage profiles are simulated round trips (lognormal, fitted to p50/p99) plus the
 JSON encode/decode a remote client library performs on the caller's thread:
@@ -22,20 +22,20 @@ JSON encode/decode a remote client library performs on the caller's thread:
 
 Origin: 18 ms I/O + 12 ms CPU, concurrency 20. 5000 keys, ~40 KiB payload.
 
-| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |
+| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|
-| **no cache** | 60 | 58 | 52.65 | 92.24 | 134 | 158 | 584 | - | 0/0/0/0 | 13.400 | 36.77 |
-| memory | 60 | 58 | 0.15 | 25.57 | 47.44 | 70.92 | 76 | 87.0% | 508/0/76/0 | 3.348 | 2.02 |
-| redis-az | 60 | 58 | 1.27 | 26.29 | 49.23 | 72.44 | 76 | 87.0% | 508/0/76/0 | 4.259 | 2.04 |
-| redis-az-bytes | 60 | 58 | 1.23 | 26.27 | 49.40 | 72.38 | 76 | 87.0% | 508/0/76/0 | 4.240 | 2.06 |
-| kv-edge | 60 | 58 | 8.83 | 35.86 | 63.67 | 75.54 | 76 | 87.0% | 508/0/76/0 | 4.729 | 2.05 |
+| **no cache** | 60 | 59 | 0 | 51.89 | 90.43 | 122 | 154 | 1.000 | 0/0/0/0 | 13.410 | 36.90 |
+| memory | 60 | 59 | 0 | 0.16 | 4.23 | 42.22 | 63.29 | 0.065 | 547/0/38/0 | 2.543 | 1.98 |
+| redis-az | 60 | 59 | 0 | 1.18 | 5.91 | 43.17 | 65.05 | 0.065 | 547/0/38/0 | 3.451 | 1.96 |
+| redis-az-bytes | 60 | 59 | 0 | 1.18 | 5.98 | 43.14 | 65.10 | 0.065 | 547/0/38/0 | 3.461 | 1.96 |
+| kv-edge | 60 | 59 | 0 | 8.26 | 26.45 | 59.53 | 83.97 | 0.065 | 547/0/38/0 | 3.908 | 2.01 |
 
-| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |
-|---|--:|--:|--:|--:|--:|--:|
-| memory | 2.83x | 508 | 584 | 0.00 | 76 | 0.0 MiB |
-| redis-az | 2.72x | 508 | 584 | 694 | 76 | 3.0 MiB |
-| redis-az-bytes | 2.72x | 508 | 584 | 689 | 76 | 3.0 MiB |
-| kv-edge | 2.11x | 508 | 584 | 5520 | 76 | 3.0 MiB |
+| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| memory | 60 | 2.90x | 547 | 585 | 0.00 | 38 | 0.0 MiB |
+| redis-az | 60 | 2.84x | 547 | 585 | 668 | 38 | 1.5 MiB |
+| redis-az-bytes | 60 | 2.84x | 547 | 585 | 665 | 38 | 1.5 MiB |
+| kv-edge | 60 | 2.06x | 547 | 585 | 5483 | 38 | 1.5 MiB |
 
 > `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.
 >
@@ -47,18 +47,18 @@ Origin: 18 ms I/O + 12 ms CPU, concurrency 20. 5000 keys, ~40 KiB payload.
 
 Origin: 25 ms I/O + 2 ms CPU, concurrency 20. 3000 keys, ~8 KiB payload.
 
-| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |
+| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|
-| **no cache** | 300 | 295 | 31.35 | 53.09 | 82.85 | 112 | 2953 | - | 0/0/0/0 | 2.852 | 6.70 |
-| memory | 300 | 295 | 0.10 | 14.33 | 48.16 | 74.23 | 311 | 89.5% | 2641/0/312/0 | 1.520 | 2.89 |
-| redis-az | 300 | 295 | 0.89 | 14.83 | 48.49 | 74.81 | 311 | 89.5% | 2641/0/312/0 | 1.942 | 2.87 |
-| kv-edge | 300 | 295 | 7.29 | 28.47 | 66.73 | 105 | 313 | 89.4% | 2640/0/313/0 | 2.231 | 2.91 |
+| **no cache** | 300 | 295 | 0 | 31.10 | 53.76 | 83.94 | 112 | 1.000 | 0/0/0/0 | 2.878 | 8.26 |
+| memory | 300 | 295 | 0 | 0.10 | 0.85 | 42.62 | 75.13 | 0.070 | 2746/0/206/0 | 1.451 | 2.68 |
+| redis-az | 300 | 295 | 0 | 0.85 | 3.00 | 43.42 | 75.45 | 0.070 | 2746/0/206/0 | 1.875 | 2.84 |
+| kv-edge | 300 | 295 | 0 | 6.97 | 24.00 | 57.49 | 84.70 | 0.070 | 2746/0/206/0 | 2.157 | 2.72 |
 
-| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |
-|---|--:|--:|--:|--:|--:|--:|
-| memory | 1.72x | 2642 | 2953 | 0.00 | 313 | 0.0 MiB |
-| redis-az | 1.71x | 2642 | 2953 | 2561 | 313 | 2.6 MiB |
-| kv-edge | 1.24x | 2640 | 2953 | 25792 | 315 | 2.6 MiB |
+| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| memory | 300 | 1.97x | 2746 | 2952 | 0.00 | 206 | 0.0 MiB |
+| redis-az | 300 | 1.93x | 2746 | 2952 | 2571 | 206 | 1.7 MiB |
+| kv-edge | 300 | 1.46x | 2746 | 2952 | 25553 | 206 | 1.7 MiB |
 
 > `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.
 >
@@ -68,18 +68,18 @@ Origin: 25 ms I/O + 2 ms CPU, concurrency 20. 3000 keys, ~8 KiB payload.
 
 15 KiB per-user page, 2k returning users plus 15% first-time sessions, tier cookie keyed.
 
-Origin: 45 ms I/O + 3 ms CPU, concurrency 20. 4000 keys, ~15 KiB payload.
+Origin: 45 ms I/O + 3 ms CPU, concurrency 20. 2000 keys, ~15 KiB payload.
 
-| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |
+| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|
-| **no cache** | 220 | 214 | 56.13 | 96.98 | 150 | 185 | 2136 | - | 0/0/0/0 | 3.885 | 12.48 |
-| memory | 220 | 214 | 0.12 | 44.88 | 97.02 | 135 | 391 | 81.7% | 1745/0/391/0 | 1.943 | 4.07 |
-| redis-az | 220 | 214 | 1.16 | 45.50 | 99.97 | 136 | 391 | 81.7% | 1745/0/391/0 | 2.476 | 4.08 |
+| **no cache** | 220 | 214 | 0 | 56.03 | 96.41 | 151 | 188 | 1.000 | 0/0/0/0 | 3.912 | 12.52 |
+| memory | 220 | 214 | 0 | 0.12 | 44.84 | 99.18 | 133 | 0.183 | 1750/0/391/0 | 1.946 | 4.07 |
+| redis-az | 220 | 214 | 0 | 1.20 | 45.69 | 99.99 | 134 | 0.183 | 1750/0/391/0 | 2.487 | 4.09 |
 
-| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |
-|---|--:|--:|--:|--:|--:|--:|
-| memory | 1.54x | 1745 | 2136 | 0.00 | 392 | 0.0 MiB |
-| redis-az | 1.50x | 1745 | 2136 | 2145 | 392 | 6.0 MiB |
+| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| memory | 220 | 1.52x | 1750 | 2141 | 0.00 | 391 | 0.0 MiB |
+| redis-az | 220 | 1.51x | 1750 | 2141 | 2173 | 391 | 5.9 MiB |
 
 > `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.
 >
@@ -91,18 +91,18 @@ Origin: 45 ms I/O + 3 ms CPU, concurrency 20. 4000 keys, ~15 KiB payload.
 
 Origin: 5 ms I/O + 180 ms CPU, concurrency 4. 300 keys, ~64 KiB payload.
 
-| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |
+| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|
-| **no cache** | 4 | 4 | 413 | 1002 | 1229 | 1350 | 101 | - | 0/0/0/0 | 182.067 | 180 |
-| memory | 4 | 4 | 0.22 | 10.95 | 185 | 185 | 7 | 93.1% | 65/0/7/29 | 16.690 | 1.20 |
-| redis-az | 4 | 4 | 1.59 | 12.90 | 186 | 186 | 7 | 93.1% | 65/0/7/29 | 18.143 | 1.21 |
-| redis-az-bytes | 4 | 4 | 1.36 | 12.65 | 186 | 187 | 7 | 93.1% | 65/0/7/29 | 17.837 | 1.20 |
+| **no cache** | 4 | 4 | 0 | 370 | 953 | 1230 | 1350 | 1.000 | 0/0/0/0 | 182.052 | 180 |
+| memory | 4 | 4 | 0 | 0.21 | 0.25 | 184 | 184 | 0.020 | 66/0/2/34 | 8.109 | 1.17 |
+| redis-az | 4 | 4 | 0 | 1.57 | 2.37 | 185 | 186 | 0.020 | 66/0/2/34 | 8.869 | 1.14 |
+| redis-az-bytes | 4 | 4 | 0 | 1.33 | 2.14 | 185 | 185 | 0.020 | 66/0/2/34 | 8.689 | 1.15 |
 
-| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |
-|---|--:|--:|--:|--:|--:|--:|
-| memory | 6.63x | 94 | 101 | 0.00 | 7 | 0.0 MiB |
-| redis-az | 6.61x | 94 | 101 | 138 | 7 | 0.6 MiB |
-| redis-az-bytes | 6.62x | 94 | 101 | 121 | 7 | 0.4 MiB |
+| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| memory | 4 | 6.68x | 100 | 102 | 0.00 | 2 | 0.0 MiB |
+| redis-az | 4 | 6.66x | 100 | 102 | 141 | 2 | 0.2 MiB |
+| redis-az-bytes | 4 | 6.66x | 100 | 102 | 123 | 2 | 0.1 MiB |
 
 > `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.
 >
@@ -114,18 +114,18 @@ Origin: 5 ms I/O + 180 ms CPU, concurrency 4. 300 keys, ~64 KiB payload.
 
 Origin: 300 ms I/O + 1 ms CPU, concurrency 10. 20 keys, ~4 KiB payload.
 
-| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |
+| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|
-| **no cache** | 25 | 25 | 325 | 552 | 865 | 1046 | 304 | - | 0/0/0/0 | 4.326 | 1.87 |
-| memory | 25 | 25 | 0.14 | 0.20 | 0.32 | 1.18 | 20 | 93.4% | 277/27/0/0 | 2.142 | 1.74 |
-| redis-az | 25 | 25 | 0.78 | 1.54 | 2.86 | 3.22 | 20 | 93.4% | 277/27/0/0 | 2.908 | 1.67 |
-| object-store | 25 | 25 | 28.51 | 60.72 | 102 | 118 | 23 | 92.4% | 275/29/0/0 | 3.691 | 1.90 |
+| **no cache** | 25 | 25 | 0 | 322 | 558 | 865 | 1080 | 1.000 | 0/0/0/0 | 4.279 | 1.91 |
+| memory | 25 | 25 | 0 | 0.17 | 0.21 | 0.40 | 1.30 | 0.066 | 276/27/0/0 | 2.144 | 1.69 |
+| redis-az | 25 | 25 | 0 | 0.78 | 1.55 | 2.70 | 3.18 | 0.066 | 276/27/0/0 | 2.887 | 1.70 |
+| object-store | 25 | 25 | 0 | 29.50 | 60.55 | 102 | 118 | 0.073 | 275/28/0/0 | 3.608 | 1.87 |
 
-| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |
-|---|--:|--:|--:|--:|--:|--:|
-| memory | 2663.64x | 284 | 304 | 0.00 | 20 | 0.0 MiB |
-| redis-az | 301.90x | 284 | 304 | 227 | 20 | 0.1 MiB |
-| object-store | 8.46x | 281 | 304 | 10243 | 23 | 0.1 MiB |
+| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| memory | 25 | 2175.48x | 283 | 303 | 0.00 | 20 | 0.0 MiB |
+| redis-az | 25 | 320.65x | 283 | 303 | 225 | 20 | 0.1 MiB |
+| object-store | 25 | 8.46x | 281 | 303 | 10246 | 22 | 0.1 MiB |
 
 > `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.
 >
@@ -137,28 +137,28 @@ Origin: 300 ms I/O + 1 ms CPU, concurrency 10. 20 keys, ~4 KiB payload.
 
 Origin: 0 ms I/O + 25 ms CPU, concurrency unbounded. 3000 keys, ~20 KiB payload.
 
-| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |
+| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|
-| **no cache** | 30 | 30 | 110 | 314 | 596 | 625 | 357 | - | - | 25.736 | 75.83 |
-| memory | 30 | 30 | 0.06 | 25.09 | 25.16 | 42.35 | 37 | 89.6% | - | 4.345 | 1.85 |
-| redis-local | 30 | 30 | 0.24 | 25.28 | 25.62 | 42.75 | 37 | 89.6% | - | 4.509 | 1.84 |
-| redis-az | 30 | 30 | 0.90 | 25.46 | 27.41 | 43.25 | 37 | 89.6% | - | 5.155 | 1.87 |
-| redis-az-bytes | 30 | 30 | 0.91 | 25.46 | 27.68 | 43.24 | 37 | 89.6% | - | 5.153 | 1.85 |
-| sql | 30 | 30 | 2.79 | 26.37 | 32.17 | 44.35 | 37 | 89.6% | - | 5.768 | 1.95 |
-| object-store | 30 | 30 | 35.95 | 68.54 | 113 | 127 | 37 | 89.6% | - | 5.670 | 1.94 |
+| **no cache** | 30 | 30 | 0 | 100 | 315 | 596 | 625 | 1.000 | - | 25.846 | 75.56 |
+| memory | 30 | 30 | 0 | 0.06 | 3.69 | 25.14 | 25.24 | 0.073 | - | 3.609 | 1.78 |
+| redis-local | 30 | 30 | 0 | 0.25 | 4.30 | 25.50 | 25.96 | 0.073 | - | 3.819 | 1.85 |
+| redis-az | 30 | 30 | 0 | 0.87 | 6.02 | 26.26 | 26.45 | 0.073 | - | 4.470 | 1.79 |
+| redis-az-bytes | 30 | 30 | 0 | 0.89 | 6.06 | 26.28 | 26.48 | 0.073 | - | 4.465 | 1.84 |
+| sql | 30 | 30 | 0 | 2.55 | 13.70 | 29.09 | 29.94 | 0.073 | - | 4.978 | 1.89 |
+| object-store | 30 | 30 | 0 | 32.59 | 61.60 | 113 | 119 | 0.073 | - | 5.036 | 1.91 |
 
-| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |
-|---|--:|--:|--:|--:|--:|--:|
-| memory | 23.67x | 320 | 357 | 0.00 | 37 | 0.0 MiB |
-| redis-local | 23.25x | 320 | 357 | 87.66 | 37 | 0.7 MiB |
-| redis-az | 21.73x | 320 | 357 | 324 | 37 | 0.7 MiB |
-| redis-az-bytes | 21.52x | 320 | 357 | 324 | 37 | 0.7 MiB |
-| sql | 18.51x | 320 | 357 | 1097 | 37 | 0.7 MiB |
-| object-store | 5.26x | 320 | 357 | 12554 | 37 | 0.7 MiB |
+| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| memory | 30 | 23.69x | 330 | 356 | 0.00 | 26 | 0.0 MiB |
+| redis-local | 30 | 23.37x | 330 | 356 | 63.37 | 26 | 0.5 MiB |
+| redis-az | 30 | 22.69x | 330 | 356 | 328 | 26 | 0.5 MiB |
+| redis-az-bytes | 30 | 22.67x | 330 | 356 | 327 | 26 | 0.5 MiB |
+| sql | 30 | 20.48x | 330 | 356 | 1066 | 26 | 0.5 MiB |
+| object-store | 30 | 5.26x | 330 | 356 | 12178 | 26 | 0.5 MiB |
 
 > `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.
 >
-> A cached function has no response header to report a status through, so read `offload` instead. SWR shows up as a p50 that stays at storage latency while origin calls continue in the background.
+> A cached function has no response header to report a status through, so read `origin calls/req` instead. SWR shows up as a p50 that stays at storage latency while origin calls continue in the background.
 >
 > Baseline throughput is pinned at 1000/25 = 40 rps. Cached capacity should scale with hit ratio until storage latency becomes the new floor. `redis-az-bytes` is here as the counter-example: this value is a string, not bytes and not a response body, so it declares no payload and the frame has nothing to lift — it should cost more than plain `redis-az`, not less.
 
@@ -168,26 +168,26 @@ Origin: 0 ms I/O + 25 ms CPU, concurrency unbounded. 3000 keys, ~20 KiB payload.
 
 Origin: 220 ms I/O + 4 ms CPU, concurrency 30. 500 keys, ~6 KiB payload.
 
-| config | offered | achieved | p50 | p90 | p99 | p99.9 | origin calls | offload | hit/stale/miss/304 | cpu/req | loop p99 |
+| config | offered | achieved | rejected | p50 | p90 | p99 | p99.9 | origin calls/req | hit/stale/miss/304 | cpu/req | loop p99 |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|---|--:|--:|
-| **no cache** | 90 | 90 | 230 | 429 | 681 | 782 | 1074 | - | - | 5.870 | 5.00 |
-| memory | 90 | 90 | 0.04 | 1.82 | 325 | 423 | 242 | 77.5% | - | 2.571 | 4.61 |
-| redis-az | 90 | 90 | 0.75 | 3.56 | 329 | 424 | 242 | 77.5% | - | 3.286 | 4.68 |
-| kv-edge | 90 | 90 | 6.95 | 23.09 | 321 | 427 | 247 | 77.0% | - | 3.914 | 4.60 |
-| tiered mem+redis-az | 90 | 90 | 0.04 | 2.13 | 326 | 424 | 242 | 77.5% | - | 2.671 | 4.62 |
-| tiered mem+kv-edge | 90 | 90 | 0.04 | 1.73 | 335 | 437 | 242 | 77.5% | - | 2.766 | 4.62 |
+| **no cache** | 90 | 90 | 0 | 6835 | 12074 | 13081 | 13465 | 3.000 | - | 14.759 | 8.12 |
+| memory | 90 | 90 | 0 | 0.05 | 5.54 | 480 | 749 | 0.678 | - | 4.504 | 4.94 |
+| redis-az | 90 | 90 | 0 | 0.93 | 8.51 | 459 | 645 | 0.684 | - | 5.079 | 4.95 |
+| kv-edge | 90 | 90 | 0 | 8.47 | 26.02 | 500 | 712 | 0.689 | - | 5.544 | 4.92 |
+| tiered mem+redis-az | 90 | 90 | 0 | 0.05 | 5.90 | 480 | 749 | 0.681 | - | 4.680 | 4.94 |
+| tiered mem+kv-edge | 90 | 90 | 0 | 0.05 | 7.13 | 467 | 630 | 0.681 | - | 4.611 | 4.94 |
 
-| config | p99 vs no cache | origin calls avoided | storage reads | blocked on reads | storage writes | bytes written |
-|---|--:|--:|--:|--:|--:|--:|
-| memory | 2.09x | 832 | 1074 | 0.00 | 245 | 0.0 MiB |
-| redis-az | 2.07x | 832 | 1074 | 861 | 245 | 0.2 MiB |
-| kv-edge | 2.12x | 827 | 1074 | 8978 | 250 | 0.2 MiB |
-| tiered mem+redis-az | 2.09x | 832 | 1134 | 41.76 | 307 | 0.0 MiB |
-| tiered mem+kv-edge | 2.03x | 832 | 1134 | 455 | 307 | 0.0 MiB |
+| config | offered | p99 vs no cache | raw origin call difference | storage reads | blocked on reads | storage writes | bytes written |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| memory | 90 | 27.24x | 2496 | 1075 | 0.00 | 243 | 0.0 MiB |
+| redis-az | 90 | 28.53x | 2490 | 1075 | 1199 | 245 | 1.5 MiB |
+| kv-edge | 90 | 26.16x | 2484 | 1075 | 9653 | 247 | 1.5 MiB |
+| tiered mem+redis-az | 90 | 27.24x | 2493 | 1135 | 54.12 | 303 | 0.4 MiB |
+| tiered mem+kv-edge | 90 | 28.00x | 2493 | 1135 | 458 | 303 | 0.4 MiB |
 
 > `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.
 >
-> A cached function has no response header to report a status through, so read `offload` instead. SWR shows up as a p50 that stays at storage latency while origin calls continue in the background.
+> A cached function has no response header to report a status through, so read `origin calls/req` instead. SWR shows up as a p50 that stays at storage latency while origin calls continue in the background.
 >
 > Stale serves answer in microseconds, so p50 and p90 should collapse while p99 stays bounded by the origin: a key's first touch has no stale entry and blocks. The tiered run should recover most of a slow backend's read cost while paying write amplification on misses.
 
@@ -197,13 +197,13 @@ Measured hit-path cost, sequential, memory storage, no competing load:
 
 | payload | handler direct | handler cached | ocache adds | function direct | function cached | ocache adds |
 |--:|--:|--:|--:|--:|--:|--:|
-| 4 KiB | 31.7 us | 52.6 us | **+20.3 us** | 0.1 us | 3.8 us | **+3.9 us** |
-| 6 KiB | 33.1 us | 55.4 us | **+22.4 us** | 0.0 us | 3.7 us | **+3.9 us** |
-| 8 KiB | 44.3 us | 56.9 us | **+9.5 us** | 0.1 us | 3.6 us | **+3.9 us** |
-| 15 KiB | 51.7 us | 77.9 us | **+26.9 us** | 0.1 us | 3.7 us | **+4.0 us** |
-| 20 KiB | 56.3 us | 77.3 us | **+23.3 us** | 0.1 us | 3.4 us | **+3.8 us** |
-| 40 KiB | 85.3 us | 109.0 us | **+22.0 us** | 0.1 us | 3.6 us | **+4.0 us** |
-| 64 KiB | 116.9 us | 136.6 us | **+23.8 us** | 0.1 us | 3.6 us | **+4.0 us** |
+| 4 KiB | 36.9 us | 56.6 us | **+19.8 us** | 0.1 us | 4.7 us | **+4.6 us** |
+| 6 KiB | 36.6 us | 58.1 us | **+21.5 us** | 0.1 us | 4.4 us | **+4.2 us** |
+| 8 KiB | 54.7 us | 64.8 us | **+10.1 us** | 0.1 us | 4.0 us | **+3.9 us** |
+| 15 KiB | 53.6 us | 82.0 us | **+28.5 us** | 0.0 us | 4.2 us | **+4.2 us** |
+| 20 KiB | 57.0 us | 80.3 us | **+23.3 us** | 0.1 us | 6.3 us | **+6.3 us** |
+| 40 KiB | 89.6 us | 114.8 us | **+25.2 us** | 0.1 us | 4.1 us | **+4.1 us** |
+| 64 KiB | 123.4 us | 146.0 us | **+22.7 us** | 0.1 us | 4.0 us | **+3.9 us** |
 
 Adding each backend's median read gives the origin cost a handler must exceed:
 

@@ -57,11 +57,11 @@ A few choices keep the results honest:
 
 Look at the whole range, not just the best row. Across every cached configuration in this run, p99 latency improves between {{value:speedup-min}} and {{value:speedup-max}}, with a median of {{value:speedup-median}}. What sets the extremes is the origin, not the cache: when the origin is the bottleneck — a render that blocks the main thread, or an upstream that only allows so many requests at once — a cache hit removes an entire queue, not just one round trip, and the improvement becomes enormous. That is what happens to `{{value:top-scenario}}` at {{value:top-speedup}}.
 
-The scenario that gains the least is `{{value:worst-scenario}}`, at {{value:worst-speedup}} even on its fastest backend — and yet it still keeps {{value:worst-offload}} of its requests away from the origin. That is the point: **faster responses and fewer origin requests are two separate wins**, and a workload can get one without the other. Hard cases like this one — per-user keys, short-lived sessions, many distinct keys — are included on purpose. A benchmark made only of easy wins would not tell you anything.
+The scenario that gains the least is `{{value:worst-scenario}}`, at {{value:worst-speedup}} even on its fastest backend — and yet it still reduces origin invocations by {{value:worst-offload}}. That is the point: **faster responses and less origin work are two separate wins**, and a workload can get one without the other. Hard cases like this one — per-user keys, short-lived sessions, many distinct keys — are included on purpose. A benchmark made only of easy wins would not tell you anything.
 
-**Origin offload** — the share of requests that never reached the origin at all — is the number that maps to your origin bill, and unlike latency it barely depends on which backend you use. Here it ranges from {{value:offload-min}} to {{value:offload-max}}, driven by how the traffic is distributed and how many distinct keys there are:
+**Origin-call reduction** compares foreground and background origin invocations per admitted measured request with the matching no-cache row. It maps to origin work, but is deliberately not described as a request-level cache-hit share: deduplicated misses can share one invocation, while a stale response can launch a background refresh. Here it ranges from {{value:offload-min}} to {{value:offload-max}}, driven by traffic distribution and key cardinality:
 
-{{chart:offload}}
+{{chart:origin-call-reduction}}
 
 ## Latency, scenario by scenario
 

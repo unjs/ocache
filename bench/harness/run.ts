@@ -35,8 +35,8 @@ export interface RunRow {
   originCalls: number;
   originPeak: number;
   originQueuedMs: number;
-  /** Share of measured requests that did not reach the origin. */
-  offload: number;
+  /** Origin invocations per admitted measured request, including background work. */
+  originCallsPerRequest: number;
   status: {
     hit: number;
     stale: number;
@@ -147,6 +147,7 @@ export async function runOnce(
 
   const [p50, p90, p99, p999, max] = result.latency.percentiles([0.5, 0.9, 0.99, 0.999, 1]);
   const measured = result.latency.count;
+  const admitted = measured + result.errors;
   const storageStats = mergeStats(backend.stats, l1?.stats);
 
   return {
@@ -168,7 +169,7 @@ export async function runOnce(
     originCalls: origin.calls,
     originPeak: origin.peak,
     originQueuedMs: origin.queuedMs,
-    offload: measured === 0 ? 0 : Math.max(0, 1 - origin.calls / measured),
+    originCallsPerRequest: admitted === 0 ? 0 : origin.calls / admitted,
     status: {
       hit: result.status.hit,
       stale: result.status.stale,
@@ -179,7 +180,7 @@ export async function runOnce(
     },
     storage: storageStats,
     process: process_,
-    cpuPerRequestMs: measured === 0 ? 0 : process_.cpuMs / measured,
+    cpuPerRequestMs: admitted === 0 ? 0 : process_.cpuMs / admitted,
   };
 }
 

@@ -24,7 +24,7 @@ export interface HitCost {
 const noop = () => {};
 
 /** Repetitions per measurement. */
-const REPEATS = 9;
+const REPEATS = 10;
 
 /**
  * Times the two loops as a pair and reports what the second one adds.
@@ -33,9 +33,8 @@ const REPEATS = 9;
  * have to be measured against each other rather than separately: taking each side's own
  * minimum from a different repetition produced a cost curve that fell as the payload
  * grew, which cannot be true. Each repetition measures both sides back to back and keeps
- * their difference; the median of those differences is the estimate, which survives an
- * outlier in either direction. The absolute figures use each side's minimum, because
- * scheduler and GC noise can only add time.
+ * their difference; the median pair is the estimate, which survives an outlier in either
+ * direction. Measurement order alternates so positional drift does not belong to one side.
  */
 async function timePair(
   baseline: () => Promise<unknown>,
@@ -54,26 +53,31 @@ async function timePair(
     return (used.user + used.system) / iterations;
   };
 
-  let bestBaseline = Infinity;
-  let bestCached = Infinity;
-  const deltas: number[] = [];
+  const pairs: Array<{ baselineUs: number; cachedUs: number; addedUs: number }> = [];
   for (let repeat = 0; repeat < REPEATS; repeat++) {
     // Collect before each side so neither pays for the other's garbage. Available only
     // under `--expose-gc`, which `pnpm bench` sets; without it the spread roughly doubles.
-    globalThis.gc?.();
-    const baselineUs = await measure(baseline);
-    globalThis.gc?.();
-    const cachedUs = await measure(cached);
-    bestBaseline = Math.min(bestBaseline, baselineUs);
-    bestCached = Math.min(bestCached, cachedUs);
-    deltas.push(cachedUs - baselineUs);
+    let baselineUs: number;
+    let cachedUs: number;
+    if (repeat % 2 === 0) {
+      globalThis.gc?.();
+      baselineUs = await measure(baseline);
+      globalThis.gc?.();
+      cachedUs = await measure(cached);
+    } else {
+      globalThis.gc?.();
+      cachedUs = await measure(cached);
+      globalThis.gc?.();
+      baselineUs = await measure(baseline);
+    }
+    pairs.push({ baselineUs, cachedUs, addedUs: cachedUs - baselineUs });
   }
-  deltas.sort((a, b) => a - b);
-  return {
-    baselineUs: bestBaseline,
-    cachedUs: bestCached,
-    addedUs: deltas[deltas.length >> 1]!,
-  };
+  pairs.sort((a, b) => a.addedUs - b.addedUs);
+  const lower = pairs[REPEATS / 2 - 1]!;
+  const upper = pairs[REPEATS / 2]!;
+  const baselineUs = (lower.baselineUs + upper.baselineUs) / 2;
+  const cachedUs = (lower.cachedUs + upper.cachedUs) / 2;
+  return { baselineUs, cachedUs, addedUs: cachedUs - baselineUs };
 }
 
 export async function measureHitCost(payloadBytes: number, iterations = 3000): Promise<HitCost> {

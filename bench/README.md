@@ -29,8 +29,8 @@ reader's colour scheme — the OS `prefers-color-scheme` when it is rendered as 
 
 One of them, `combined`, is the whole run in a single compact figure: one row per scenario
 comparing that workload with ocache against the same workload without it, ranked by the
-improvement, over four median headline numbers — latency, offload, CPU, and what a hit
-costs. It is the figure for a page that has room for exactly one, so this stage also writes
+improvement, over four median headline numbers — latency, origin-call reduction, CPU, and
+what a hit costs. It is the figure for a page that has room for exactly one, so this stage also writes
 it to `docs/.docs/public/bench.svg`, which the site's landing page links. `--landing=<file>`
 sends that copy somewhere else and `--no-landing` skips it. Linked as an image rather than
 inlined, that copy follows the reader's OS colour scheme, not the site's own toggle.
@@ -95,8 +95,9 @@ queue rather than in the loop's own settling.
 so each run first issues `3 × keyspace` requests with the origin and storage set to
 instant. That establishes the cache state a steady-state server already holds; the reported
 hit ratio then reflects the traffic distribution rather than the run length. Baseline runs
-prewarm too, so both modes see the same key sequence. `--prewarm=0` measures a cold cache;
-`--load=burst` never prewarms.
+prewarm too, so both modes see the same key sequence. The timed warmup is a separate
+open-loop pass that drains completely before measured counters reset. `--prewarm=0` measures
+a cold cache; `--load=burst` never prewarms.
 
 **GC control.** `pnpm bench` runs under `--expose-gc` so the hit-path calibration can
 collect between the two sides of each paired measurement. Without it one side absorbs the
@@ -124,18 +125,19 @@ only of favourable cases is not a measurement.
 
 ## Reading the output
 
-- `offload` — share of measured requests that never reached the origin. This, not the
-  speedup, is the number that maps to origin cost.
+- `origin calls/req` — foreground and background origin invocations divided by admitted
+  measured requests. Its reduction from the no-cache value maps to origin work;
+  deduplication and SWR mean it is not a request-level cache-hit share.
 - `p99 vs no cache` — the headline ratio. Under `--load=ramp` the honest capacity figure is
   `sustained rps` instead: the highest offered rate held within the p99 budget.
 - `cpu/req` — main-thread milliseconds per request, which converts directly to cost per
   request.
 - `blocked on reads` — wall time, so it includes event-loop queueing behind the scenario's
   own CPU, not only backend latency.
-- `⚠` on `achieved` — the run hit the in-flight ceiling and shed arrivals. Its percentiles
-  describe an overloaded system, which is a result, not an error.
+- `rejected` and `⚠` on `achieved` — measured arrivals rejected at the in-flight ceiling.
+  Percentiles cover admitted requests only, so read them together with the rejected count.
 - A cached **function** has no response header to report a status through, so its status
-  column is blank; read `offload`. SWR shows up as a p50 that stays at storage latency
+  column is blank; read `origin calls/req`. SWR shows up as a p50 that stays at storage latency
   while origin calls continue in the background.
 
 ## Known limits

@@ -84,7 +84,7 @@ const profileOverride = flags.get("profiles")?.split(",") as ProfileName[] | und
 const p99Budget = Number(flags.get("p99") ?? 1000);
 /** Prewarm requests per run; `--prewarm=0` measures a cold cache instead. */
 const prewarmFor = (keyspace: number) =>
-  flags.has("prewarm") ? Number(flags.get("prewarm")) : Math.min(keyspace * 3, 6000);
+  flags.has("prewarm") ? Number(flags.get("prewarm")) : keyspace * 3;
 
 const started = Date.now();
 const sections: string[] = [];
