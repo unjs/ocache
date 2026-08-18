@@ -1,3 +1,5 @@
+// Docs: @docs/5.handler.md, @docs/8.cache-control.md, @docs/9.isr.md
+
 import { hash } from "../hash.ts";
 import {
   cachedFunction,

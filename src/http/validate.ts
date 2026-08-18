@@ -1,3 +1,5 @@
+// Docs: @docs/8.cache-control.md
+
 import { cacheControlForbidsReuse } from "./cache-control.ts";
 import { hasUnkeyedVary, hasVaryWildcard } from "./vary.ts";
 

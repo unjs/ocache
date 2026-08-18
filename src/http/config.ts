@@ -1,3 +1,5 @@
+// Docs: @docs/5.handler.md, @docs/6.query-params.md, @docs/7.cookies.md, @docs/8.cache-control.md
+
 import { definedOptions, resolveName } from "../cache.ts";
 
 import type { HTTPEvent, EventHandler, CachedEventHandlerOptions } from "../types.ts";

@@ -1,3 +1,5 @@
+// Docs: @docs/5.handler.md, @docs/7.cookies.md, @docs/8.cache-control.md
+
 /**
  * Merges names into `Vary` and removes case-insensitive duplicates.
  * Leaves `Vary: *` unchanged.

@@ -1,3 +1,5 @@
+// Docs: @docs/5.handler.md, @docs/6.query-params.md, @docs/7.cookies.md
+
 // A handler may read only request data that its cache key covers.
 
 import { resolveSignal } from "../cache.ts";

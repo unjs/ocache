@@ -1,3 +1,5 @@
+// Docs: @docs/3.storage.md
+
 export interface StorageInterface {
   get<T = unknown>(key: string): T | null | Promise<T | null>;
   set<T = unknown>(key: string, value: T, opts?: { ttl?: number }): void | Promise<void>;

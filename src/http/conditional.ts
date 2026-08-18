@@ -1,3 +1,5 @@
+// Docs: @docs/5.handler.md
+
 import type { HTTPEvent, CacheConditions, ResponseCacheEntry } from "../types.ts";
 
 /**

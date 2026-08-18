@@ -1,3 +1,5 @@
+// Docs: @docs/2.functions.md
+
 // The `#crypto` package condition selects Node or portable SHA-256 at bundle time.
 // Both implementations must return identical digests for shared storage.
 // Keep serialization allocation-light because cache-key paths call it per request.

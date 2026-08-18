@@ -1,3 +1,5 @@
+// Docs: @docs/2.functions.md, @docs/4.invalidation.md, @docs/9.isr.md
+
 import { hash } from "./hash.ts";
 import { resolveStorage } from "./storage.ts";
 

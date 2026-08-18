@@ -1,3 +1,5 @@
+// Docs: @docs/2.functions.md, @docs/3.storage.md, @docs/5.handler.md, @docs/6.query-params.md, @docs/7.cookies.md, @docs/8.cache-control.md, @docs/9.isr.md, @docs/10.api.md
+
 import type { StorageOption } from "./storage.ts";
 
 /** Request with the srvx-compatible `waitUntil` background task hook. */

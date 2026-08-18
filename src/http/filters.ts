@@ -1,3 +1,5 @@
+// Docs: @docs/6.query-params.md, @docs/7.cookies.md
+
 // Key composition and request narrowing must use these same filtered values.
 
 /**

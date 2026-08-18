@@ -1,3 +1,5 @@
+// Docs: @docs/5.handler.md, @docs/7.cookies.md, @docs/8.cache-control.md, @docs/9.isr.md
+
 import { hash } from "../hash.ts";
 
 import type { HandlerConfig } from "./config.ts";

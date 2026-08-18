@@ -1,3 +1,5 @@
+// Docs: @docs/8.cache-control.md, @docs/9.isr.md
+
 /**
  * Returns whether `Cache-Control` forbids reuse by a shared cache.
  *

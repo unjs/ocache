@@ -1,3 +1,5 @@
+// Docs: @docs/5.handler.md, @docs/6.query-params.md, @docs/7.cookies.md, @docs/9.isr.md
+
 import { hash } from "../hash.ts";
 
 import { escapeKey, escapeKeySegment } from "../cache.ts";
