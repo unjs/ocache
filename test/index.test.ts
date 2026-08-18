@@ -180,6 +180,25 @@ describe("cachedFunction", () => {
     expect(statuses).toEqual(["miss", "hit", "revalidated"]);
   });
 
+  it("never serves an entry with a foreign integrity as stale under SWR", async () => {
+    const statuses: (string | undefined)[] = [];
+    const fn = defineCachedFunction(() => "mine", {
+      maxAge: 100,
+      swr: true,
+      getKey: () => "k",
+      transform: (entry) => {
+        statuses.push(entry.status);
+        return entry.value;
+      },
+    });
+    const [key] = await fn.resolveKeys();
+    // Another function's value under the same key: unusable, not merely stale.
+    await testStorage.set(key!, { value: "theirs", mtime: Date.now(), integrity: "foreign" });
+
+    expect(await fn()).toBe("mine");
+    expect(statuses).toEqual(["revalidated"]);
+  });
+
   it("does not persist per-call status to storage (incl. on a hit)", async () => {
     const fn = defineCachedFunction(() => "v", { maxAge: 100, getKey: () => "k" });
     await fn(); // miss (writes entry)

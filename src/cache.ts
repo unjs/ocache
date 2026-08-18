@@ -155,10 +155,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     // Run asynchronous validation once per read.
     const _isValid = (await validate(entry, validateCtx)) !== false;
 
+    // A mismatch means the entry belongs to another function, so it is unusable, not stale.
+    const isMatched = entry.integrity === integrity;
+
     const expired =
       shouldInvalidateCache ||
       entry.stale === true ||
-      entry.integrity !== integrity ||
+      !isMatched ||
       readMaxAge === 0 ||
       (ttl > 0 && Date.now() - (entry.mtime || 0) > ttl) ||
       !_isValid;
@@ -177,7 +180,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         ? "miss"
         : !expired
           ? "hit"
-          : swr && _isValid
+          : swr && _isValid && isMatched
             ? "stale"
             : "revalidated";
 
@@ -314,7 +317,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       configurable: true,
     });
 
-    if (swr && (await validate(entry, validateCtx)) !== false) {
+    if (swr && isMatched && (await validate(entry, validateCtx)) !== false) {
       _resolvePromise.catch((error) => {
         onError("[cache] SWR handler error.", error);
       });
