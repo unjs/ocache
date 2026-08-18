@@ -35,7 +35,8 @@ export async function serializeResponse<E extends HTTPEvent>(
   const headers = new Headers(res.headers);
 
   if (!headers.has("etag")) {
-    headers.set("etag", `W/"${hash(body)}"`);
+    // Text and base64 share one value space: the text `/w==` and the byte 0xff hash alike.
+    headers.set("etag", `W/"${base64 ? "b" : ""}${hash(body)}"`);
   }
 
   if (!headers.has("last-modified")) {

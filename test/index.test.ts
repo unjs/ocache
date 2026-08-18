@@ -3624,6 +3624,34 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("last-modified")).toBeTruthy();
   });
 
+  it("gives a binary body and the text of its base64 form distinct etags", async () => {
+    const stored: any[] = [];
+    const inner = createMemoryStorage();
+    useTestStorage({
+      get: (key) => inner.get(key),
+      set: (key, value, opts) => {
+        stored.push(value);
+        return inner.set(key, value, opts);
+      },
+    });
+
+    // The byte 0xff stores as the base64 text `/w==`, which is itself a valid text body.
+    const textHandler = defineCachedHandler(() => new Response("/w=="), { maxAge: 10 });
+    const binaryHandler = defineCachedHandler(() => new Response(new Uint8Array([0xff])), {
+      maxAge: 10,
+    });
+
+    const textRes = (await textHandler(makeEvent(uniquePath()))) as Response;
+    const binaryRes = (await binaryHandler(makeEvent(uniquePath()))) as Response;
+
+    // Without this the etags could differ for an unrelated reason and the test would prove nothing.
+    expect(stored.map((entry) => entry.value.body)).toEqual(["/w==", "/w=="]);
+    expect(stored.map((entry) => entry.value.base64)).toEqual([undefined, true]);
+
+    expect(textRes.headers.get("etag")).toBeTruthy();
+    expect(binaryRes.headers.get("etag")).not.toBe(textRes.headers.get("etag"));
+  });
+
   it("preserves existing etag from handler", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(
