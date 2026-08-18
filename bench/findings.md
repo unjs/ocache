@@ -103,56 +103,66 @@ Handler-level deltas here are order-sensitive by ±2 µs: whichever variant runs
 process reads high, which is the positional artefact described above. Both orders were run;
 the plain row came out lower after the change in all seven runs, by 1.2-5.8 µs.
 
-## 2. Binary bodies pay base64 on every hit, and far more on every store
+## 2. Binary bodies paid base64 on every hit, and far more on every store — now fixed
 
-**measured**
+**measured, fixed**
 
-`http/entry.ts` stores a non-UTF-8 body as base64. `deserializeEntry` calls `atob` plus a
-byte-by-byte copy on **every read**, and `serializeResponse` runs the encode on every
-**write**. Paired against the same handler with a text body of the same size:
+`http/entry.ts` stores a non-UTF-8 body as base64 so it survives a backend that serializes
+entries as JSON. That made a binary entry pay an encode on every **write** and a decode on every
+**read**, and the encoder was the expensive half by an order of magnitude: it spread each 32 KiB
+chunk into `String.fromCharCode(...)`, and that argument list — not `btoa` — was **2212 of the
+2607 µs** a 64 KiB binary miss added.
 
-|   body | added per hit | added per store |
-| -----: | ------------: | --------------: |
-|  8 KiB |        +50 µs |         +255 µs |
-| 40 KiB |       +102 µs |        +1369 µs |
-| 64 KiB |       +192 µs |        +2273 µs |
+Both directions now go through `src/base64.ts`, which picks one implementation at module load:
+`globalThis.Buffer`, then the TC39 `Uint8Array` base64 methods, then a per-byte `btoa` loop.
+Paired against the same handler with a text body of the same size, one process per
+implementation and size:
 
-A text body of the same size costs nothing to deserialize — the stored string is handed
-straight to `Response`. So a 64 KiB image hit adds roughly **8x** what an 8 KiB HTML hit
-adds, and the whole difference is encoding, not size. Timing `base64ToBytes` on its own
-gave 54/110/156 µs for the same three sizes — the same shape, measured a different way.
+|   body | hit before | hit after | store before | store after |
+| -----: | ---------: | --------: | -----------: | ----------: |
+|  8 KiB |   +17.1 µs |   +1.3 µs |      +260 µs |      +31 µs |
+| 40 KiB |   +63.0 µs |   +5.3 µs |     +1435 µs |     +121 µs |
+| 64 KiB |   +94.6 µs |   −5.4 µs |     +2382 µs |     +240 µs |
 
-The write side is worse than the read side by an order of magnitude, and it is one
-function. Timed directly at 64 KiB:
+**A binary hit now costs what a text hit costs.** At 64 KiB it measures _cheaper_, reproducibly
+(−5 to −15 µs over four runs), because the text side pays a UTF-8 encode inside `arrayBuffer()`
+that the binary side does not. So finding 9's "hit overhead does not scale with payload" no
+longer has a binary exception; finding 3's does, and it shrank.
 
-| operation                                 | portable path | Node `Buffer` |    ratio |
-| ----------------------------------------- | ------------: | ------------: | -------: |
-| `bytesToBase64` (`fromCharCode` + `btoa`) |       2212 µs |       11.6 µs | **190x** |
-| `base64ToBytes` (`atob` + byte loop)      |        116 µs |       27.2 µs |     4.3x |
+The three implementations, timed directly, minimum of nine GC-controlled repeats:
 
-`bytesToBase64` spreads 32 768 arguments into `String.fromCharCode` per chunk and
-concatenates the pieces; that spread, not `btoa`, is the cost. It dominates every binary
-store: 2212 of the 2607 µs a 64 KiB binary miss adds (finding 3).
+| operation, 64 KiB | old spread | portable loop | `Buffer` |
+| ----------------- | ---------: | ------------: | -------: |
+| encode            |    2190 µs |        537 µs |  11.7 µs |
+| decode            |     123 µs |        123 µs |    17 µs |
 
-Three directions worth exploring:
+The decode columns are equal because the fallback decoder **is** the old one, unchanged: `atob`
+plus a byte copy was never the problem. The encoder was, and one `String.fromCharCode` per byte
+is **4x** faster than spreading the same chunk into one call — which is what a runtime with
+neither `Buffer` nor the TC39 methods now gets.
 
-- Let a backend declare that it stores binary natively (`Uint8Array`, `Buffer`, `Blob`) and
-  skip the base64 round trip when it does. Memory storage always can; so can Redis.
-  The base64 path exists because the format has to survive JSON storage, which is a
-  property of the backend, not of the entry. `deserializeEntry` already types `body` as
-  `string | Uint8Array`, so the read side is half-built already.
-- A `#buffer`-style conditional import, matching what `#crypto` does for the digest, would
-  take the Node path for both directions and keep the portable one elsewhere. The encode
-  side is where the 190x sits.
-- Failing that, replace the spread with a per-byte `String.fromCharCode` accumulation or a
-  lookup-table encoder. The spread is the part that scales badly.
+What is left, and what it costs:
 
-Base64 also costs storage, not only CPU: `og-image` writes 0.6 MiB for seven 64 KiB
-entries — **≈88 KiB stored per entry**, the 4/3 expansion — which counts against
-`maxEntryBytes`, against network egress on a remote backend, and against the etag digest,
-which hashes the base64 string rather than the bytes (161 µs versus 122 µs at 64 KiB).
+- **The etag, not the encode, is now the binary store's largest addition.** `serializeResponse`
+  digests the base64 string, which is 4/3 the size of the bytes. A handler that sets its own
+  `etag` drops ~55 µs of the 64 KiB figure above, because `entry.ts` only digests when the header
+  is absent — the same advice finding 3 gives for text.
+- **Base64 still costs storage, not only CPU.** `og-image` writes 0.6 MiB for seven 64 KiB
+  entries — ≈88 KiB per entry, the 4/3 expansion — which counts against `maxEntryBytes`, against
+  network egress on a remote backend, and against the digest above.
+- **Letting a backend declare that it stores binary natively** (`Uint8Array`, `Buffer`, `Blob`)
+  would remove the round trip rather than speed it up, and `deserializeEntry` already types
+  `body` as `string | Uint8Array`. It is worth less than it was before this change, and it is not
+  free: `hash` renders a typed array as its element values, so the etag would need a
+  bytes-capable digest or the store would simply move its cost from the encoder to `serialize`.
 
-The `og-image` scenario is where this shows up under load.
+`og-image` is where this shows up under load, and its steady-state numbers in
+`results/steady.md` predate the fix.
+
+The earlier version of this finding measured +50/+102/+192 µs per hit and +255/+1369/+2273 µs per
+store. The store column reproduces almost exactly; the hit column reads lower here, which is the
+between-session absolute drift this document warns about — compare the two columns of one table,
+never a column against another run.
 
 ## 3. The miss path costs 5-14x the hit path, and it scales with payload
 
@@ -168,8 +178,9 @@ Paired the same way, with a fresh key per call so every call stores:
 | 40 KiB |        +258 µs |      +28.2 µs |  9.1x |
 | 64 KiB |        +334 µs |      +23.7 µs | 14.1x |
 
-Binary makes it far worse: +394 µs, +1627 µs and +2607 µs for the same three sizes, which
-is finding 2's encode.
+Binary used to make it far worse: +430 µs, +1781 µs and +2753 µs for the same three sizes,
+almost all of it finding 2's encode. With that fixed it is +195 µs, +427 µs and +538 µs — still
+above text, because the etag digest runs over a string 4/3 the size of the bytes.
 
 Two consequences, both the opposite of what finding 9 says about hits:
 
@@ -295,8 +306,8 @@ An explicit `waitUntil` option on `CacheOptions` would close the function-path h
   V8 shares the string. The absolute cost of each side does rise with payload (direct
   33 µs → 105 µs), but it rises equally on both, so it cancels. Optimizing for large
   responses on the assumption that ocache costs more for them is optimizing the wrong axis.
-  (Binary bodies are the exception, and that is encoding, not size — finding 2. Misses are
-  the other exception, and they scale steeply — finding 3.)
+  (Binary bodies were the exception until finding 2's encode was fixed, and even then it was
+  encoding, not size. Misses are the remaining exception, and they scale steeply — finding 3.)
 - **Multi-tier `base` prefixes are not a second backend.** They are key prefixes on one
   `StorageInterface`, so memory-in-front-of-Redis needs a routing wrapper the library does
   not ship. The harness has one in `harness/storage.ts`, and the load runs show what it is
@@ -321,9 +332,10 @@ Per-hit CPU is only the whole story on memory storage. Median hit latency for
 | `object-store` | 35.98 ms |           ~0.07% |
 
 So findings 1, 4 and 5 pay off for in-process caching and are close to irrelevant behind a
-network hop. Findings 2 and 3 are the exceptions: they are miss-path and encode costs, and
-102 µs of base64 decode at 40 KiB is still 11% of a `redis-az` hit — pure waste at any
-backend.
+network hop. Finding 3 is the exception: it is miss-path cost, which no backend hides. Finding 2
+was the other one — 102 µs of base64 decode at 40 KiB was 11% of a `redis-az` hit, pure waste at
+any backend — and that is the argument for having fixed it rather than tuning a hit path that a
+network hop already dominates.
 
 **The tail belongs to the miss path.** `ssr-product-page` on memory improves p50 by 311x
 (52.85 → 0.17 ms) and p99 by only 2.88x (137 → 47.5 ms). p90 is where the 13% miss
@@ -347,8 +359,11 @@ Findings 4, 6 and 9 come from paired measurements of `defineCachedHandler` varia
 finding 1 from those plus a direct pairing of `resolveKey` against event construction, and
 an A/B that imports the old and the new `key.ts` into one process — attributing a handler
 delta to one function is what the first version of that finding got wrong;
-finding 2 from paired hit/store timings plus direct timing of the encode and decode
-functions; finding 3 from the same pairing with a fresh key per call, so every call stores;
+finding 2 from paired hit/store timings — a binary body against a text body of the same
+size, one process per implementation and payload so neither arm inherits the other's heap —
+plus direct timing of the encode and decode functions, and an A/B against a copy of `src/`
+carrying the old codec; finding 3 from the same pairing with a fresh key per call, so
+every call stores;
 finding 5 from `new Response` with the body held constant; finding 7 from a store against a
 1 MB `maxEntryBytes`. Pairing follows `timePair` in `harness/calibrate.ts` — nine repeats,
 `globalThis.gc()` between sides, median of the per-repeat deltas — and needs

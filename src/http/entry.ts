@@ -1,5 +1,6 @@
 // Docs: @docs/5.handler.md, @docs/7.cookies.md, @docs/8.cache-control.md, @docs/9.isr.md
 
+import { base64ToBytes, bytesToBase64 } from "../base64.ts";
 import { hash } from "../hash.ts";
 
 import type { HandlerConfig } from "./config.ts";
@@ -271,24 +272,4 @@ function decodeUtf8(bytes: Uint8Array): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** Encodes bytes in chunks that fit `String.fromCharCode`. */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const CHUNK = 0x80_00;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
-}
-
-/** Decodes base64 to bytes. */
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }

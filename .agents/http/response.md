@@ -1,4 +1,4 @@
-# The response side — `entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`
+# The response side — `entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`, `../base64.ts`
 
 `defineCachedHandler` uses `cachedFunction<Response>` and divides work at the `serialize` boundary. The **resolver** narrows the request and returns the handler's live `Response`. Internal **`serialize`** consumes the body, creates `etag`, `cache-control`, and `Vary`, removes every `Set-Cookie`, and creates the stored `ResponseCacheEntry`. **`transform`** rebuilds a servable response and adds the cache-status header on read. `CachedEventHandlerOptions` uses `Omit` for all three hooks so caller options cannot conflict with this internal use.
 
@@ -115,6 +115,20 @@ Old tests missed this defect because every 301 test used mutable `new Response(.
 Choose storage format by **byte validity, not content-type**. Decode with a fatal `TextDecoder` and `ignoreBOM`, then require a lossless round trip. Store valid UTF-8 directly as a string. This keeps existing text behavior and stable text etags. Store all other bytes as base64 and set `base64: true`. Base64 lets binary content survive backends that serialize values as JSON. On read, decode a `base64` entry to `Uint8Array` so the exact bytes remain unchanged. `createResponse` therefore accepts `string | Uint8Array | null`.
 
 The two arms then share one value space, so the synthesized etag **domain-separates them**. A text body of `/w==` and the single byte `0xff` both reach `hash` as the string `/w==` and received one etag, which made an etag identify two representations. A client holding the text form got a `304` for the binary form after the entry was replaced, and `.agents/hash.md` treats a body-derived etag as attacker-controlled input. The binary tag now carries a `b` prefix. Text tags stay unprefixed, so existing text etags are unchanged, and a 43-character digest can never equal a 44-character prefixed one.
+
+### Which base64 implementation runs
+
+`src/base64.ts` holds three and picks one at module load, in this order: `globalThis.Buffer`, the TC39 `Uint8Array.prototype.toBase64`/`Uint8Array.fromBase64` pair, then a `btoa` loop. The order is by measured cost, and the spread is large enough that this is not a micro-optimisation — at 64 KiB, encoding is 11.7 µs through `Buffer` and 537 µs through the loop. Both directions are per-request work: the encode runs on every store of a binary entry, the decode on every hit.
+
+The encoder this replaced spread each 32 KiB chunk into `String.fromCharCode(...)`. That argument list, not `btoa`, was the cost — 2212 µs for 64 KiB, which was **85% of what a 64 KiB binary miss added** (`bench/findings.md` finding 2). One `String.fromCharCode` per byte is 4x faster than spreading the chunk, and it is what the fallback does now.
+
+Three properties this file must keep:
+
+- **All three arms produce identical bytes.** An entry written by a Node process is read by a worker off the same persistent backend. `test/base64.test.ts` holds them against each other across the chunk boundary and every length remainder, so a chunk size that is not a multiple of 3 fails there — such a chunk pads mid-string and produces a value nothing can decode.
+- **`Buffer` is read off `globalThis`, never named as a free identifier.** Several bundlers inject a Buffer polyfill into a browser build when they see the bare name, which would cost a worker consumer far more than the fallback it replaces. This is also why the choice is a runtime check rather than a `#crypto`-style package condition: all three arms together are ~0.5 kB minified, so a condition would buy little and split the file into shipped `lib/` arms. `.agents/hash.md` explains why the digest, which is 1.7 kB per arm, is worth a condition.
+- **The decoder returns a plain `Uint8Array` view**, not the `Buffer` itself, because that value reaches a `createResponse` hook and must be the same shape on every runtime.
+
+What remains is on the store path, and it is no longer the encoder. A 64 KiB binary store adds ~220 µs over a text store of the same size, of which the encode is 12 µs: the rest is the etag digest over a base64 string that is 4/3 the size of the bytes, plus the allocations that expansion implies. A handler that sets its own `etag` drops ~55 µs of that, because `serializeResponse` only digests when the header is absent. A binary **hit** now costs what a text hit costs — the difference measures within noise of zero at every size (`bench/findings.md` finding 2).
 
 ## Bounding what may be buffered
 

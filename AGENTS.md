@@ -23,6 +23,7 @@ src/
 │   ├── vary.ts          # Vary merging and the two response-`Vary` predicates
 │   └── conditional.ts   # 304 decisions and the headers a 304 must echo
 ├── hash.ts         # `hash`/`serialize`: cache keys + integrity, digest via `#crypto`
+├── base64.ts       # Binary-body codec: one implementation picked per runtime
 └── storage.ts      # Storage interface + built-in memory storage
 
 lib/                # Shipped as-is (not built): the two arms of the `#crypto` import
@@ -47,7 +48,7 @@ The `.agents/` layout matches `src/`. Before you edit an area, read the file tha
 | `.agents/cache.md`         | `cache.ts`: `name`, option merging, lifetimes/storage TTL, dedup + deadline, hooks, purge, `waitUntil` |
 | `.agents/http/key.md`      | `http/key.ts`: key shape (name, method, authority) + the revalidation helpers                          |
 | `.agents/http/request.md`  | `http/request.ts` (+ `config.ts`, `filters.ts`): bypass, narrowing, cookies/credentials                |
-| `.agents/http/response.md` | `http/entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`                        |
+| `.agents/http/response.md` | `http/entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`, `base64.ts`           |
 | `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`                               |
 | `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable             |
 
@@ -103,6 +104,7 @@ results that were wrong in direction, not merely noisy — see the method sectio
 ## Design Decisions
 
 - Do not add h3, srvx, or unstorage as a dependency. ocache is standalone and has **zero runtime dependencies**. Cache keys and integrity values use `src/hash.ts`. This module computes sha256/base64url over deterministic `serialize` output and replaces `ohash`. The `#crypto` conditional import provides the digest. The `node` condition selects `node:crypto`. The default condition selects portable sha256 from `lib/digest.mjs`. This lets each consumer bundle only the required implementation. Both implementations must produce byte-identical keys. `hash` is synchronous, so neither implementation uses WebCrypto. See `.agents/hash.md`.
+- `src/base64.ts` holds all three binary-body codecs and picks one **at module load**: `globalThis.Buffer` where the runtime has it (Node, Bun), then the TC39 `Uint8Array` base64 methods (Deno, current browsers and workers), then a `btoa` loop. Unlike `#crypto` this is a runtime check, not a package condition: every arm is a few lines, so shipping all three costs ~0.5 kB minified, and `Buffer` is read off `globalThis` because bundlers inject a Buffer polyfill when they see the bare identifier. All three must produce identical bytes — a Node process and a worker share a persistent backend — and `test/base64.test.ts` holds them against each other. `http/entry.ts` is the only caller. See `.agents/http/response.md`.
 - `base` supports `string | string[]`. For multiple tiers, reads stop at the first hit. Misses write every prefix. Revalidation writes the hit tier and every earlier tier.
 - The default cache key group is `"functions"` in cache.ts and `"handlers"` in http/index.ts. Do not add an `ocache/` prefix.
 - Both `integrityOpts` implementations in cache.ts and http/config.ts exclude the storage-location fields `base`, `group`, `name`, and `storage`. This keeps entries valid after a backend or prefix change. The JSDoc in `cache.ts` explains why hashing `storage` has no meaning and costs too much.
