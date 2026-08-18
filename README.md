@@ -331,21 +331,6 @@ A storage instance or a late-bound storage factory.
 
 The cache calls a factory once, on the first cache operation.
 
----
-
-### `UnsupportedValueError`
-
-```ts
-class UnsupportedValueError extends TypeError
-```
-
-Signals that the default `toResponse` cannot convert a handler's return value.
-
-`String(value)` renders an object as `[object Object]` and a byte view as its
-comma-joined digits. Either is a valid 200, so the cache stored it and replayed it
-for the whole lifetime without running the handler again. See
-`.agents/http/response.md`.
-
 <!-- /automd-->
 
 ## Development
