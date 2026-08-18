@@ -3809,7 +3809,55 @@ describe("defineCachedHandler", () => {
     expect(await r1.text()).toBe("body");
   });
 
-  it("headersOnly returns 304 with matching etag", async () => {
+  it("headersOnly returns 304 for the handler's own etag", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("body", { headers: { etag: '"v1"', vary: "accept-language" } }),
+      { maxAge: 60, headersOnly: true },
+    );
+
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": 'W/"v1"' } }),
+    )) as Response;
+    expect(res.status).toBe(304);
+    expect(await res.text()).toBe("");
+    // A 304 must repeat the variant dimensions of the response it replaces.
+    expect(res.headers.get("vary")).toBe("accept-language");
+  });
+
+  it("headersOnly serves the full response for a non-matching etag", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("body", { headers: { etag: '"v2"' } }), {
+      maxAge: 60,
+      headersOnly: true,
+    });
+
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-none-match": '"v1"' } }),
+    )) as Response;
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("body");
+  });
+
+  it("headersOnly returns 304 for the handler's own last-modified", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () =>
+        new Response("body", {
+          headers: { "last-modified": new Date("2020-01-01").toUTCString() },
+        }),
+      { maxAge: 60, headersOnly: true },
+    );
+
+    const res = (await handler(
+      makeEvent(path, {
+        headers: { "if-modified-since": new Date("2020-06-01").toUTCString() },
+      }),
+    )) as Response;
+    expect(res.status).toBe(304);
+  });
+
+  it("headersOnly ignores conditions without handler validators", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("body"), {
       maxAge: 60,
@@ -3818,10 +3866,55 @@ describe("defineCachedHandler", () => {
 
     const res = (await handler(
       makeEvent(path, {
-        headers: { "if-none-match": "some-etag" },
+        headers: {
+          "if-modified-since": new Date("2030-01-01").toUTCString(),
+        },
       }),
     )) as Response;
-    expect(res).toBeTruthy();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("body");
+  });
+
+  it("headersOnly does not 304 a non-cacheable method or status", async () => {
+    const path = uniquePath();
+    const post = defineCachedHandler(() => new Response("body"), {
+      maxAge: 60,
+      headersOnly: true,
+    });
+    const missing = defineCachedHandler(() => new Response("nope", { status: 404 }), {
+      maxAge: 60,
+      headersOnly: true,
+    });
+
+    // `*` matches only where a current representation exists.
+    const posted = (await post(
+      makeEvent(path, { method: "POST", headers: { "if-none-match": "*" } }),
+    )) as Response;
+    expect(posted.status).toBe(200);
+
+    const notFound = (await missing(
+      makeEvent(path, { headers: { "if-none-match": "*" } }),
+    )) as Response;
+    expect(notFound.status).toBe(404);
+  });
+
+  it("headersOnly converts non-Response values and never stores them", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return { id: callCount };
+      },
+      {
+        maxAge: 60,
+        headersOnly: true,
+        toResponse: (value) => Response.json(value),
+      },
+    );
+
+    expect(await ((await handler(makeEvent(path))) as Response).json()).toEqual({ id: 1 });
+    expect(await ((await handler(makeEvent(path))) as Response).json()).toEqual({ id: 2 });
   });
 
   it("handles non-Response return values", async () => {

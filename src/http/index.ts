@@ -13,8 +13,8 @@ import { integrityOpts, resolveHandlerConfig } from "./config.ts";
 import { defaultHandleCacheHeaders, notModifiedHeaders } from "./conditional.ts";
 import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
-import { NarrowRequestError, narrowRequest, resolveBypass } from "./request.ts";
-import { validateEntry } from "./validate.ts";
+import { NarrowRequestError, isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
+import { isCacheableStatus, validateEntry } from "./validate.ts";
 
 import type {
   HTTPEvent,
@@ -118,10 +118,28 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const cachedHandler: EventHandler<E> = async (event) => {
     if (opts.headersOnly) {
-      if (handleCacheHeaders(event, { maxAge: opts.maxAge })) {
-        return createResponse(null, { status: 304 });
+      // Nothing is stored, so the handler's own validators are the only conditions
+      // there are: run it first, then answer a matching conditional request with 304.
+      const live = await toResponse(await handler(event), event);
+      // A 304 needs a cacheable method and a representation to be current.
+      if (isBypassedMethod(event) || !isCacheableStatus(live.status)) {
+        return live;
       }
-      return handler(event);
+      const lastModified = live.headers.get("last-modified");
+      if (
+        handleCacheHeaders(event, {
+          modifiedTime: lastModified ? new Date(lastModified) : undefined,
+          etag: live.headers.get("etag") ?? undefined,
+          maxAge: opts.maxAge,
+        })
+      ) {
+        return createResponse(null, {
+          status: 304,
+          // No entry means no cache status; `cacheStatusHeader` has no effect here.
+          headers: notModifiedHeaders(live.headers, undefined),
+        });
+      }
+      return live;
     }
 
     // Bypassed requests keep their credentials and complete query, and their live

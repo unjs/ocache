@@ -81,15 +81,20 @@ function entityTags(value: string): string[] {
  * `Vary` preserves variant dimensions per RFC 7232 section 4.1.
  */
 export function notModifiedHeaders(
-  headers: ResponseCacheEntry["headers"],
+  headers: ResponseCacheEntry["headers"] | Headers,
   statusHeader: string | undefined,
 ): Record<string, string> | undefined {
+  // `headersOnly` has no stored entry, so it reads a live response instead.
+  const read = (name: string) =>
+    headers instanceof Headers
+      ? (headers.get(name) ?? undefined)
+      : (headers[name] as string | undefined);
   const notModified: Record<string, string> = {};
-  const statusValue = statusHeader ? (headers[statusHeader] as string | undefined) : undefined;
+  const statusValue = statusHeader ? read(statusHeader) : undefined;
   if (statusValue !== undefined) {
     notModified[statusHeader!] = statusValue;
   }
-  const varyValue = headers.vary as string | undefined;
+  const varyValue = read("vary");
   if (varyValue !== undefined) {
     notModified.vary = varyValue;
   }

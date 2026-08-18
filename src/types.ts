@@ -214,7 +214,11 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   CacheOptions<Response, [E]>,
   "transform" | "validate" | "serialize"
 > {
-  /** Handle conditional 304 responses without storing full responses. */
+  /**
+   * Answers conditional requests with 304 without storing responses.
+   *
+   * The handler always runs, and its own `etag` and `last-modified` are the conditions.
+   */
   headersOnly?: boolean;
   /**
    * Request headers that reach the handler, vary the key, and appear in `Vary`.
