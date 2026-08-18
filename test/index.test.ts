@@ -7331,6 +7331,87 @@ describe("purge fences in-flight resolutions", () => {
     expect(calls()).toBe(2);
   });
 
+  // A backend whose value writes land slower than its deletes. `.set(key, null)` is the
+  // purge tombstone, so only real values are delayed.
+  function slowWrites(delay: number): StorageInterface {
+    const inner = createMemoryStorage();
+    return {
+      get: (key) => inner.get(key),
+      set: async (key, value, opts) => {
+        if (value !== null) {
+          await new Promise((r) => setTimeout(r, delay));
+        }
+        return inner.set(key, value, opts);
+      },
+    };
+  }
+
+  it("invalidate() waits for a write that already reached storage", async () => {
+    const storage = slowWrites(50);
+    useTestStorage(storage);
+    const { releases, resolver } = blocking<string>();
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 60,
+      name: "slowWrite",
+      getKey: () => "k",
+      swr: false,
+    });
+
+    const first = fn();
+    await tick();
+    releases[0]!("v1");
+    // The write is in flight by the time the caller is served, so the fence cannot stop it.
+    expect(await first).toBe("v1");
+
+    await fn.invalidate();
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(await storage.get("/cache:functions:slowWrite:k.json")).toBeFalsy();
+  });
+
+  it("expire() waits for a write that already reached storage", async () => {
+    const storage = slowWrites(50);
+    useTestStorage(storage);
+    const { releases, resolver } = blocking<string>();
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 60,
+      name: "slowWrite",
+      getKey: () => "k",
+      swr: false,
+    });
+
+    const first = fn();
+    await tick();
+    releases[0]!("v1");
+    expect(await first).toBe("v1");
+
+    await fn.expire();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const entry = (await storage.get("/cache:functions:slowWrite:k.json")) as any;
+    expect(entry?.stale).toBe(true);
+  });
+
+  it("a handler's .invalidate(event) waits for a write that already reached storage", async () => {
+    const storage = slowWrites(50);
+    useTestStorage(storage);
+    const { releases, resolver } = blocking<Response>();
+    const handler = defineCachedHandler(resolver, { maxAge: 60, name: "slowWriteHandler" });
+    const event = () => ({ req: new Request("http://localhost/slow") });
+
+    const first = handler(event());
+    await tick();
+    releases[0]!(new Response("v1"));
+    expect(await ((await first) as Response).text()).toBe("v1");
+
+    await handler.invalidate(event());
+    await new Promise((r) => setTimeout(r, 100));
+
+    for (const key of await handler.resolveKeys(event())) {
+      expect(await storage.get(key)).toBeFalsy();
+    }
+  });
+
   it("a handler's .invalidate(event) fences its in-flight resolution", async () => {
     const { releases, calls, resolver } = blocking<Response>();
     const handler = defineCachedHandler(resolver, { maxAge: 60, name: "fencedHandler" });

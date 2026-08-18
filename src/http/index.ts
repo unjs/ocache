@@ -209,16 +209,16 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   // Fence each variant so an in-flight resolution cannot undo the purge.
   revalidate.invalidate = async (event: E) => {
     await Promise.all(
-      (await variantOptions(event)).map(({ key, options }) => {
-        fencePending(cachedFn, key);
+      (await variantOptions(event)).map(async ({ key, options }) => {
+        await fencePending(cachedFn, key);
         return invalidateCache({ options });
       }),
     );
   };
   revalidate.expire = async (event: E) => {
     await Promise.all(
-      (await variantOptions(event)).map(({ key, options }) => {
-        fencePending(cachedFn, key);
+      (await variantOptions(event)).map(async ({ key, options }) => {
+        await fencePending(cachedFn, key);
         return expireCache({ options });
       }),
     );

@@ -27,11 +27,13 @@ type PendingResolution<T> = {
 // A purge must reach the in-flight resolutions of the instance it targets.
 // This registry keeps that channel off the public `CachedFunction` type.
 // Allocated on the first definition, so importing the module allocates nothing.
-let fences: WeakMap<object, (key: string) => void> | undefined;
+let fences: WeakMap<object, (key: string) => Promise<void> | undefined> | undefined;
 
-/** Stops in-flight resolutions for `key` from writing after a purge. Internal. */
-export function fencePending(cachedFn: object, key: string): void {
-  fences?.get(cachedFn)?.(key);
+// Stops in-flight resolutions for `key` from writing after a purge.
+// Await the result: a write that already reached storage cannot be fenced, so the
+// purge must land after it.
+export function fencePending(cachedFn: object, key: string): Promise<void> | void {
+  return fences?.get(cachedFn)?.(key);
 }
 
 export type CachedFunction<T, ArgsT extends unknown[]> = {
@@ -73,6 +75,25 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     if (pending.get(key) === current) {
       pending.delete(key);
     }
+  };
+
+  // Writes that already reached storage, per key. A purge waits for these so a slow
+  // backend cannot land a pre-purge value after the purge removed the key.
+  // TODO: this orders writes against purges within one process only. A backend shared
+  // across processes needs generation/CAS support in `StorageInterface` to be correct.
+  const writes = new Map<string, Promise<void>>();
+
+  // Register a started write and resolve once it and every earlier write for the key land.
+  const trackWrite = (key: string, write: Promise<void>) => {
+    const earlier = writes.get(key);
+    const tracked = earlier ? earlier.then(() => write) : write;
+    writes.set(key, tracked);
+    void tracked.then(() => {
+      if (writes.get(key) === tracked) {
+        writes.delete(key);
+      }
+    });
+    return tracked;
   };
 
   // Resolve settings shared by every call.
@@ -284,6 +305,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
                 onError("[cache] Cache write error.", error);
               }
             })();
+            // Register before the next await so no purge can slip in unnoticed.
+            trackWrite(key, promise);
             event?.req.waitUntil?.(promise);
           } else if (hitIndex >= 0) {
             // Remove an old entry when its replacement cannot be stored.
@@ -357,6 +380,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       // Later callers must resolve again instead of following a purged result.
       pending.delete(key);
     }
+    // A write already handed to storage is past the fence; the caller must wait for it.
+    return writes.get(key);
   });
 
   // Resolve the key once so a custom `getKey` runs no more than the call does.
@@ -364,7 +389,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     // Resolve storage before purge helpers copy the options.
     getStorage();
     const key = await (opts.getKey || getKey)(...args);
-    fencePending(cachedFn, key);
+    await fencePending(cachedFn, key);
     return { ...opts, getKey: () => key };
   };
 

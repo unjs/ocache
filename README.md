@@ -208,16 +208,6 @@ await expireCache({
 
 ---
 
-### `fencePending`
-
-```ts
-function fencePending(cachedFn: object, key: string): void;
-```
-
-Stops in-flight resolutions for `key` from writing after a purge. Internal.
-
----
-
 ### `invalidateCache`
 
 ```ts
