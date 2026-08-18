@@ -336,7 +336,13 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    */
   cacheStatusHeader?: boolean | string;
 
-  /** Converts a handler value to Response. Defaults to the built-in Response conversion. */
+  /**
+   * Converts a handler value to Response.
+   *
+   * Defaults to passing a `Response` through, wrapping a primitive or a body type
+   * (bytes, `Blob`, `ReadableStream`) in `new Response(value)`, and throwing on anything
+   * else. Set this hook for a handler that returns objects.
+   */
   toResponse?: (value: unknown, event: E) => Response | Promise<Response>;
 
   /**

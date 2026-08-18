@@ -28,6 +28,71 @@ import type {
 } from "../types.ts";
 
 /**
+ * Signals that the default `toResponse` cannot convert a handler's return value.
+ *
+ * `String(value)` renders an object as `[object Object]` and a byte view as its
+ * comma-joined digits. Either is a valid 200, so the cache stored it and replayed it
+ * for the whole lifetime without running the handler again. See
+ * `.agents/http/response.md`.
+ */
+export class UnsupportedValueError extends TypeError {
+  override name = "UnsupportedValueError";
+
+  constructor(value: unknown) {
+    super(
+      `Handler returned ${describeValue(value)}, which the default \`toResponse\` cannot convert to a Response. ` +
+        "Return a Response (`Response.json(value)`) or set the `toResponse` option.",
+    );
+  }
+}
+
+function describeValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  return typeof value === "object" ? (value.constructor?.name ?? "an object") : typeof value;
+}
+
+/** Body types `Response` carries as-is. It stringifies everything else. */
+function isBodyInit(value: object): boolean {
+  return (
+    ArrayBuffer.isView(value) ||
+    value instanceof ArrayBuffer ||
+    value instanceof Blob ||
+    value instanceof FormData ||
+    value instanceof URLSearchParams ||
+    value instanceof ReadableStream
+  );
+}
+
+/**
+ * Converts what a `Response` can carry itself, and refuses everything else.
+ *
+ * A handler that returns objects connects its framework's own conversion through the
+ * `toResponse` option.
+ */
+function defaultToResponse(value: unknown): Response {
+  if (value instanceof Response) {
+    return value;
+  }
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+    case "bigint": {
+      // Primitives render losslessly.
+      return new Response(String(value));
+    }
+    case "object": {
+      if (value !== null && isBodyInit(value)) {
+        return new Response(value as BodyInit);
+      }
+    }
+  }
+  throw new UnsupportedValueError(value);
+}
+
+/**
  * Wraps an HTTP handler with response caching and conditional response support.
  *
  * Only GET and HEAD requests without Range are cacheable.
@@ -47,10 +112,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   opts = config.opts;
   const { statusHeader } = config;
 
-  const toResponse =
-    opts.toResponse ||
-    ((rawValue: unknown) =>
-      rawValue instanceof Response ? rawValue : new Response(String(rawValue)));
+  const toResponse = opts.toResponse || defaultToResponse;
 
   const createResponse =
     opts.createResponse ||

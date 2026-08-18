@@ -4479,6 +4479,52 @@ describe("defineCachedHandler", () => {
     expect(res.status).toBe(200);
   });
 
+  // The old default wrapped everything in `new Response(String(value))`. An object became
+  // the body "[object Object]" with a valid etag and a 200 status, so it was stored and
+  // replayed for the whole lifetime without the handler running again. Refuse the value.
+  it("refuses a value the default toResponse cannot convert, and stores nothing", async () => {
+    const setSpy = vi.spyOn(testStorage, "set");
+    const handler = defineCachedHandler(() => ({ id: 1 }), { maxAge: 10 });
+
+    await expect(handler(makeEvent(uniquePath()))).rejects.toMatchObject({
+      name: "UnsupportedValueError",
+      // The message names both ways out.
+      message: expect.stringContaining("toResponse"),
+    });
+    // A failed resolution evicts its key, so `set(key, null)` is expected. No *value* is.
+    const stored = () => setSpy.mock.calls.filter(([, value]) => value !== null);
+    expect(stored()).toEqual([]);
+
+    // A handler that returns nothing is the same mistake: the body used to be "undefined".
+    const empty = defineCachedHandler(() => {}, { maxAge: 10 });
+    await expect(empty(makeEvent(uniquePath()))).rejects.toMatchObject({
+      name: "UnsupportedValueError",
+    });
+    expect(stored()).toEqual([]);
+  });
+
+  // A byte view is a body already; `String(bytes)` used to render its comma-joined digits.
+  it("passes a byte body through the default toResponse", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new TextEncoder().encode("bytes"), {
+      maxAge: 10,
+    });
+
+    expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("bytes");
+    const hit = (await handler(makeEvent(path))) as Response;
+    expect(await hit.text()).toBe("bytes");
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+  });
+
+  // `headersOnly` converts before it ever reaches the cache, so it needs the same refusal.
+  it("refuses an unconvertible value in headersOnly mode", async () => {
+    const handler = defineCachedHandler(() => ({ id: 1 }), { maxAge: 10, headersOnly: true });
+
+    await expect(handler(makeEvent(uniquePath()))).rejects.toMatchObject({
+      name: "UnsupportedValueError",
+    });
+  });
+
   it("uses varies headers for cache key differentiation", async () => {
     let callCount = 0;
     const path = uniquePath();
