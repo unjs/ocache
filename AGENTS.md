@@ -24,7 +24,7 @@ src/
 │   └── conditional.ts   # 304 decisions and the headers a 304 must echo
 ├── hash.ts         # `hash`/`serialize`: cache keys + integrity, digest via `#crypto`
 ├── base64.ts       # Binary-body codec: one implementation picked per runtime
-└── storage.ts      # Storage interface + built-in memory storage
+└── storage.ts      # Storage interface, built-in memory storage, `createBlobStorage` frame codec
 
 lib/                # Shipped as-is (not built): the two arms of the `#crypto` import
 ├── digest.node.mjs # `node` condition -> node:crypto
@@ -49,7 +49,7 @@ The `.agents/` layout matches `src/`. Before you edit an area, read the file tha
 | `.agents/http/key.md`      | `http/key.ts`: key shape (name, method, authority) + the revalidation helpers                          |
 | `.agents/http/request.md`  | `http/request.ts` (+ `config.ts`, `filters.ts`): bypass, narrowing, cookies/credentials                |
 | `.agents/http/response.md` | `http/entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`, `base64.ts`           |
-| `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`                               |
+| `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`, the blob frame               |
 | `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable             |
 
 ## Cross-module invariants
@@ -60,6 +60,7 @@ Most findings in the deep dives came from violations of these rules.
 - **The storage decision and the advertisement must use the same predicates.** `validate.ts` uses `isCacheableStatus`, `hasVaryWildcard`, and `hasUnkeyedVary` to decide whether it may store a response. `entry.ts` uses the same predicates to decide whether it may advertise a lifetime. Never copy these checks into a call site.
 - **One declaration bounds both buffering and storage.** `StorageInterface.maxEntryBytes` is the backend's per-entry ceiling and the only source of the derived `maxBodySize` default in `http/entry.ts`. Never restate that number as a constant. A body larger than the derived limit is refused **while the stream is read**, because `set` can only refuse an entry the process has already built.
 - **`StorageInterface.binary` decides the stored binary form and the charge factor together.** A backend declares whether it returns byte views intact; `http/entry.ts` reads that one flag to choose between a `Uint8Array` body and base64, and to divide `maxEntryBytes` by `2` rather than `8/3`. `cache.ts` reads the same flag for a cached function whose **value** is bytes, and records the form it wrote in `CacheEntry.encoding`. Never infer the capability from a value, and never let these decisions consult different sources. The read path is the exception in the other direction: `deserializeEntry` and `decodeBinary` accept both stored forms whatever the flag currently says, because entries outlive a change to it, and `validateEntry` and `decodeBinary` reject anything that is neither, on read as well as on write.
+- **A storage codec reads `CacheEntry.payload`; it never looks for bytes in a value.** The producer of the stored shape declares where the bulk payload sits — `cache.ts` derives `"value"` for a byte value, `http/index.ts` declares `"value.body"` for a response body. `createBlobStorage` moves exactly that member into its frame and leaves everything else as JSON. This is `StorageInterface.binary` one step further out: the side that knows states it, and nothing infers a payload from a value's shape. Like `encoding`, the marker describes storage only — it is stamped on every write and cleared on every read, so no hook or caller sees it.
 - **Never write an entry that has neither an expiry nor a storage TTL.** `storageTtl` is the only decision point. `remainingTtl` in `expireCache` derives from it.
 - **Storage must be per instance, never global.** Persistent backends also require deterministic keys across process restarts.
 - `cache.ts` and `storage.ts` export the shared internal functions `resolveName`, `definedOptions`, and `resolveStorage`. The function and handler paths must use these functions so they cannot differ. Both paths must resolve `name` **before** they merge defaults.

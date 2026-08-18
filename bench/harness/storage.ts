@@ -4,7 +4,7 @@
 // round trip for a storage round trip. A profile whose read latency approaches the origin
 // cost turns caching into a loss, and the harness has to be able to show that.
 
-import { createMemoryStorage } from "../../src/index.ts";
+import { createBlobStorage, createMemoryStorage } from "../../src/index.ts";
 import { delay } from "./clock.ts";
 import { lognormal } from "./random.ts";
 
@@ -26,8 +26,42 @@ export interface StorageProfile {
    * caller's event loop, so it is real cost that a memory store does not pay.
    */
   serializes: boolean;
+  /**
+   * Which codec that boundary uses.
+   *
+   * `"json"` (the default) models a client library that JSON-encodes the whole entry, which
+   * is what almost every driver does today. `"bytes"` models a byte-only store — `fs`, S3/R2,
+   * `getItemRaw`, a Redis `getBuffer` — fronted by `createBlobStorage`, which moves the
+   * response body as itself and JSON-encodes only the metadata around it.
+   *
+   * A `"bytes"` profile exists to be compared against its JSON twin, so the two must keep
+   * *identical* latency fields: the pair is built by spreading one object, and the only
+   * thing that may differ between them is this codec.
+   */
+  codec?: "json" | "bytes";
   note: string;
 }
+
+// Declared once so a codec pair cannot drift apart on latency.
+const REDIS_AZ = {
+  readP50: 0.6,
+  readP99: 3,
+  writeP50: 0.8,
+  writeP99: 4,
+  perKiBMs: 0.008,
+  serializes: true,
+  note: "same-region TCP",
+} satisfies StorageProfile;
+
+const OBJECT_STORE = {
+  readP50: 30,
+  readP99: 120,
+  writeP50: 55,
+  writeP99: 200,
+  perKiBMs: 0.05,
+  serializes: true,
+  note: "S3 / R2 GetObject",
+} satisfies StorageProfile;
 
 export const PROFILES = {
   memory: {
@@ -48,14 +82,12 @@ export const PROFILES = {
     serializes: true,
     note: "unix socket or sidecar valkey",
   },
-  "redis-az": {
-    readP50: 0.6,
-    readP99: 3,
-    writeP50: 0.8,
-    writeP99: 4,
-    perKiBMs: 0.008,
-    serializes: true,
-    note: "same-region TCP",
+  "redis-az": REDIS_AZ,
+  // Same wire, different codec. See `StorageProfile.codec`.
+  "redis-az-bytes": {
+    ...REDIS_AZ,
+    codec: "bytes",
+    note: "same-region TCP, one blob per entry (createBlobStorage)",
   },
   sql: {
     readP50: 2,
@@ -75,14 +107,11 @@ export const PROFILES = {
     serializes: true,
     note: "Cloudflare KV / Deno KV, eventually consistent",
   },
-  "object-store": {
-    readP50: 30,
-    readP99: 120,
-    writeP50: 55,
-    writeP99: 200,
-    perKiBMs: 0.05,
-    serializes: true,
-    note: "S3 / R2 GetObject",
+  "object-store": OBJECT_STORE,
+  "object-store-bytes": {
+    ...OBJECT_STORE,
+    codec: "bytes",
+    note: "S3 / R2 GetObject, one blob per entry (createBlobStorage)",
   },
 } satisfies Record<string, StorageProfile>;
 
@@ -137,6 +166,10 @@ export function createProfiledStorage(
   });
   const stats = newStats();
   const free = profile.readP50 === 0 && profile.writeP50 === 0 && !profile.serializes;
+
+  if (profile.codec === "bytes") {
+    return createProfiledBlobStorage(profile, inner, stats, opts.rng);
+  }
 
   const storage: ProfiledStorage = {
     maxEntryBytes: inner.maxEntryBytes,
@@ -194,6 +227,83 @@ export function createProfiledStorage(
       }
       inner.set(key, raw ?? null, setOpts);
       if (raw !== undefined && inner.get(key) == null) stats.evicted++;
+    },
+  };
+  return storage;
+}
+
+/**
+ * The `codec: "bytes"` arm: `createBlobStorage` over a byte store with this profile's latency.
+ *
+ * The differences from the JSON arm above are the point of the pairing, and there are three.
+ * The frame, not a JSON string, is what the backing store holds — so the memory ceiling
+ * charges it by `byteLength` rather than at two bytes per UTF-16 code unit. The frame's
+ * length, not the JSON string's, drives the per-KiB wire term — so a binary body that no
+ * longer expands by 4/3 genuinely costs less round-trip time here. And `binary` comes from
+ * `createBlobStorage` itself rather than from this file, because the codec is what makes the
+ * declaration true.
+ *
+ * Everything else — the lognormal draw, the stats, `instant` — is the JSON arm's, so a paired
+ * run differs only in the codec.
+ *
+ * One caveat on `bytesWritten`: the JSON arm counts a string's `length` and this one counts a
+ * frame's `byteLength`. Both entry forms are ASCII-dominated, so the two are comparable in
+ * practice, but a payload of multi-byte text makes the JSON arm read low by up to a factor of
+ * the UTF-8 expansion. Read the column as storage volume, not as an exact byte count.
+ */
+function createProfiledBlobStorage(
+  profile: StorageProfile,
+  inner: StorageInterface,
+  stats: StorageStats,
+  rng: Rng,
+): ProfiledStorage {
+  let storage: ProfiledStorage;
+
+  const framed = createBlobStorage({
+    maxEntryBytes: inner.maxEntryBytes,
+
+    async get(key) {
+      stats.reads++;
+      const frame = inner.get<Uint8Array>(key) as Uint8Array | null;
+      if (!storage.instant) {
+        const started = performance.now();
+        const kiB = frame ? frame.length / 1024 : 0;
+        await delay(lognormal(rng, profile.readP50, profile.readP99) + kiB * profile.perKiBMs);
+        stats.readMs += performance.now() - started;
+      }
+      if (frame == null) {
+        return null;
+      }
+      stats.readHits++;
+      return frame;
+    },
+
+    async set(key, value, setOpts) {
+      if (value === null) {
+        stats.deletes++;
+      } else {
+        stats.writes++;
+        stats.bytesWritten += value.length;
+      }
+      if (!storage.instant) {
+        const started = performance.now();
+        const kiB = value ? value.length / 1024 : 0;
+        await delay(lognormal(rng, profile.writeP50, profile.writeP99) + kiB * profile.perKiBMs);
+        stats.writeMs += performance.now() - started;
+      }
+      inner.set(key, value, setOpts);
+      if (value !== null && inner.get(key) == null) {
+        stats.evicted++;
+      }
+    },
+  });
+
+  storage = {
+    ...framed,
+    stats,
+    instant: false,
+    reset() {
+      Object.assign(stats, newStats());
     },
   };
   return storage;

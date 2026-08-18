@@ -20,11 +20,11 @@ const scenario: Scenario = {
   kind: "function",
   summary: "25 ms blocking render to 20 KiB HTML, 3k documents",
   expect:
-    "Baseline throughput is pinned at 1000/25 = 40 rps. Cached capacity should scale with hit ratio until storage latency becomes the new floor.",
+    "Baseline throughput is pinned at 1000/25 = 40 rps. Cached capacity should scale with hit ratio until storage latency becomes the new floor. `redis-az-bytes` is here as the counter-example: this value is a string, not bytes and not a response body, so it declares no payload and the frame has nothing to lift — it should cost more than plain `redis-az`, not less.",
   origin: { ioMs: 0, cpuMs: 25, concurrency: Infinity },
   payloadBytes: 20 * 1024,
   keyspace: KEYSPACE,
-  storageProfiles: ["memory", "redis-local", "redis-az", "sql", "object-store"],
+  storageProfiles: ["memory", "redis-local", "redis-az", "redis-az-bytes", "sql", "object-store"],
   load: {
     steady: { rps: 30, durationMs: 12_000, warmupMs: 3000 },
     ramp: [25, 50, 100, 200, 400, 800],

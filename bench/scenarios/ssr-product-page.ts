@@ -21,11 +21,11 @@ const scenario: Scenario = {
   kind: "handler",
   summary: "40 KiB HTML, 2 DB queries + template render, 5k pages, Zipf head",
   expect:
-    "Latency drops to the storage round trip on hits; capacity rises because the 12 ms render is skipped. Hit ratio is set by the Zipf tail, not by the cache.",
+    "Latency drops to the storage round trip on hits; capacity rises because the 12 ms render is skipped. Hit ratio is set by the Zipf tail, not by the cache. The `redis-az-bytes` row is the text half of the codec pairing: the body leaves the JSON but never was base64, so only the escaping is saved.",
   origin: { ioMs: 18, cpuMs: 12, concurrency: 20 },
   payloadBytes: 40 * 1024,
   keyspace: KEYSPACE,
-  storageProfiles: ["memory", "redis-az", "kv-edge"],
+  storageProfiles: ["memory", "redis-az", "redis-az-bytes", "kv-edge"],
   load: {
     steady: { rps: 60, durationMs: 10_000, warmupMs: 3000 },
     ramp: [40, 80, 160, 320, 640, 1280, 2560],

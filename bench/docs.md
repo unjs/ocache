@@ -35,6 +35,12 @@ The whole run in one figure: every workload with ocache against the same workloa
 
 Each scenario models a realistic workload rather than a library feature: a page render, a JSON list, a per-user dashboard, an image render, an upstream API with a rate cap. Every scenario runs **twice — once with ocache in the path and once without** — so the difference between the two rows is exactly what caching changed. The cached side is then repeated across several storage backends. Backend latency is simulated from real-world p50/p99 figures rather than set to zero. This run covers {{value:profile-list}}; each scenario uses the backends that make sense for it, and its chart lists which ones.
 
+A backend name ending in `-bytes` is not a different backend. It is the same simulated wire
+as its twin — `redis-az-bytes` and `redis-az` share one latency model exactly — running
+through [`createBlobStorage`](/storage#keeping-bodies-as-bytes-on-a-byte-only-driver), which
+stores each entry as one byte frame instead of a JSON document. The pair is there so the
+codec can be read off the difference between two rows rather than argued about.
+
 A few choices keep the results honest:
 
 - **Requests do not wait for each other.** They arrive on a fixed random schedule (a Poisson process), and latency is measured from when a request _should_ have started, not when the server got around to it. A benchmark that waits for each response before sending the next one hides queueing delay — the thing users actually feel under load.

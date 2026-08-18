@@ -1,5 +1,7 @@
 // Docs: @docs/3.storage.md
 
+import type { CacheEntry } from "./types.ts";
+
 export interface StorageInterface {
   get<T = unknown>(key: string): T | null | Promise<T | null>;
   set<T = unknown>(key: string, value: T, opts?: { ttl?: number }): void | Promise<void>;
@@ -262,6 +264,203 @@ function clearTimer(timers: Map<string, ReturnType<typeof setTimeout>>, key: str
   if (existing !== undefined) {
     clearTimeout(existing);
     timers.delete(key);
+  }
+}
+
+/**
+ * A backend that stores one byte payload per key.
+ *
+ * This is the shape a raw store already has: unstorage's `getItemRaw`/`setItemRaw`, a
+ * filesystem `readFile`/`writeFile`, a Redis `getBuffer`/`set`, an object-store `get`/`put`.
+ * {@link createBlobStorage} adapts one to a {@link StorageInterface}.
+ */
+export interface BlobBackend {
+  /** Returns the stored bytes, or `null` when the key is absent. */
+  get(key: string): BlobValue | null | undefined | Promise<BlobValue | null | undefined>;
+  /** Stores the bytes, or removes the key when `value` is `null`. */
+  set(key: string, value: Uint8Array | null, opts?: { ttl?: number }): void | Promise<void>;
+  /** Largest byte charge one entry may have. Passed through to {@link StorageInterface}. */
+  maxEntryBytes?: number;
+}
+
+/** What a byte backend may return: a view, or the buffer behind one. */
+export type BlobValue = ArrayBufferView | ArrayBufferLike;
+
+// Frame layout, all offsets fixed:
+//
+//   0  2  magic "oc"
+//   2  1  version
+//   3  1  flags
+//   4  4  metadata length, big-endian
+//   8  n  metadata JSON, UTF-8
+//   8+n   payload bytes
+//
+// The payload sits last and its offset is known from the header alone, which is what a
+// ranged read needs and what a `304` — headers only, never the body — could stop before.
+const FRAME_MAGIC_0 = 0x6f; // "o"
+const FRAME_MAGIC_1 = 0x63; // "c"
+const FRAME_VERSION = 1;
+const FRAME_HEADER_BYTES = 8;
+
+/** A payload follows the metadata. */
+const FLAG_PAYLOAD = 1;
+/** That payload is bytes rather than UTF-8 text. */
+const FLAG_PAYLOAD_BYTES = 2;
+
+const utf8Encoder = /* @__PURE__ */ new TextEncoder();
+// Fatal, so a corrupted payload misses instead of decoding to replacement characters.
+const utf8Decoder = /* @__PURE__ */ new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/**
+ * Adapts a byte-only backend into a {@link StorageInterface}, storing each entry as one frame.
+ *
+ * The entry's metadata travels as JSON and its payload travels as itself, appended after it.
+ * That keeps a response body — text or binary — out of the JSON document: text pays no
+ * escaping in either direction, and bytes pay no base64 and no 4/3 expansion in the backend.
+ *
+ * The payload is the one named by {@link CacheEntry.payload}, which the producer of the entry
+ * declares — `http/entry.ts` for a response body, `cache.ts` for a byte value. Nothing here
+ * infers a payload from a value's shape.
+ *
+ * This declares `binary`, because the frame carries the declared payload as bytes. Every
+ * other member of the entry is JSON, exactly as it would be on a serializing backend: a byte
+ * view hidden somewhere ocache did not put one does not survive, on this backend or on any
+ * other JSON-shaped one.
+ *
+ * A frame written by a different version is read as a miss, so a format change costs one
+ * revalidation rather than a mangled entry.
+ *
+ * @example
+ * ```ts
+ * const storage = createBlobStorage({
+ *   get: (key) => unstorage.getItemRaw(key),
+ *   set: (key, value, opts) =>
+ *     value === null ? unstorage.removeItem(key) : unstorage.setItemRaw(key, value, opts),
+ * });
+ * ```
+ */
+export function createBlobStorage(backend: BlobBackend): StorageInterface {
+  return {
+    // The frame moves the declared payload intact, so a byte value never needs base64.
+    binary: true,
+    maxEntryBytes: backend.maxEntryBytes,
+
+    async get(key) {
+      const stored = await backend.get(key);
+      return (stored ? decodeFrame(toBytes(stored)) : null) as any;
+    },
+
+    async set(key, value, opts) {
+      await backend.set(
+        key,
+        value === null || value === undefined ? null : encodeFrame(value as CacheEntry),
+        opts,
+      );
+    },
+  };
+}
+
+/** Returns a `Uint8Array` over the same memory, whatever byte form the backend returned. */
+function toBytes(value: BlobValue): Uint8Array {
+  return ArrayBuffer.isView(value)
+    ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    : new Uint8Array(value);
+}
+
+/** Returns the entry as one frame, with its declared payload appended after the metadata. */
+function encodeFrame(entry: CacheEntry): Uint8Array {
+  let flags = 0;
+  let payload: Uint8Array | undefined;
+  let metadata: unknown = entry;
+
+  // Read the payload from the declared location only. An entry that declares one whose value
+  // is neither text nor bytes keeps it in the metadata, where JSON decides what happens to it.
+  const location = entry.payload;
+  const value = entry.value;
+  const source =
+    location === "value"
+      ? value
+      : location === "value.body" && typeof value === "object" && value !== null
+        ? (value as { body?: unknown }).body
+        : undefined;
+
+  if (typeof source === "string") {
+    payload = utf8Encoder.encode(source);
+    flags = FLAG_PAYLOAD;
+  } else if (ArrayBuffer.isView(source)) {
+    payload = toBytes(source);
+    flags = FLAG_PAYLOAD | FLAG_PAYLOAD_BYTES;
+  }
+
+  if (payload) {
+    // `JSON.stringify` drops an `undefined` member, so this removes the payload rather than
+    // storing it twice. `payload` itself stays: the read side needs the location back.
+    metadata =
+      location === "value"
+        ? { ...entry, value: undefined }
+        : { ...entry, value: { ...(value as object), body: undefined } };
+  }
+
+  const header = utf8Encoder.encode(JSON.stringify(metadata));
+  const frame = new Uint8Array(FRAME_HEADER_BYTES + header.length + (payload?.length ?? 0));
+  frame[0] = FRAME_MAGIC_0;
+  frame[1] = FRAME_MAGIC_1;
+  frame[2] = FRAME_VERSION;
+  frame[3] = flags;
+  new DataView(frame.buffer).setUint32(4, header.length);
+  frame.set(header, FRAME_HEADER_BYTES);
+  if (payload) {
+    frame.set(payload, FRAME_HEADER_BYTES + header.length);
+  }
+  return frame;
+}
+
+/** Returns the framed entry, or `null` for anything this build cannot read back. */
+function decodeFrame(frame: Uint8Array): CacheEntry | null {
+  if (
+    frame.length < FRAME_HEADER_BYTES ||
+    frame[0] !== FRAME_MAGIC_0 ||
+    frame[1] !== FRAME_MAGIC_1 ||
+    frame[2] !== FRAME_VERSION
+  ) {
+    // Not a frame this build wrote. A miss re-resolves; a guess would serve wrong bytes.
+    return null;
+  }
+  const flags = frame[3]!;
+  const headerLength = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(4);
+  const payloadStart = FRAME_HEADER_BYTES + headerLength;
+  if (payloadStart > frame.length) {
+    return null;
+  }
+
+  try {
+    const entry = JSON.parse(
+      utf8Decoder.decode(frame.subarray(FRAME_HEADER_BYTES, payloadStart)),
+    ) as CacheEntry;
+    if (typeof entry !== "object" || entry === null) {
+      return null;
+    }
+    if (!(flags & FLAG_PAYLOAD)) {
+      return entry;
+    }
+    const bytes = frame.subarray(payloadStart);
+    const payload = flags & FLAG_PAYLOAD_BYTES ? bytes : utf8Decoder.decode(bytes);
+    if (entry.payload === "value") {
+      entry.value = payload;
+    } else if (
+      entry.payload === "value.body" &&
+      typeof entry.value === "object" &&
+      entry.value !== null
+    ) {
+      (entry.value as { body?: unknown }).body = payload;
+    } else {
+      // A payload with nowhere to go. Nothing can rebuild the entry it belongs to.
+      return null;
+    }
+    return entry;
+  } catch {
+    // Corrupt metadata or a payload that is not the UTF-8 it was written as.
+    return null;
   }
 }
 

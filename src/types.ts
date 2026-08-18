@@ -69,6 +69,19 @@ export interface CacheEntry<T = any> {
    */
   encoding?: "bytes" | "base64";
   /**
+   * Where this entry's bulk payload sits.
+   *
+   * A storage codec reads this to move the payload as bytes, outside whatever document
+   * holds the metadata: `"value"` for a cached function whose value is the payload, and
+   * `"value.body"` for a cached handler's response body. See {@link createBlobStorage}.
+   *
+   * The producer of the stored shape declares it, so a codec never infers a payload from
+   * the value. Like {@link encoding} it describes storage, not the value: it exists only
+   * between the storage write and the read that consumes it, and is written again from the
+   * options in use.
+   */
+  payload?: "value" | "value.body";
+  /**
    * Status for the current call.
    * This field is available to `transform` and is not stored.
    */
@@ -106,6 +119,17 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * ```
    */
   serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => any;
+  /**
+   * Declares where the stored value's bulk payload sits, for a storage codec.
+   *
+   * `"value.body"` names the `body` member of an object value, as a `serialize` hook
+   * returning `{ body, ... }` produces. A value that is a byte view is its own payload and
+   * needs no declaration. Anything else stays inside the metadata document.
+   *
+   * Only {@link createBlobStorage} and other byte-payload backends read this; every other
+   * backend ignores it. See {@link CacheEntry.payload}.
+   */
+  payload?: "value.body";
   /**
    * Validates an entry for the current arguments.
    * Return or resolve to `false` to revalidate it.
@@ -235,7 +259,7 @@ export interface CacheConditions {
  */
 export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> extends Omit<
   CacheOptions<Response, [E]>,
-  "transform" | "validate" | "serialize"
+  "transform" | "validate" | "serialize" | "payload"
 > {
   /**
    * Answers conditional requests with 304 without storing responses.

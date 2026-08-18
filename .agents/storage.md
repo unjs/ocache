@@ -34,7 +34,34 @@ A backend that serializes entries must leave it unset, and this cannot be inferr
 
 Holding values by reference is also why nothing may mutate a stored body. A declaring backend hands the same view to every hit, where base64 decoding allocated a fresh array each time.
 
-A serializing backend can still declare it by carrying the bytes itself. `docs/3.storage.md` shows the unstorage form: take the body out of the JSON, append it as bytes, and write the pair through `setItemRaw`. Verified against the `fs` driver — its raw path is native (`writeFile`/`readFile`), but it moves **one byte payload**, so handing an entry object straight to `setItemRaw` throws `ERR_INVALID_ARG_TYPE`. That is the distinction to keep: the flag asks whether _this backend, as adapted_, returns views intact, not whether the underlying store can hold bytes at all.
+A serializing backend can still declare it by carrying the bytes itself, which is what `createBlobStorage` does (below). Verified against unstorage's `fs` driver — its raw path is native (`writeFile`/`readFile`), but it moves **one byte payload**, so handing an entry object straight to `setItemRaw` throws `ERR_INVALID_ARG_TYPE`. That is the distinction to keep: the flag asks whether _this backend, as adapted_, returns views intact, not whether the underlying store can hold bytes at all.
+
+## `createBlobStorage` — one frame per entry
+
+A byte-only backend cannot take a `CacheEntry` at all, so something has to serialize it. `createBlobStorage` is that something, and the format is ocache's, not the consumer's: it replaces a snippet `docs/3.storage.md` used to ask every consumer to hand-roll, which had no magic bytes, no version, and no length validation.
+
+```
+0  2  magic "oc"
+2  1  version
+3  1  flags        bit 0: a payload follows; bit 1: that payload is bytes, not UTF-8 text
+4  4  metadata length, big-endian
+8  n  metadata JSON, UTF-8
+8+n   payload bytes
+```
+
+**The metadata stays JSON, deliberately.** A per-field binary frame is the obvious alternative and it is measurably worse: encoding eight header names and values through `TextEncoder` costs ~32 µs against ~1.8 µs for `JSON.stringify` plus one encode of the result, because every `encode` call is a separate crossing into the runtime and JSON does the whole map in one. Nothing written in JS beats `JSON.stringify` on a small object graph. CBOR and MessagePack land in the same per-field class and would have to be hand-rolled anyway under the zero-dependency rule; HTTP/1.1 wire format encodes fast as one text block but has no parser in any runtime, and hand-rolled header parsing is a security surface a cache should not own. What the frame is for is the **payload**, not the metadata.
+
+**The payload is the entry's `payload` field, and nothing else.** `cache.ts` derives `"value"` for a byte value; `http/index.ts` declares `"value.body"` for a response body. The codec never inspects a value's shape to find bytes — that is the same rule as `binary` itself, one step further out. A payload that is neither a string nor a byte view is left in the metadata rather than framed wrongly.
+
+**Text is lifted too, not only bytes.** This is the part that does not follow from `binary`. A text body inside the metadata pays JSON escaping on the way out and unescaping on the way back; at 64 KiB of real HTML that is 270 µs to `stringify` against 116 µs to `TextEncoder.encode` the same string, and 108 µs against 92 µs coming back. Framing the entry but leaving the body inside the JSON is the worst of both — measured at +286 µs on a 64 KiB text miss, because it pays the escaping _and_ then encodes the escaped result.
+
+**`binary: true` is scoped to the declared payload.** Every other member of the entry is JSON, exactly as it would be on any serializing backend, so a byte view hidden at an undeclared location does not survive. That is not a regression this codec introduces — it is what a JSON backend already does — but it does mean the declaration promises less here than it does for memory storage, and `test/blob.test.ts` pins the boundary so nobody reads it as wider.
+
+**An unreadable frame is a miss, never a guess.** Wrong magic, an unknown version, a length past the end, metadata that is not JSON, a payload that is not the UTF-8 it was written as: each returns `null`, so the value is resolved again. This is what makes the format changeable — a version bump costs one revalidation per entry instead of mangling a persistent store. It is also why the version byte is checked before anything else is read.
+
+**What it buys, measured.** `bench/harness/storage.ts` carries a `codec: "bytes"` profile built by spreading its JSON twin, so `redis-az` and `redis-az-bytes` are identical on the wire and differ in nothing but the codec. On `og-image` (64 KiB binary body) that is 0.586 → 0.440 MiB written and 1.56 → 1.38 ms hit p50; on `ssr-product-page` (40 KiB text) it is 3.033 → 2.996 MiB and a p50 delta inside noise. The storage volume is the result — 25% of a binary entry is the base64 expansion, and that is egress and `maxEntryBytes` budget, not just CPU. `markdown-render` is in the sweep as the counter-example: a function value that declares no payload gains nothing and pays one extra encode. See finding 2b.
+
+Ad-hoc pairings against a _JSON-object_ adapter, taken while designing this, disagreed by more than the effect in both directions at 64 KiB text. They are not in the harness and must not be quoted: an object-shaped backend and a byte-only one are different backends, not two codecs.
 
 ## The ceiling is declared, not private
 

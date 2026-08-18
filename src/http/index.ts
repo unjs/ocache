@@ -104,6 +104,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // ceiling bounds how much of a body may be buffered.
     serialize: (entry, ctx) =>
       serializeResponse(config, entry, _opts.storage, ctx.args[0] as HTTPEvent),
+    // The response body is this entry's payload, whether it is text or bytes. A storage
+    // codec moves it outside the metadata; every other backend ignores the declaration.
+    payload: "value.body",
     // `cachedHandler` answers bypassed requests itself, so this resolver never sees one.
     shouldBypassCache: undefined,
     getKey: async (event: HTTPEvent) =>

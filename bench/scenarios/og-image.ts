@@ -25,11 +25,11 @@ const scenario: Scenario = {
   kind: "handler",
   summary: "64 KiB PNG, 180 ms blocking render, 300 slugs, 30% conditional requests",
   expect:
-    "The largest capacity win in the set: blocking render CPU disappears on a hit. Watch the base64 write cost and the share of requests answered with 304.",
+    "The largest capacity win in the set: blocking render CPU disappears on a hit. Watch the share of requests answered with 304, and the two `redis-az` rows: same wire, one storing the body as base64 inside JSON and one storing it as bytes through `createBlobStorage`.",
   origin: { ioMs: 5, cpuMs: 180, concurrency: 4 },
   payloadBytes: IMAGE_BYTES,
   keyspace: KEYSPACE,
-  storageProfiles: ["memory", "redis-az"],
+  storageProfiles: ["memory", "redis-az", "redis-az-bytes"],
   load: {
     steady: { rps: 4, durationMs: 25_000, warmupMs: 5000 },
     ramp: [4, 8, 16, 32, 64, 128],

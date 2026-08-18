@@ -159,16 +159,62 @@ What is left, and what it costs:
   **Done**, as `StorageInterface.binary` plus `hashBytes` (`.agents/http/response.md`). In
   `bench/micro.ts` at 40 KiB, against the same memory store with the declaration removed: a hit
   is 53.2 µs against 79.1 µs, and a store 246 µs against 301 µs, halving per-store allocation
-  (54.6 kb against 107.9 kb). One machine, one mitata run — the load scenarios have not been
-  re-run, and `og-image`'s 4/3 storage expansion in `results/steady.md` still predates it.
+  (54.6 kb against 107.9 kb). One machine, one mitata run.
 
-`og-image` is where this shows up under load, and its steady-state numbers in
-`results/steady.md` predate the fix.
+`og-image` is where this shows up under load. `results/steady.md` has since been regenerated,
+and finding 2b is where the 4/3 expansion it used to carry finally leaves the store.
 
 The earlier version of this finding measured +50/+102/+192 µs per hit and +255/+1369/+2273 µs per
 store. The store column reproduces almost exactly; the hit column reads lower here, which is the
 between-session absolute drift this document warns about — compare the two columns of one table,
 never a column against another run.
+
+## 2b. A byte frame removes base64 from the store itself, not just from the CPU
+
+**measured, shipped**
+
+Finding 2 took base64 off the CPU path and `StorageInterface.binary` took it off the entry —
+but only for a backend that returns byte views _as values_. A byte-only store (`fs`, S3/R2,
+`getItemRaw`, a Redis `getBuffer`) cannot take a value at all, so an adapter has to serialize
+the entry, and the obvious adapter re-introduces exactly what finding 2 removed: JSON the
+entry, encode the JSON, base64 the body so it survives the JSON.
+
+`createBlobStorage` is the answer, and `harness/storage.ts` now models it as a `codec: "bytes"`
+profile. `redis-az-bytes` is built by spreading `redis-az`, so the pair is provably identical
+on the wire and differs in **nothing but the codec** — same seed, same key sequence, same
+storage reads and writes (the run confirms 101/7 and 584/76 respectively, identical on both
+sides). From `results/steady.md`:
+
+| scenario                        | body          | hit p50 | MiB written |
+| ------------------------------- | ------------- | ------: | ----------: |
+| `og-image` / `redis-az`         | 64 KiB binary | 1.56 ms |       0.586 |
+| `og-image` / `redis-az-bytes`   | 64 KiB binary | 1.38 ms |       0.440 |
+| `ssr-product-page` / `redis-az` | 40 KiB text   | 1.27 ms |       3.033 |
+| `ssr-product-page` / `-bytes`   | 40 KiB text   | 1.23 ms |       2.996 |
+
+**The storage volume is the result, not the microseconds.** `og-image` writes 25% fewer bytes
+— which is the 4/3 base64 expansion, gone — and that is a number no CPU tuning reaches: it is
+egress on a remote backend, it is what counts against `maxEntryBytes`, and it is why hit p50
+falls 11.5% here at all (the per-KiB wire term shrinks with the payload). Finding 2 called
+this expansion out as the part that survived the encoder fix; this is where it goes.
+
+**Text gains little, and that is expected.** A text body was never base64, so the frame only
+saves JSON escaping: 1.2% of stored bytes on `ssr-product-page`, and a p50 delta inside noise.
+The frame is for byte payloads. Do not read `-bytes` as "faster" — read it as "does not
+inflate what it stores".
+
+**A value with no declared payload gains nothing and costs one encode.** `markdown-render` is
+in the sweep as the counter-example: a cached _function_ returning a 20 KiB string declares no
+`CacheEntry.payload`, so the frame has nothing to lift and simply JSON-encodes the entry and
+then encodes that. Measured at 0.90 vs 0.91 ms p50 and 0.737 MiB either way — the extra encode
+is below this harness's noise floor at 20 KiB, which is not the same as free, and it grows
+with payload. `createBlobStorage` is for a byte-only backend, not a default.
+
+**What this run does not settle.** Earlier ad-hoc pairings of the codec against a _JSON-object_
+adapter (one that keeps the entry as a value) disagreed by more than the effect and in both
+directions, at 64 KiB text. That comparison is not in the harness and should not be quoted:
+an object-shaped backend and a byte-only one are different backends, not two codecs, and the
+pairing rule this document opens with does not hold across them.
 
 ## 3. The miss path costs 5-14x the hit path, and it scales with payload
 
@@ -375,10 +421,10 @@ finding 5 from `new Response` with the body held constant; finding 7 from a stor
 `globalThis.gc()` between sides, median of the per-repeat deltas — and needs
 `node --expose-gc`, which the `pnpm bench` scripts set.
 
-Load-run figures come from `results/steady.md`. One row there is stale: the
-`personalized-dashboard` summary and note predate the scenario's 15% session churn, so its
-96.3% offload describes an older model. Do not cite that row until the report is
-regenerated.
+Load-run figures come from `results/steady.md`, regenerated in full for finding 2b — one
+run, one seed, every scenario, so rows in it may be compared with each other. The
+`personalized-dashboard` row that used to predate the scenario's 15% session churn is part of
+that regeneration and is current again.
 
 `pnpm bench:micro` covers the hit path less precisely — it is a single-pass tool, so treat
 it as directional and re-measure anything you intend to act on.

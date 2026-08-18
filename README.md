@@ -80,6 +80,16 @@ const handler = defineCachedHandler(
 
 <!-- automd:docs4ts -->
 
+### `BlobValue`
+
+```ts
+type BlobValue = ArrayBufferView | ArrayBufferLike;
+```
+
+What a byte backend may return: a view, or the buffer behind one.
+
+---
+
 ### `CachedEventHandler`
 
 ```ts
@@ -114,6 +124,42 @@ Result of one cache call.
 - `"stale"`: returned stale data and started background revalidation.
 - `"revalidated"`: replaced an old value before returning.
 - `"miss"`: resolved a value when none existed.
+
+---
+
+### `createBlobStorage`
+
+```ts
+function createBlobStorage(backend: BlobBackend): StorageInterface;
+```
+
+Adapts a byte-only backend into a [`StorageInterface`](#storageinterface), storing each entry as one frame.
+
+The entry's metadata travels as JSON and its payload travels as itself, appended after it.
+That keeps a response body — text or binary — out of the JSON document: text pays no
+escaping in either direction, and bytes pay no base64 and no 4/3 expansion in the backend.
+
+The payload is the one named by {@link CacheEntry.payload}, which the producer of the entry
+declares — `http/entry.ts` for a response body, `cache.ts` for a byte value. Nothing here
+infers a payload from a value's shape.
+
+This declares `binary`, because the frame carries the declared payload as bytes. Every
+other member of the entry is JSON, exactly as it would be on a serializing backend: a byte
+view hidden somewhere ocache did not put one does not survive, on this backend or on any
+other JSON-shaped one.
+
+A frame written by a different version is read as a miss, so a format change costs one
+revalidation rather than a mangled entry.
+
+**Example:**
+
+```ts
+const storage = createBlobStorage({
+  get: (key) => unstorage.getItemRaw(key),
+  set: (key, value, opts) =>
+    value === null ? unstorage.removeItem(key) : unstorage.setItemRaw(key, value, opts),
+});
+```
 
 ---
 

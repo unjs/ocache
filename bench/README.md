@@ -68,10 +68,18 @@ blocks the main thread, so caching it buys capacity. Every scenario declares bot
 `concurrency` limit standing for a connection pool, a worker pool, or an upstream quota.
 
 **Storage latency is simulated, not stubbed out.** `harness/storage.ts` fits a lognormal to
-each backend's p50/p99, adds a per-KiB payload term, and charges the caller for the JSON
-encode and decode that a remote client library performs on their thread. A cache hit is
-never free: it trades an origin round trip for a storage round trip, and a profile whose
-read latency approaches the origin cost turns caching into a loss.
+each backend's p50/p99, adds a per-KiB payload term, and charges the caller for the encode
+and decode that a remote client library performs on their thread. A cache hit is never
+free: it trades an origin round trip for a storage round trip, and a profile whose read
+latency approaches the origin cost turns caching into a loss.
+
+**A profile carries a codec as well as a latency.** Most profiles JSON-encode the whole
+entry, which is what almost every driver does. A `codec: "bytes"` profile instead fronts a
+byte-only store — `fs`, S3/R2, `getItemRaw`, a Redis `getBuffer` — with `createBlobStorage`,
+which moves the entry's declared payload as itself and JSON-encodes only the metadata around
+it. Such a profile exists **only** to be compared against its JSON twin: `redis-az-bytes` is
+built by spreading `redis-az`, so the pair is provably identical on the wire and differs in
+nothing but the codec. Add a new one the same way, never by retyping the latency fields.
 
 **`waitUntil` is wired and drained.** Background revalidations count as origin calls and as
 CPU. Without that, SWR looks free.
@@ -130,6 +138,9 @@ only of favourable cases is not a measurement.
   baseline-to-cached comparison is the point; the absolute rate is not.
 - Storage profiles are estimates. They are one table in `harness/storage.ts`; measure your
   own backend and edit it before quoting the numbers.
+- A codec pairing measures the codec, not the backend. `redis-az` and `redis-az-bytes` share
+  one latency model, so their delta is CPU and payload size — it is not evidence about how
+  any particular Redis client behaves.
 - The clock pump competes with the workload for the event loop, so `cpu/req` includes some
   harness overhead. It is the same in both modes, so the comparison holds.
 - Multi-tier `base` prefixes live on one `StorageInterface`, so a memory-over-remote tier

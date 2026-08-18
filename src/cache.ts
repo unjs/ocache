@@ -164,6 +164,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       entry = { ...entry };
       // Undo the stored form before anything reads the value, including `validate`.
       decodeBinary(entry);
+      // A codec has already consumed this marker; like `encoding` it describes storage.
+      entry.payload = undefined;
     }
 
     // Per-entry lifetimes override static options.
@@ -320,6 +322,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             // nothing above this line holds base64 text.
             const { status: _status, ...rest } = entry;
             const toStore = encodeBinary(rest, getStorage());
+            // Tell a storage codec where the payload is. A byte value is its own, which
+            // `encodeBinary` has already marked; any other shape is declared by its producer.
+            const payload = opts.payload ?? (toStore.encoding ? "value" : undefined);
+            if (payload) {
+              toStore.payload = payload;
+            }
             const promise = (async () => {
               try {
                 await Promise.all(
