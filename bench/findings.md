@@ -267,6 +267,11 @@ it: an absent header hashes `null` rather than being skipped.
 and re-serializes on every request. Its cost tracks the query string, not the allowlist: a
 single-parameter URL re-measured at +1.3 µs against its own control.
 
+These rows predate the query allowlist becoming opt-in. The `plain` control now filters the
+query too, so this `allowQuery` delta no longer exists against it — a re-run measures the
+opposite direction, `allowQuery: true` against a filtering control. The `filterSearch` cost
+itself is unchanged, and a query-less request skips it entirely.
+
 `allowCookies` was unmeasured until now, and it is the more expensive option — it is also
 the one every per-user handler needs:
 

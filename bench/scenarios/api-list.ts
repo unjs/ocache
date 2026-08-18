@@ -2,8 +2,9 @@
 //
 // The unflattering handler case. Query combinations spread the load over a wide keyspace
 // with a shallow head, so the hit ratio is mediocre by construction. `allowQuery` is what
-// keeps it from being worse: analytics parameters ride along on a large share of real
-// traffic and would otherwise turn every link into its own cache key.
+// makes the keyspace this wide at all — it opts the three real parameters in while leaving
+// out the analytics ones, which ride along on a large share of real traffic and would
+// otherwise turn every link into its own cache key.
 
 import { defineCachedHandler } from "../../src/index.ts";
 import { createZipf } from "../harness/random.ts";

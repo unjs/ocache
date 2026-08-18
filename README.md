@@ -68,7 +68,7 @@ const handler = defineCachedHandler(
     swr: true,
     staleMaxAge: 600,
     varies: ["accept-language"], // Vary cache key by these headers (also emitted as `Vary`)
-    allowQuery: ["color"], // Vary cache by these query params only
+    allowQuery: ["color"], // Opt in: only these query params vary the cache (default: none)
   },
 );
 ```

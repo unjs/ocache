@@ -69,7 +69,7 @@ The extra `context` member remains available for route parameters, bindings, and
 
 ## Request headers and query parameters
 
-Declare every request header that affects the response:
+Declare every request header and query parameter that affects the response — neither is covered by default:
 
 ```ts
 const localized = defineHonoCachedHandler(

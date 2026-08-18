@@ -59,6 +59,14 @@ By default, cookies do not affect caching. Remove the `Cookie` header before the
 
 Implement this as three branches in narrowing. Use the filtered subset when an allowlist exists. Otherwise, forward the raw header when `keyHeaderNames` contains `cookie`. Remove it in all other cases.
 
+### Query (request side)
+
+By default, no query parameter affects caching. `resolveHandlerConfig` resolves an unset `allowQuery` to an **empty allowlist**, not to `undefined`, so a query-less handler is the default and a keyed parameter is an opt-in — the same shape as cookies and headers. `undefined` in `HandlerConfig.allowedQueryNames` means the opposite of the option: it is reachable only through `allowQuery: true` and means "do not filter". Keep that inversion inside `config.ts`; `key.ts` and `request.ts` read the resolved field and must not consult `opts.allowQuery`.
+
+`allowQuery: true` exists because the allowlist has no wildcard and the alternatives do not cover a route whose parameter names are unknown, such as a proxy or a search endpoint: a custom `getKey` replaces the key but does **not** disable URL filtering, so the handler would still receive a query-less URL, and no list of names can be written for an open-ended query. `false` and `[]` resolve to the default.
+
+Narrowing skips the URL rewrite entirely when the incoming URL has no query. The filtered result is identical, and the skip keeps the query-less majority of requests off the `event.url` replacement path, where a framework with a read-only `url` accessor would otherwise fail closed into a bypass on every request.
+
 ### Authorization
 
 By default, `authorization` and `proxy-authorization` do not affect caching. Remove both from the handler-visible request on cacheable calls. A handler must not render per-user content from a credential absent from the key. No special code is needed because they are undeclared headers under the allowlist rule. Earlier code forwarded these headers without keying them. A token-authenticated route then failed open. The first caller's private response was stored under the anonymous key, replayed to everyone, and advertised with `max-age=N, s-maxage=N` to shared CDNs. Cookie-authenticated routes already failed closed. That difference was the defect.
@@ -67,7 +75,7 @@ By default, `authorization` and `proxy-authorization` do not affect caching. Rem
 
 ## Mutation of the caller's event
 
-Narrowing **mutates** `event.req`. It also mutates `event.url` when `allowQuery` applies. It does not restore either value. After a MISS, the caller sees the narrowed request. After a HIT or bypass, the caller does not.
+Narrowing **mutates** `event.req`. It also mutates `event.url` when the request carries a query the allowlist rewrites. It does not restore either value. After a MISS, the caller sees the narrowed request. After a HIT or bypass, the caller does not.
 
 Do not restore values in a `finally` block. A response body can read them after the resolver returns. For example, an asynchronous `ReadableStream.pull` runs while `serialize` calls `res.arrayBuffer()`. Early restoration would expose the original credentials to a lazy body that is then cached and replayed. It would also leave an SWR race in which a background refresh replaces the stale reader's event after the response returns. The correct fix is to avoid mutating the caller's event. That requires a design decision because `E` can be any framework event. This work is **tracked, open**.
 

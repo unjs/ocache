@@ -1132,8 +1132,8 @@ describe("handler cache key bytes", () => {
       "/blog/hello%20world",
       "/cache:handlers:pinned:bloghelloworld.ADm_DZ5_WI0xkMgc3hWpdHxKgBpNfS5cCu_Ud0LVlOc.json",
     ],
-    // The query stays out of the prefix and inside the hash.
-    ["/a?b=1", "/cache:handlers:pinned:a.gSn7sLLSZNsQdqcP-bHlQXNF3xJh69t8b4iUR0_boQI.json"],
+    // The query is not keyed unless `allowQuery` opts it in, so this is the key for `/a`.
+    ["/a?b=1", "/cache:handlers:pinned:a.Kf_hPWV6zvRnPqo8DLYKS7xhTW6ZizmOL4fGz5EgEmo.json"],
     [
       "/products/42",
       "/cache:handlers:pinned:products42.tFNI--lUMujksKjTbUEA9IW3PlSjHGo2JeJUlzvAEoI.json",
@@ -1146,6 +1146,21 @@ describe("handler cache key bytes", () => {
     });
     const keys = await handler.resolveKeys({ req: new Request(`https://acme.example${path}`) });
     expect(keys[0]).toBe(expected);
+  });
+
+  // `allowQuery: true` restores the v0.2 key: the query stays out of the prefix and
+  // inside the hash.
+  it("keeps the query inside the hash under allowQuery: true", async () => {
+    const handler = _defineCachedHandler(() => new Response("v"), {
+      name: "pinned",
+      maxAge: 60,
+      allowQuery: true,
+      storage: createMemoryStorage(),
+    });
+    const keys = await handler.resolveKeys({ req: new Request("https://acme.example/a?b=1") });
+    expect(keys[0]).toBe(
+      "/cache:handlers:pinned:a.gSn7sLLSZNsQdqcP-bHlQXNF3xJh69t8b4iUR0_boQI.json",
+    );
   });
 });
 
@@ -4853,6 +4868,71 @@ describe("defineCachedHandler", () => {
     expect(res.headers.get("cache-control")).toBe("max-age=60");
   });
 
+  it("ignores the query by default", async () => {
+    let callCount = 0;
+    const seen: string[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        seen.push((event.url ?? new URL(event.req.url)).search);
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10 },
+    );
+
+    const r1 = (await handler(makeEvent(`${path}?color=red`))) as Response;
+    const r2 = (await handler(makeEvent(`${path}?color=blue&utm=ig`))) as Response;
+    const r3 = (await handler(makeEvent(path))) as Response;
+
+    expect(callCount).toBe(1);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    expect(await r3.text()).toBe("call-1");
+    expect(seen).toEqual([""]);
+  });
+
+  it("keys and forwards the full query under allowQuery: true", async () => {
+    let callCount = 0;
+    const seen: string[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      (event) => {
+        callCount++;
+        seen.push((event.url ?? new URL(event.req.url)).search);
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, allowQuery: true },
+    );
+
+    const r1 = (await handler(makeEvent(`${path}?color=red&utm=ig`))) as Response;
+    const r2 = (await handler(makeEvent(`${path}?color=red&utm=ig`))) as Response;
+    const r3 = (await handler(makeEvent(`${path}?color=red`))) as Response;
+
+    expect(callCount).toBe(2);
+    expect(await r1.text()).toBe("call-1");
+    expect(await r2.text()).toBe("call-1");
+    expect(await r3.text()).toBe("call-2");
+    expect(seen).toEqual(["?color=red&utm=ig", "?color=red"]);
+  });
+
+  it("treats allowQuery: false like the default", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`);
+      },
+      { maxAge: 10, allowQuery: false },
+    );
+
+    await handler(makeEvent(`${path}?a=1`));
+    await handler(makeEvent(`${path}?a=2`));
+
+    expect(callCount).toBe(1);
+  });
+
   it("only varies the cache key by allowlisted query params (allowQuery)", async () => {
     let callCount = 0;
     const path = uniquePath();
@@ -6062,6 +6142,7 @@ describe("defineCachedHandler", () => {
       const path = uniquePath();
       const handler = defineCachedHandler((event) => new Response("w".repeat(size(event))), {
         maxAge: 10,
+        allowQuery: ["n"],
       });
       const size = (event: HTTPEvent) => Number(new URL(event.req.url).searchParams.get("n"));
 
@@ -6088,6 +6169,7 @@ describe("defineCachedHandler", () => {
       const path = uniquePath();
       const handler = defineCachedHandler((event) => new Response("w".repeat(size(event))), {
         maxAge: 10,
+        allowQuery: ["n"],
       });
       const size = (event: HTTPEvent) => Number(new URL(event.req.url).searchParams.get("n"));
 

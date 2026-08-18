@@ -78,6 +78,16 @@ group("handler hit path, 8 KiB", () => {
         storage: store(),
       }),
     ],
+    // The default filters the query away, so this measures what keeping it costs instead.
+    [
+      "allowQuery: true",
+      defineCachedHandler(raw, {
+        name: "v3b",
+        maxAge: 600,
+        allowQuery: true,
+        storage: store(),
+      }),
+    ],
     [
       "allowCookies",
       defineCachedHandler(raw, {

@@ -66,12 +66,15 @@ export function narrowRequest<E extends HTTPEvent>(
     filteredHeaders.push(["host", _url.host]);
   }
 
-  // Remove query values that the key does not cover.
+  // Remove query values that the key does not cover. A query-less request needs no
+  // rewrite, which keeps the common case off the URL-replacement path.
   let _reqUrl = event.req.url;
-  if (allowedQueryNames) {
+  let _rewroteUrl = false;
+  if (allowedQueryNames && _url.search) {
     const _filteredUrl = new URL(_url);
     _filteredUrl.search = filterSearch(_url, allowedQueryNames);
     _reqUrl = _filteredUrl.href;
+    _rewroteUrl = true;
   }
 
   const originalReq = event.req;
@@ -100,7 +103,7 @@ export function narrowRequest<E extends HTTPEvent>(
     if (event.req !== req) {
       throw readOnlyEventError("req");
     }
-    if (allowedQueryNames && event.url) {
+    if (_rewroteUrl && event.url) {
       const url = new URL(_reqUrl);
       (event as any).url = url;
       replacedUrl = true;

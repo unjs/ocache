@@ -29,7 +29,7 @@ export interface HandlerConfig<E extends HTTPEvent> {
   /** Allowed request cookie names, or `undefined` to strip all cookies. */
   allowedCookieNames: string[] | undefined;
 
-  /** Query names that reach the handler and cache key. */
+  /** Query names that reach the handler and cache key, or `undefined` for the full query. */
   allowedQueryNames: string[] | undefined;
 
   /** Headers that reach the handler and cache key. */
@@ -77,9 +77,9 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
     ? [...new Set([..._declaredHeaderNames, "cookie"])].sort()
     : _declaredHeaderNames;
 
-  const allowedQueryNames = opts.allowQuery
-    ? [...new Set(opts.allowQuery.filter(Boolean))]
-    : undefined;
+  // Query names are opt-in: an unset option allows none, `true` allows the whole query.
+  const allowedQueryNames =
+    opts.allowQuery === true ? undefined : [...new Set((opts.allowQuery || []).filter(Boolean))];
 
   const statusHeader =
     opts.cacheStatusHeader === true

@@ -293,10 +293,11 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
   /**
    * Case-sensitive query names that reach the handler and generated key.
    *
-   * When unset, the full query varies the key.
+   * By default, no query parameters reach cacheable handlers or vary the key.
+   * Set to `true` to opt the full query string back in.
    * A custom `getKey` replaces key generation but does not disable URL filtering.
    */
-  allowQuery?: string[] | readonly string[];
+  allowQuery?: boolean | string[] | readonly string[];
 
   /**
    * Case-sensitive cookie names that reach the handler and vary the key.
