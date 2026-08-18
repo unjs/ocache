@@ -65,7 +65,7 @@ The first request stores the response. Later requests receive the cached status,
 The extra `context` member remains available for route parameters, bindings, and application services. ocache only requires `req` and `url`.
 
 > [!IMPORTANT]
-> Read request headers from `event.req` and query parameters from `event.url` inside the cached handler—not from `event.context.req`. ocache narrows its event to inputs covered by the cache key, while the original Hono context still exposes the complete request. Rendering an unkeyed value from the original context could store one caller's response for other callers.
+> Read request headers from `event.req` and query parameters from `event.url` inside the cached handler—not from `event.context.req`. ocache narrows its event to inputs covered by the cache key, while the original Hono context still exposes the complete request. Query parameters require `allowQuery`; without it, `event.url` has no query. Rendering an unkeyed value from the original context could store one caller's response for other callers.
 
 ## Request headers and query parameters
 
@@ -89,7 +89,7 @@ const localized = defineHonoCachedHandler(
 app.get("/products", localized);
 ```
 
-`accept-language` reaches the handler, varies the cache key, and appears in `Vary`. Only `page` reaches the handler's URL and generated key. See [Query Parameters](/docs/query-params), [Cookies](/docs/cookies), and [Caching HTTP Handlers](/docs/handler#headers-the-handler-cant-see) for the complete rules.
+`accept-language` reaches the handler, varies the cache key, and appears in `Vary`. `allowQuery` is required for query-dependent responses: here, only `page` reaches the handler's URL and generated key. See [Query Parameters](/docs/query-params), [Cookies](/docs/cookies), and [Caching HTTP Handlers](/docs/handler#headers-the-handler-cant-see) for the complete rules.
 
 Hono middleware runs before the route and still sees the original request. Put request-only values such as trace IDs in Hono variables for logging, but do not render them into a cached response unless the corresponding request input is keyed.
 

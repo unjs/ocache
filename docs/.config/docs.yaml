@@ -9,6 +9,36 @@ automd: true
 
 github: unjs/ocache
 
+landing:
+  heroTitle: Composable Caching
+  heroSubtitle: Fast by default. Flexible by design.
+  heroLinks:
+    integrations:
+      label: Integrations
+      icon: i-lucide-blocks
+      to: /integrations
+      order: 10
+  featuresTitle: Cache the work. Keep the speed.
+  features:
+    - title: Cache any function
+      description: Add TTL, stale-while-revalidate, integrity checks, and concurrent request deduplication with one wrapper.
+      icon: lucide:square-function
+    - title: HTTP caching with web standards
+      description: Cache standard Response objects with automatic ETags, conditional 304s, Cache-Control, Vary, and binary body support.
+      icon: lucide:server
+    - title: Serve now, refresh in the background
+      description: Keep responses fast with stale-while-revalidate, ISR-style regeneration, and on-demand expiration or invalidation.
+      icon: lucide:refresh-cw
+    - title: Bring any storage
+      description: Start with bounded in-memory LRU storage, connect any two-method storage, or layer multiple cache tiers.
+      icon: lucide:database
+    - title: Safe defaults by design
+      description: Key only on the query parameters, cookies, and headers you choose, while request narrowing prevents accidental cache leaks.
+      icon: lucide:shield-check
+    - title: Zero runtime dependencies
+      description: Run the same primitives in Node.js, Bun, Deno, browsers, and edge runtimes built on standard Request and Response APIs.
+      icon: lucide:globe
+
 # No blog section yet — redirect the built-in /blog route so it isn't
 # prerendered into a 404.
 redirects:
