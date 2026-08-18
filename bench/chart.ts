@@ -429,12 +429,21 @@ function offloadChart(rows: RunRow[]): string {
       .filter((row) => row.mode === "baseline")
       .map((row) => [`${row.scenario}:${row.offeredRps}`, row]),
   );
-  const cached = rows.filter(
-    (row) => row.mode !== "baseline" && baselines.has(`${row.scenario}:${row.offeredRps}`),
-  );
-  if (cached.length === 0) return "";
+  const cached = rows.filter((row) => row.mode !== "baseline");
+  const paired = cached.filter((row) => baselines.has(`${row.scenario}:${row.offeredRps}`));
+  // A ramp stops each configuration at its own knee, so a cached row can outlast its
+  // baseline and have nothing to be measured against. Say which rows that cost.
+  if (paired.length < cached.length) {
+    const dropped = cached
+      .filter((row) => !baselines.has(`${row.scenario}:${row.offeredRps}`))
+      .map((row) => `${row.scenario} ${row.profile} @ ${row.offeredRps} rps`);
+    console.error(
+      `  ! no baseline at these rates, left out of the reduction chart: ${dropped.join(", ")}`,
+    );
+  }
+  if (paired.length === 0) return "";
 
-  const groups = groupByScenario(cached).map(
+  const groups = groupByScenario(paired).map(
     ([id, groupRows]) => [id, groupRows, rowLabels(groupRows)] as const,
   );
   const x0 = labelWidth(groups.flatMap(([, , labels]) => labels)) + 28;
@@ -852,14 +861,14 @@ if (!input) {
 }
 
 const data = JSON.parse(readFileSync(input, "utf8")) as BenchFile;
+if (!Array.isArray(data.rows) || data.rows.length === 0) {
+  console.error(`${input} has no rows`);
+  process.exit(1);
+}
 for (const row of data.rows ?? []) {
   if (!Number.isFinite(row.originCallsPerRequest)) {
     row.originCallsPerRequest = row.completed === 0 ? 0 : row.originCalls / row.completed;
   }
-}
-if (!Array.isArray(data.rows) || data.rows.length === 0) {
-  console.error(`${input} has no rows`);
-  process.exit(1);
 }
 
 mkdirSync(outDir, { recursive: true });

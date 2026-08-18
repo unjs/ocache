@@ -148,8 +148,8 @@ What is left, and what it costs:
   digests the base64 string, which is 4/3 the size of the bytes. A handler that sets its own
   `etag` drops ~55 µs of the 64 KiB figure above, because `entry.ts` only digests when the header
   is absent — the same advice finding 3 gives for text.
-- **Base64 still costs storage, not only CPU.** `og-image` writes 0.6 MiB for seven 64 KiB
-  entries — ≈88 KiB per entry, the 4/3 expansion — which counts against `maxEntryBytes`, against
+- **Base64 still costs storage, not only CPU.** `og-image` writes 0.167 MiB for two 64 KiB
+  entries — ≈86 KiB per entry, the 4/3 expansion — which counts against `maxEntryBytes`, against
   network egress on a remote backend, and against the digest above.
 - **Letting a backend declare that it stores binary natively** (`Uint8Array`, `Buffer`, `Blob`)
   would remove the round trip rather than speed it up, and `deserializeEntry` already types
@@ -183,20 +183,20 @@ entry, encode the JSON, base64 the body so it survives the JSON.
 `createBlobStorage` is the answer, and `harness/storage.ts` now models it as a `codec: "bytes"`
 profile. `redis-az-bytes` is built by spreading `redis-az`, so the pair is provably identical
 on the wire and differs in **nothing but the codec** — same seed, same key sequence, same
-storage reads and writes (the run confirms 101/7 and 584/76 respectively, identical on both
+storage reads and writes (the run confirms 102/2 and 585/38 respectively, identical on both
 sides). From `results/steady.md`:
 
 | scenario                        | body          | hit p50 | MiB written |
 | ------------------------------- | ------------- | ------: | ----------: |
-| `og-image` / `redis-az`         | 64 KiB binary | 1.57 ms |       0.167 |
+| `og-image` / `redis-az`         | 64 KiB binary | 1.56 ms |       0.167 |
 | `og-image` / `redis-az-bytes`   | 64 KiB binary | 1.33 ms |       0.126 |
-| `ssr-product-page` / `redis-az` | 40 KiB text   | 1.18 ms |       1.516 |
-| `ssr-product-page` / `-bytes`   | 40 KiB text   | 1.18 ms |       1.498 |
+| `ssr-product-page` / `redis-az` | 40 KiB text   | 1.20 ms |       1.516 |
+| `ssr-product-page` / `-bytes`   | 40 KiB text   | 1.19 ms |       1.498 |
 
 **The storage volume is the result, not the microseconds.** `og-image` writes 25% fewer bytes
 — which is the 4/3 base64 expansion, gone — and that is a number no CPU tuning reaches: it is
 egress on a remote backend, it is what counts against `maxEntryBytes`, and it is why hit p50
-falls 11.5% here at all (the per-KiB wire term shrinks with the payload). Finding 2 called
+falls 14.7% here at all (the per-KiB wire term shrinks with the payload). Finding 2 called
 this expansion out as the part that survived the encoder fix; this is where it goes.
 
 **Text gains little, and that is expected.** A text body was never base64, so the frame only
@@ -207,7 +207,7 @@ inflate what it stores".
 **A value with no declared payload gains nothing and costs one encode.** `markdown-render` is
 in the sweep as the counter-example: a cached _function_ returning a 20 KiB string declares no
 `CacheEntry.payload`, so the frame has nothing to lift and simply JSON-encodes the entry and
-then encodes that. Measured at 0.90 vs 0.91 ms p50 and 0.737 MiB either way — the extra encode
+then encodes that. Measured at 0.87 vs 0.90 ms p50 and 0.518 MiB either way — the extra encode
 is below this harness's noise floor at 20 KiB, which is not the same as free, and it grows
 with payload. `createBlobStorage` is for a byte-only backend, not a default.
 
@@ -245,8 +245,8 @@ Two consequences, both the opposite of what finding 9 says about hits:
   own `etag` skips it entirely — `entry.ts` only digests when the header is absent. That is
   the cheapest advice in this document, and nothing currently documents it.
 
-This is also why per-hit micro-optimisation does not move p99 under load: at a 13% miss
-ratio (`ssr-product-page`, 76 of 584), the misses carry the tail. See finding 10.
+This is also why per-hit micro-optimisation does not move p99 under load: at a 6.5% miss
+ratio (`ssr-product-page`, 38 of 585), the misses carry the tail. See finding 10.
 
 ## 4. Keyed headers cost ~3.3 µs each; keyed cookies cost ~7 µs flat
 
@@ -349,12 +349,20 @@ function scenario's refreshes can reach the driver's background queue instead of
 The earlier version of this finding also blamed load-run numbers on the missing hook.
 That was misattributed: registration decides ownership, not scheduling, so it cannot move a
 latency number. The scenario now performs the three upstream calls it declares. Its current
-memory row makes 729 upstream calls for 1,075 requests, a 77.4% reduction against the
+memory row makes 732 upstream calls for 1,075 requests, a 77.3% reduction against the
 baseline's three calls per request. Its **0.05 ms** p50 against a 220 ms upstream is SWR
-working; p99 remains 480 ms because a key's first touch has no stale entry and blocks.
+working; p99 remains 450 ms because a key's first touch has no stale entry and blocks.
+
+`OriginSpec` is per call, not per request, and the fan-out is where that matters: three
+calls at 90 rps offer the origin 270 a second. The scenario's original 30 slots and 4 ms of
+blocking work were sized for one call per request, which left the no-cache row past both
+its pool and one core — percentiles that grew with `durationMs` rather than describing the
+system, and no `⚠`, because the driver only flags the in-flight ceiling. At 90 slots and
+1 ms it is stable: p50 321/322/324 ms and p99 786/786/780 ms over 6 s, 12 s and 24 s
+windows, against 3636/6609 ms p50 for the overloaded configuration over the first two.
 
 - `og-image` reports `stale=0` because it sets `maxAge: 3600` on a 25 s run. Nothing can
-  reach the stale window, and its 7 misses are first fills, which SWR never helps with.
+  reach the stale window, and its 2 misses are first fills, which SWR never helps with.
 
 The remaining honest version of the second half is narrower: before the hook existed, the
 harness had no way to observe a cached function's background work at all.
@@ -378,8 +386,8 @@ harness had no way to observe a cached function's background work at all.
 - **Multi-tier `base` prefixes are not a second backend.** They are key prefixes on one
   `StorageInterface`, so memory-in-front-of-Redis needs a routing wrapper the library does
   not ship. The harness has one in `harness/storage.ts`, and the load runs show what it is
-  worth: on `fanout-aggregate` over `kv-edge`, adding a memory tier moves p50 from 8.47 ms
-  to 0.05 ms and time blocked on reads from 9653 ms to 458 ms, for 6% more reads and 23%
+  worth: on `fanout-aggregate` over `kv-edge`, adding a memory tier moves p50 from 6.75 ms
+  to 0.05 ms and time blocked on reads from 8867 ms to 445 ms, for 6% more reads and 22%
   more writes. That is the largest single improvement measured anywhere in this directory,
   and users cannot reach it with what the package exports.
 
@@ -388,15 +396,15 @@ harness had no way to observe a cached function's background work at all.
 **measured, from the load runs**
 
 Per-hit CPU is only the whole story on memory storage. Median hit latency for
-`markdown-render` at 89.6% origin-call reduction, by backend (`results/steady.md`):
+`markdown-render` at 92.7% origin-call reduction, by backend (`results/steady.md`):
 
 | backend        |  hit p50 | 24 µs as a share |
 | -------------- | -------: | ---------------: |
-| `memory`       |  0.06 ms |             ~40% |
+| `memory`       |  0.07 ms |             ~34% |
 | `redis-local`  |  0.25 ms |             ~10% |
 | `redis-az`     |  0.87 ms |              ~3% |
-| `sql`          |  2.55 ms |              ~1% |
-| `object-store` | 32.59 ms |           ~0.07% |
+| `sql`          |  2.56 ms |              ~1% |
+| `object-store` | 32.61 ms |           ~0.07% |
 
 So findings 1, 4 and 5 pay off for in-process caching and are close to irrelevant behind a
 network hop. Finding 3 is the exception: it is miss-path cost, which no backend hides. Finding 2
@@ -404,10 +412,10 @@ was the other one — 102 µs of base64 decode at 40 KiB was 11% of a `redis-az`
 any backend — and that is the argument for having fixed it rather than tuning a hit path that a
 network hop already dominates.
 
-**The tail belongs to the miss path.** `ssr-product-page` on memory improves p50 by 334x
-(51.89 → 0.16 ms) and p99 by only 2.90x (122 → 42.2 ms). p90 is where the miss population
+**The tail belongs to the miss path.** `ssr-product-page` on memory improves p50 by 299x
+(49.97 → 0.17 ms) and p99 by only 2.84x (120 → 42.3 ms). p90 is where the miss population
 starts. No amount of hit-path µs moves that number; finding 3 is the one that could. On a
-slow backend the effect nearly swallows the benefit — `api-list` on `kv-edge` is only 1.46x
+slow backend the effect nearly swallows the benefit — `api-list` on `kv-edge` is only 1.47x
 at p99.
 
 The corollary is the more useful one for users: **ocache's own cost is not what decides
@@ -434,10 +442,11 @@ finding 5 from `new Response` with the body held constant; finding 7 from a stor
 alternating order, `globalThis.gc()` between sides, and the two central pairs averaged — and needs
 `node --expose-gc`, which the `pnpm bench` scripts set.
 
-Load-run figures come from `results/steady.md`, regenerated in full for finding 2b — one
-run, one seed, every scenario, so rows in it may be compared with each other. The
-`personalized-dashboard` row that used to predate the scenario's 15% session churn is part of
-that regeneration and is current again.
+Load-run figures come from `results/steady.md`, regenerated in full whenever a scenario
+changes — one run, one seed, every scenario, so rows in it may be compared with each other.
+The current file is the regeneration that follows `fanout-aggregate`'s per-call origin
+limits; the `personalized-dashboard` row that used to predate the scenario's 15% session
+churn is part of it and is current again.
 
 `pnpm bench:micro` remains a separate mitata view of the hit path; re-measure any number you
 intend to act on with the paired calibration method above.

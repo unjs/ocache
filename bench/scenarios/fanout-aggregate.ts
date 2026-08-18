@@ -25,7 +25,11 @@ const scenario: Scenario = {
   summary: "3 parallel upstreams, 220 ms slowest, 500 keys, SWR with a long stale window",
   expect:
     "Stale serves answer in microseconds, so p50 and p90 should collapse while p99 stays bounded by the origin: a key's first touch has no stale entry and blocks. The tiered run should recover most of a slow backend's read cost while paying write amplification on misses.",
-  origin: { ioMs: 220, cpuMs: 4, concurrency: 30 },
+  // Both limits are per upstream call, and a request makes three of them: at 90 rps the
+  // origin is offered 270 calls a second. The earlier per-request figures (30 slots, 4 ms
+  // of blocking work) put the no-cache row past both its pool and one core, where its
+  // percentiles measure the backlog at the end of the window rather than the system.
+  origin: { ioMs: 220, cpuMs: 1, concurrency: 90 },
   payloadBytes: 6 * 1024,
   keyspace: KEYSPACE,
   storageProfiles: ["memory", "redis-az", "kv-edge"],

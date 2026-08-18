@@ -333,18 +333,18 @@ function figure(name: string, svg: string): string {
 
 const input = resolve(process.argv[2] ?? join(ROOT, "bench/results/steady.json"));
 const data = JSON.parse(readFileSync(input, "utf8")) as BenchFile;
-for (const row of data.rows ?? []) {
-  if (!Number.isFinite(row.originCallsPerRequest)) {
-    row.originCallsPerRequest = row.completed === 0 ? 0 : row.originCalls / row.completed;
-  }
+if (!Array.isArray(data.rows) || data.rows.length === 0) {
+  console.error(`${input} has no rows`);
+  process.exit(1);
 }
 if (data.load !== "steady") {
   console.error(`bench:docs requires a steady run, received ${data.load}`);
   process.exit(1);
 }
-if (!Array.isArray(data.rows) || data.rows.length === 0) {
-  console.error(`${input} has no rows`);
-  process.exit(1);
+for (const row of data.rows ?? []) {
+  if (!Number.isFinite(row.originCallsPerRequest)) {
+    row.originCallsPerRequest = row.completed === 0 ? 0 : row.originCalls / row.completed;
+  }
 }
 
 const charts = renderCharts(input);

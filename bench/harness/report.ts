@@ -15,6 +15,7 @@ export function renderScenario(scenario: Scenario, rows: RunRow[]): string {
     rows.filter((row) => row.mode === "baseline").map((row) => [row.offeredRps, row]),
   );
   const out: string[] = [];
+  let unpaired = false;
   out.push(`### ${scenario.title} \`${scenario.id}\``);
   out.push("");
   out.push(`${scenario.summary}.`);
@@ -51,12 +52,15 @@ export function renderScenario(scenario: Scenario, rows: RunRow[]): string {
     out.push("|---|--:|--:|--:|--:|--:|--:|--:|");
     for (const row of rows) {
       if (row.mode === "baseline") continue;
+      // A ramp stops each configuration at its own knee, so a cached row can outlast the
+      // baseline. Its storage columns still stand; only the two comparisons are missing.
       const baseline = baselines.get(row.offeredRps);
-      if (!baseline) continue;
-      const speedup = row.p99 > 0 ? baseline.p99 / row.p99 : 0;
+      unpaired ||= !baseline;
+      const speedup = baseline && row.p99 > 0 ? `${(baseline.p99 / row.p99).toFixed(2)}x` : "-";
+      const avoided = baseline ? `${baseline.originCalls - row.originCalls}` : "-";
       out.push(
         `| ${row.mode === "tiered" ? "tiered mem+" : ""}${row.profile} ` +
-          `| ${row.offeredRps} | ${speedup.toFixed(2)}x | ${baseline.originCalls - row.originCalls} ` +
+          `| ${row.offeredRps} | ${speedup} | ${avoided} ` +
           `| ${row.storage.reads} | ${ms(row.storage.readMs)} | ${row.storage.writes} ` +
           `| ${(row.storage.bytesWritten / 1024 / 1024).toFixed(1)} MiB |`,
       );
@@ -64,6 +68,12 @@ export function renderScenario(scenario: Scenario, rows: RunRow[]): string {
     out.push("");
   }
 
+  if (unpaired) {
+    out.push(
+      "> `-` marks an offered rate the no-cache row never reached, so there is nothing to compare against at that rate.",
+    );
+    out.push(">");
+  }
   out.push(
     "> `blocked on reads` is wall time, so it includes event-loop queueing behind the scenario's own CPU, not just backend latency.",
   );

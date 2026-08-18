@@ -44,6 +44,9 @@ export interface DriverResult {
 /** Yield to the loop this often while dispatching a backlog. */
 const YIELD_EVERY = 64;
 
+/** Rounds of nested `waitUntil` work a drain will follow before giving up. */
+const BACKGROUND_ROUNDS = 20;
+
 export async function runLoad(opts: {
   spec: LoadSpec;
   rng: Rng;
@@ -66,7 +69,18 @@ export async function runLoad(opts: {
     while (inflightPromises.size > 0) {
       await Promise.all(inflightPromises);
     }
+    // A refresh can register another `waitUntil`, so drain rounds until the queue stays
+    // empty. Bounded: work that re-registers forever is a bug in the scenario, and the
+    // run should say so rather than hang.
+    let rounds = 0;
     while (opts.background && opts.background.length > 0) {
+      if (++rounds > BACKGROUND_ROUNDS) {
+        console.error(
+          `  ! ${opts.background.length} background promises still pending after ${BACKGROUND_ROUNDS} drain rounds; their origin calls are not counted`,
+        );
+        opts.background.length = 0;
+        break;
+      }
       const pending = opts.background.splice(0, opts.background.length);
       await Promise.allSettled(pending);
     }

@@ -5,66 +5,66 @@
   "hitCosts": [
     {
       "payloadBytes": 4096,
-      "handlerBaselineUs": 36.86233333333334,
-      "handlerCachedUs": 56.64483333333334,
-      "handlerAddedUs": 19.7825,
-      "functionBaselineUs": 0.10216666666666667,
-      "functionCachedUs": 4.690833333333334,
-      "functionAddedUs": 4.588666666666668
+      "handlerBaselineUs": 35.76583333333333,
+      "handlerCachedUs": 55.2435,
+      "handlerAddedUs": 19.477666666666664,
+      "functionBaselineUs": 0.09466666666666666,
+      "functionCachedUs": 4.3919999999999995,
+      "functionAddedUs": 4.297333333333333
     },
     {
       "payloadBytes": 6144,
-      "handlerBaselineUs": 36.599333333333334,
-      "handlerCachedUs": 58.128166666666665,
-      "handlerAddedUs": 21.52883333333333,
-      "functionBaselineUs": 0.10450000000000001,
-      "functionCachedUs": 4.3535,
-      "functionAddedUs": 4.2490000000000006
+      "handlerBaselineUs": 37.885000000000005,
+      "handlerCachedUs": 58.876666666666665,
+      "handlerAddedUs": 20.99166666666666,
+      "functionBaselineUs": 0.08333333333333333,
+      "functionCachedUs": 4.602166666666667,
+      "functionAddedUs": 4.518833333333334
     },
     {
       "payloadBytes": 8192,
-      "handlerBaselineUs": 54.686166666666665,
-      "handlerCachedUs": 64.82366666666667,
-      "handlerAddedUs": 10.137500000000003,
-      "functionBaselineUs": 0.091,
-      "functionCachedUs": 4.030666666666667,
-      "functionAddedUs": 3.9396666666666667
+      "handlerBaselineUs": 50.98583333333333,
+      "handlerCachedUs": 58.816500000000005,
+      "handlerAddedUs": 7.830666666666673,
+      "functionBaselineUs": 0.050166666666666665,
+      "functionCachedUs": 4.333166666666667,
+      "functionAddedUs": 4.283
     },
     {
       "payloadBytes": 15360,
-      "handlerBaselineUs": 53.56333333333333,
-      "handlerCachedUs": 82.03933333333333,
-      "handlerAddedUs": 28.476,
-      "functionBaselineUs": 0.0495,
-      "functionCachedUs": 4.210833333333333,
-      "functionAddedUs": 4.161333333333333
+      "handlerBaselineUs": 52.428666666666665,
+      "handlerCachedUs": 81.04383333333334,
+      "handlerAddedUs": 28.615166666666674,
+      "functionBaselineUs": 0.054000000000000006,
+      "functionCachedUs": 4.155333333333333,
+      "functionAddedUs": 4.101333333333333
     },
     {
       "payloadBytes": 20480,
-      "handlerBaselineUs": 56.96633333333334,
-      "handlerCachedUs": 80.2925,
-      "handlerAddedUs": 23.326166666666666,
-      "functionBaselineUs": 0.07866666666666666,
-      "functionCachedUs": 6.347666666666667,
-      "functionAddedUs": 6.269
+      "handlerBaselineUs": 56.63983333333333,
+      "handlerCachedUs": 81.70433333333332,
+      "handlerAddedUs": 25.064499999999995,
+      "functionBaselineUs": 0.058666666666666666,
+      "functionCachedUs": 4.519500000000001,
+      "functionAddedUs": 4.460833333333334
     },
     {
       "payloadBytes": 40960,
-      "handlerBaselineUs": 89.57983333333334,
-      "handlerCachedUs": 114.792,
-      "handlerAddedUs": 25.21216666666666,
-      "functionBaselineUs": 0.050666666666666665,
-      "functionCachedUs": 4.1098333333333334,
-      "functionAddedUs": 4.059166666666667
+      "handlerBaselineUs": 92.31633333333333,
+      "handlerCachedUs": 114.23033333333333,
+      "handlerAddedUs": 21.914,
+      "functionBaselineUs": 0.08833333333333333,
+      "functionCachedUs": 4.2555,
+      "functionAddedUs": 4.167166666666667
     },
     {
       "payloadBytes": 65536,
-      "handlerBaselineUs": 123.35233333333333,
-      "handlerCachedUs": 146.02516666666668,
-      "handlerAddedUs": 22.672833333333344,
-      "functionBaselineUs": 0.12483333333333332,
-      "functionCachedUs": 4.0205,
-      "functionAddedUs": 3.895666666666667
+      "handlerBaselineUs": 119.7145,
+      "handlerCachedUs": 149.52883333333335,
+      "handlerAddedUs": 29.81433333333335,
+      "functionBaselineUs": 0.0895,
+      "functionCachedUs": 4.297666666666666,
+      "functionAddedUs": 4.208166666666666
     }
   ],
   "rows": [
@@ -78,12 +78,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 51.890290810093575,
-      "p90": 90.42685612849891,
-      "p99": 122.43916106917459,
-      "p999": 153.65103991769865,
-      "max": 153.65103991769865,
-      "mean": 56.92248124060258,
+      "p50": 49.96560625238635,
+      "p90": 90.03838368269498,
+      "p99": 120.11092487741189,
+      "p999": 147.93155610134272,
+      "max": 147.93155610134272,
+      "mean": 55.418599720944584,
       "originCalls": 585,
       "originPeak": 7,
       "originQueuedMs": 0,
@@ -107,12 +107,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 7844.706,
-        "wallMs": 10063.037858999996,
-        "loopDelayP99Ms": 36.896767,
-        "loopDelayMaxMs": 80.740351
+        "cpuMs": 7857.486,
+        "wallMs": 10062.70221,
+        "loopDelayP99Ms": 36.863999,
+        "loopDelayMaxMs": 74.121215
       },
-      "cpuPerRequestMs": 13.409753846153846
+      "cpuPerRequestMs": 13.4316
     },
     {
       "scenario": "ssr-product-page",
@@ -124,12 +124,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.15523563405440655,
-      "p90": 4.2345424473969615,
-      "p99": 42.21573267013446,
-      "p999": 63.29405348288856,
-      "max": 63.29405348288856,
-      "mean": 2.569586908981069,
+      "p50": 0.16699642103048973,
+      "p90": 4.19298949115182,
+      "p99": 42.27263367013802,
+      "p999": 63.271972482893034,
+      "max": 63.271972482893034,
+      "mean": 2.5751119807761427,
       "originCalls": 38,
       "originPeak": 2,
       "originQueuedMs": 0,
@@ -153,12 +153,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1487.644,
-        "wallMs": 9998.590350999999,
-        "loopDelayP99Ms": 1.977343,
-        "loopDelayMaxMs": 13.631487
+        "cpuMs": 1480.818,
+        "wallMs": 9998.593588999996,
+        "loopDelayP99Ms": 1.919999,
+        "loopDelayMaxMs": 13.524991
       },
-      "cpuPerRequestMs": 2.542981196581197
+      "cpuPerRequestMs": 2.5313128205128206
     },
     {
       "scenario": "ssr-product-page",
@@ -170,12 +170,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 1.18462664312392,
-      "p90": 5.9070644832681865,
-      "p99": 43.168305971019436,
-      "p999": 65.04730348289013,
-      "max": 65.04730348289013,
-      "mean": 3.763749493595621,
+      "p50": 1.2000213849532884,
+      "p90": 5.947676483265241,
+      "p99": 43.15752597102255,
+      "p999": 65.01996348288958,
+      "max": 65.01996348288958,
+      "mean": 3.7749656406019785,
       "originCalls": 38,
       "originPeak": 2,
       "originQueuedMs": 0,
@@ -193,18 +193,18 @@
         "readHits": 547,
         "writes": 38,
         "deletes": 0,
-        "readMs": 668.0372219997735,
-        "writeMs": 64.9126710000055,
+        "readMs": 667.7964310000898,
+        "writeMs": 64.34184399993683,
         "bytesWritten": 1590104,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 2018.747,
-        "wallMs": 9999.311429000001,
+        "cpuMs": 2041.614,
+        "wallMs": 9999.409662999999,
         "loopDelayP99Ms": 1.957887,
-        "loopDelayMaxMs": 13.901823
+        "loopDelayMaxMs": 13.762559
       },
-      "cpuPerRequestMs": 3.450849572649573
+      "cpuPerRequestMs": 3.4899384615384617
     },
     {
       "scenario": "ssr-product-page",
@@ -216,12 +216,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 1.175397801445797,
-      "p90": 5.976486447398202,
-      "p99": 43.14252897101687,
-      "p999": 65.10024648287799,
-      "max": 65.10024648287799,
-      "mean": 3.744250086757243,
+      "p50": 1.190083220571978,
+      "p90": 5.933102447408601,
+      "p99": 43.20998397102812,
+      "p999": 65.35420948288811,
+      "max": 65.35420948288811,
+      "mean": 3.750626175648072,
       "originCalls": 38,
       "originPeak": 2,
       "originQueuedMs": 0,
@@ -239,18 +239,18 @@
         "readHits": 547,
         "writes": 38,
         "deletes": 0,
-        "readMs": 664.8721009999135,
-        "writeMs": 64.10440399992513,
+        "readMs": 665.4616119998827,
+        "writeMs": 64.17125700000906,
         "bytesWritten": 1570572,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 2024.655,
-        "wallMs": 9999.281269,
-        "loopDelayP99Ms": 1.955839,
-        "loopDelayMaxMs": 13.803519
+        "cpuMs": 2032.443,
+        "wallMs": 9999.34111200001,
+        "loopDelayP99Ms": 1.961983,
+        "loopDelayMaxMs": 13.852671
       },
-      "cpuPerRequestMs": 3.460948717948718
+      "cpuPerRequestMs": 3.4742615384615383
     },
     {
       "scenario": "ssr-product-page",
@@ -262,12 +262,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 8.259243425942259,
-      "p90": 26.450671336453524,
-      "p99": 59.53240258252481,
-      "p999": 83.97324148289044,
-      "max": 83.97324148289044,
-      "mean": 12.034432932916575,
+      "p50": 8.21861495707708,
+      "p90": 26.45525933643512,
+      "p99": 59.57625458249822,
+      "p999": 84.00433648287435,
+      "max": 84.00433648287435,
+      "mean": 12.02710683034222,
       "originCalls": 38,
       "originPeak": 2,
       "originQueuedMs": 0,
@@ -285,18 +285,18 @@
         "readHits": 547,
         "writes": 38,
         "deletes": 0,
-        "readMs": 5482.6089629999915,
-        "writeMs": 1031.6776829999872,
+        "readMs": 5491.367064000238,
+        "writeMs": 1025.2961239999568,
         "bytesWritten": 1590104,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 2286.05,
-        "wallMs": 10003.132355000009,
-        "loopDelayP99Ms": 2.010111,
-        "loopDelayMaxMs": 13.516799
+        "cpuMs": 2281.924,
+        "wallMs": 10003.171836000009,
+        "loopDelayP99Ms": 1.994751,
+        "loopDelayMaxMs": 13.598719
       },
-      "cpuPerRequestMs": 3.907777777777778
+      "cpuPerRequestMs": 3.9007247863247865
     },
     {
       "scenario": "api-list",
@@ -308,12 +308,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 31.101819984352915,
-      "p90": 53.760654695593985,
-      "p99": 83.94125145672297,
-      "p999": 112.34319599818264,
-      "max": 123.0945568892057,
-      "mean": 34.14297153749719,
+      "p50": 31.098796746737207,
+      "p90": 53.74282503922586,
+      "p99": 84.41514263955469,
+      "p999": 112.34487299819011,
+      "max": 124.97163788920443,
+      "mean": 34.119157786143916,
       "originCalls": 2952,
       "originPeak": 19,
       "originQueuedMs": 0,
@@ -337,12 +337,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 8495.887,
-        "wallMs": 10050.990015000003,
-        "loopDelayP99Ms": 8.257535,
-        "loopDelayMaxMs": 19.234815
+        "cpuMs": 8499.968,
+        "wallMs": 10047.434578,
+        "loopDelayP99Ms": 6.443007,
+        "loopDelayMaxMs": 16.752639
       },
-      "cpuPerRequestMs": 2.8780105013550137
+      "cpuPerRequestMs": 2.8793929539295395
     },
     {
       "scenario": "api-list",
@@ -354,12 +354,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.09575584453705233,
-      "p90": 0.8453180339711253,
-      "p99": 42.6173174319556,
-      "p999": 75.12917747913161,
-      "max": 80.5378021428478,
-      "mean": 2.2210593677834214,
+      "p50": 0.09919206675840542,
+      "p90": 0.7748512259568088,
+      "p99": 42.664887431950774,
+      "p999": 75.16054847912164,
+      "max": 80.5211621428316,
+      "mean": 2.222079018178276,
       "originCalls": 206,
       "originPeak": 5,
       "originQueuedMs": 0,
@@ -383,12 +383,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 4283.351,
-        "wallMs": 9990.807959000012,
-        "loopDelayP99Ms": 2.684927,
-        "loopDelayMaxMs": 4.833279
+        "cpuMs": 4279.714,
+        "wallMs": 9990.817737000005,
+        "loopDelayP99Ms": 2.734079,
+        "loopDelayMaxMs": 3.760127
       },
-      "cpuPerRequestMs": 1.4509996612466123
+      "cpuPerRequestMs": 1.4497676151761518
     },
     {
       "scenario": "api-list",
@@ -400,12 +400,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.8478073209989816,
-      "p90": 3.00427164969733,
-      "p99": 43.418866027874174,
-      "p999": 75.45348947911407,
-      "max": 80.79647314283648,
-      "mean": 3.094329766143721,
+      "p50": 0.8567863832286093,
+      "p90": 2.9808443941001315,
+      "p99": 43.43852102785604,
+      "p999": 75.47219047910767,
+      "max": 80.77722114283824,
+      "mean": 3.100614709235866,
       "originCalls": 206,
       "originPeak": 5,
       "originQueuedMs": 0,
@@ -423,18 +423,18 @@
         "readHits": 2746,
         "writes": 206,
         "deletes": 0,
-        "readMs": 2571.154859000817,
-        "writeMs": 228.35377300030086,
+        "readMs": 2564.611862000107,
+        "writeMs": 228.74373199982801,
         "bytesWritten": 1785259,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 5533.848,
-        "wallMs": 9991.222997000004,
-        "loopDelayP99Ms": 2.838527,
-        "loopDelayMaxMs": 3.414015
+        "cpuMs": 5559.869,
+        "wallMs": 9991.339189999999,
+        "loopDelayP99Ms": 2.824191,
+        "loopDelayMaxMs": 4.554751
       },
-      "cpuPerRequestMs": 1.874609756097561
+      "cpuPerRequestMs": 1.8834244579945798
     },
     {
       "scenario": "api-list",
@@ -446,12 +446,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 6.97217095940141,
-      "p90": 23.9991954206198,
-      "p99": 57.48626936407527,
-      "p999": 84.70472342922585,
-      "max": 122.10945478096255,
-      "mean": 10.891431278361527,
+      "p50": 6.980446297908202,
+      "p90": 23.994841967272805,
+      "p99": 57.438769364060136,
+      "p999": 84.7510904291994,
+      "max": 122.0910017809365,
+      "mean": 10.901083422981726,
       "originCalls": 206,
       "originPeak": 4,
       "originQueuedMs": 0,
@@ -469,18 +469,18 @@
         "readHits": 2746,
         "writes": 206,
         "deletes": 0,
-        "readMs": 25553.204136000248,
-        "writeMs": 7164.281367999822,
+        "readMs": 25560.647725999326,
+        "writeMs": 7135.536894999794,
         "bytesWritten": 1785259,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 6368.457,
-        "wallMs": 10065.123927000008,
-        "loopDelayP99Ms": 2.723839,
-        "loopDelayMaxMs": 3.313663
+        "cpuMs": 6381.572,
+        "wallMs": 10065.18391599998,
+        "loopDelayP99Ms": 2.713599,
+        "loopDelayMaxMs": 3.489791
       },
-      "cpuPerRequestMs": 2.1573363821138214
+      "cpuPerRequestMs": 2.161779132791328
     },
     {
       "scenario": "personalized-dashboard",
@@ -492,15 +492,15 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 56.034559454303235,
-      "p90": 96.40931158419698,
-      "p99": 151.0261240300024,
-      "p999": 188.37780604264117,
-      "max": 211.07139832881512,
-      "mean": 61.002192062435284,
+      "p50": 55.65212350524962,
+      "p90": 95.51981514474028,
+      "p99": 150.3090679839661,
+      "p999": 185.62322504262556,
+      "max": 211.8614603288297,
+      "mean": 60.988094028341656,
       "originCalls": 2141,
-      "originPeak": 23,
-      "originQueuedMs": 373.92679200004204,
+      "originPeak": 22,
+      "originQueuedMs": 355.3075610000524,
       "originCallsPerRequest": 1,
       "status": {
         "hit": 0,
@@ -521,12 +521,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 8375.582,
-        "wallMs": 10082.365323000005,
-        "loopDelayP99Ms": 12.517375,
-        "loopDelayMaxMs": 34.242559
+        "cpuMs": 8386.154,
+        "wallMs": 10083.99442600002,
+        "loopDelayP99Ms": 12.550143,
+        "loopDelayMaxMs": 40.697855
       },
-      "cpuPerRequestMs": 3.911995329285381
+      "cpuPerRequestMs": 3.916933208780944
     },
     {
       "scenario": "personalized-dashboard",
@@ -538,12 +538,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.1196395625884179,
-      "p90": 44.840118618361885,
-      "p99": 99.1814245947171,
-      "p999": 133.3898510222498,
-      "max": 145.49292566889198,
-      "mean": 9.972759829379603,
+      "p50": 0.12920622716774233,
+      "p90": 44.85021561838221,
+      "p99": 99.25134559473372,
+      "p999": 133.4802820222394,
+      "max": 145.43054066889454,
+      "mean": 9.989920208177097,
       "originCalls": 391,
       "originPeak": 7,
       "originQueuedMs": 0,
@@ -567,12 +567,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 4166.357,
-        "wallMs": 9994.979209000012,
-        "loopDelayP99Ms": 4.065279,
-        "loopDelayMaxMs": 9.887743
+        "cpuMs": 4189.803,
+        "wallMs": 9995.081043000013,
+        "loopDelayP99Ms": 4.106239,
+        "loopDelayMaxMs": 9.904127
       },
-      "cpuPerRequestMs": 1.9459864549276038
+      "cpuPerRequestMs": 1.9569374124241008
     },
     {
       "scenario": "personalized-dashboard",
@@ -584,12 +584,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 1.1986532818118576,
-      "p90": 45.68943946438958,
-      "p99": 99.98874632423394,
-      "p999": 134.16847502224846,
-      "max": 144.86750214116182,
-      "mean": 11.017834211905212,
+      "p50": 1.2182754178938922,
+      "p90": 45.86273885096307,
+      "p99": 100.32129532424733,
+      "p999": 134.3284630222479,
+      "max": 145.36057514118147,
+      "mean": 11.06454127684849,
       "originCalls": 391,
       "originPeak": 7,
       "originQueuedMs": 0,
@@ -607,18 +607,18 @@
         "readHits": 1750,
         "writes": 391,
         "deletes": 0,
-        "readMs": 2172.6149959992326,
-        "writeMs": 623.6604260005697,
+        "readMs": 2161.990408999409,
+        "writeMs": 619.1731179999188,
         "bytesWritten": 6233255,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 5324.14,
-        "wallMs": 9995.806829000008,
-        "loopDelayP99Ms": 4.089855,
-        "loopDelayMaxMs": 9.682943
+        "cpuMs": 5356.539,
+        "wallMs": 9996.02179900001,
+        "loopDelayP99Ms": 4.155391,
+        "loopDelayMaxMs": 10.108927
       },
-      "cpuPerRequestMs": 2.486753853339561
+      "cpuPerRequestMs": 2.50188650163475
     },
     {
       "scenario": "og-image",
@@ -630,15 +630,15 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 369.5321581134631,
-      "p90": 953.2295181475347,
-      "p99": 1229.5060304009821,
-      "p999": 1350.1026596999727,
-      "max": 1350.1026596999727,
-      "mean": 487.298845763066,
+      "p50": 369.5959551134438,
+      "p90": 953.0939021475206,
+      "p99": 1229.0170004009851,
+      "p999": 1349.604437699949,
+      "max": 1349.604437699949,
+      "mean": 487.2499920375672,
       "originCalls": 102,
       "originPeak": 4,
-      "originQueuedMs": 1087.8986900000018,
+      "originQueuedMs": 1087.8515579999948,
       "originCallsPerRequest": 1,
       "status": {
         "hit": 0,
@@ -659,12 +659,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 18569.326,
-        "wallMs": 25301.019425999984,
+        "cpuMs": 18573.127,
+        "wallMs": 25301.074389999994,
         "loopDelayP99Ms": 180.355071,
         "loopDelayMaxMs": 541.065215
       },
-      "cpuPerRequestMs": 182.0522156862745
+      "cpuPerRequestMs": 182.08948039215687
     },
     {
       "scenario": "og-image",
@@ -676,12 +676,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.2131499947863631,
-      "p90": 0.2475427991594188,
-      "p99": 183.93437117684516,
-      "p999": 184.17528557160404,
-      "max": 184.17528557160404,
-      "mean": 3.824698468923338,
+      "p50": 0.2211526887549553,
+      "p90": 0.26698860121541657,
+      "p99": 183.95185417684843,
+      "p999": 184.21467457161634,
+      "max": 184.21467457161634,
+      "mean": 3.840645694437234,
       "originCalls": 2,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -705,12 +705,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 827.132,
-        "wallMs": 24982.272008,
-        "loopDelayP99Ms": 1.174527,
+        "cpuMs": 821.914,
+        "wallMs": 24982.22250199999,
+        "loopDelayP99Ms": 1.196031,
         "loopDelayMaxMs": 181.403647
       },
-      "cpuPerRequestMs": 8.10913725490196
+      "cpuPerRequestMs": 8.057980392156862
     },
     {
       "scenario": "og-image",
@@ -722,12 +722,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 1.569764289073646,
-      "p90": 2.372772288566921,
-      "p99": 184.69739657157334,
-      "p999": 185.5915871768957,
-      "max": 185.5915871768957,
-      "mean": 5.270572135603859,
+      "p50": 1.5612922781147063,
+      "p90": 2.3498032885836437,
+      "p99": 184.85491657163948,
+      "p999": 185.1616481769015,
+      "max": 185.1616481769015,
+      "mean": 5.26948958660097,
       "originCalls": 2,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -745,18 +745,18 @@
         "readHits": 100,
         "writes": 2,
         "deletes": 0,
-        "readMs": 140.5292960004881,
-        "writeMs": 2.9202429999713786,
+        "readMs": 140.56255699991016,
+        "writeMs": 2.9211380000342615,
         "bytesWritten": 175371,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 904.646,
-        "wallMs": 24984.32334199996,
-        "loopDelayP99Ms": 1.142783,
-        "loopDelayMaxMs": 181.534719
+        "cpuMs": 916.878,
+        "wallMs": 24984.294883000024,
+        "loopDelayP99Ms": 1.136639,
+        "loopDelayMaxMs": 181.272575
       },
-      "cpuPerRequestMs": 8.869078431372548
+      "cpuPerRequestMs": 8.989
     },
     {
       "scenario": "og-image",
@@ -768,12 +768,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 1.329771994787734,
-      "p90": 2.1360552885453217,
-      "p99": 184.56472457159543,
-      "p999": 185.05245317687513,
-      "max": 185.05245317687513,
-      "mean": 5.038694106182198,
+      "p50": 1.3316559325321577,
+      "p90": 2.137551282532513,
+      "p99": 184.59531157155288,
+      "p999": 185.02516217686934,
+      "max": 185.02516217686934,
+      "mean": 5.047010125784665,
       "originCalls": 2,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -791,18 +791,18 @@
         "readHits": 100,
         "writes": 2,
         "deletes": 0,
-        "readMs": 123.42547699989518,
-        "writeMs": 2.579509999952279,
+        "readMs": 124.53248400002485,
+        "writeMs": 2.578957999998238,
         "bytesWritten": 131643,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 886.319,
-        "wallMs": 24984.11328499997,
-        "loopDelayP99Ms": 1.153023,
-        "loopDelayMaxMs": 181.272575
+        "cpuMs": 897.303,
+        "wallMs": 24984.090153000026,
+        "loopDelayP99Ms": 1.176575,
+        "loopDelayMaxMs": 181.010431
       },
-      "cpuPerRequestMs": 8.689401960784313
+      "cpuPerRequestMs": 8.797088235294117
     },
     {
       "scenario": "upstream-proxy",
@@ -814,15 +814,15 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 322.4615409981343,
-      "p90": 558.2404177422286,
-      "p99": 864.9032006926136,
-      "p999": 1079.6305661357474,
-      "max": 1079.6305661357474,
-      "mean": 351.3607610305479,
+      "p50": 323.10018995933933,
+      "p90": 558.4680217422429,
+      "p99": 864.9495516925817,
+      "p999": 1079.7910931357765,
+      "max": 1079.7910931357765,
+      "mean": 351.7122859876525,
       "originCalls": 303,
       "originPeak": 10,
-      "originQueuedMs": 6474.065526000049,
+      "originQueuedMs": 6496.519588999625,
       "originCallsPerRequest": 1,
       "status": {
         "hit": 0,
@@ -843,12 +843,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1296.662,
-        "wallMs": 12420.617948999978,
-        "loopDelayP99Ms": 1.913855,
-        "loopDelayMaxMs": 2.160639
+        "cpuMs": 1352.598,
+        "wallMs": 12420.613551999966,
+        "loopDelayP99Ms": 2.063359,
+        "loopDelayMaxMs": 20.987903
       },
-      "cpuPerRequestMs": 4.279412541254126
+      "cpuPerRequestMs": 4.464019801980198
     },
     {
       "scenario": "upstream-proxy",
@@ -860,12 +860,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.17416386754484847,
-      "p90": 0.21190216019749641,
-      "p99": 0.39756802772171795,
-      "p999": 1.3048318997607566,
-      "max": 1.3048318997607566,
-      "mean": 0.17068005035894157,
+      "p50": 0.19284855044679716,
+      "p90": 0.24575078068301082,
+      "p99": 0.333995682944078,
+      "p999": 0.5159629172994755,
+      "max": 0.5159629172994755,
+      "mean": 0.18573190845958673,
       "originCalls": 20,
       "originPeak": 6,
       "originQueuedMs": 0,
@@ -889,12 +889,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 649.735,
-        "wallMs": 11955.806137999985,
-        "loopDelayP99Ms": 1.694719,
-        "loopDelayMaxMs": 2.252799
+        "cpuMs": 652.459,
+        "wallMs": 11955.806761999964,
+        "loopDelayP99Ms": 1.715199,
+        "loopDelayMaxMs": 2.766847
       },
-      "cpuPerRequestMs": 2.1443399339933995
+      "cpuPerRequestMs": 2.1533300330033
     },
     {
       "scenario": "upstream-proxy",
@@ -906,12 +906,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.7825913740089163,
-      "p90": 1.5543005074141547,
-      "p99": 2.6973311589099467,
-      "p999": 3.18170636810828,
-      "max": 3.18170636810828,
-      "mean": 0.9218726146948161,
+      "p50": 0.8094426670577377,
+      "p90": 1.5786022329120897,
+      "p99": 2.786283158988226,
+      "p999": 3.1825413681799546,
+      "max": 3.1825413681799546,
+      "mean": 0.94212962793768,
       "originCalls": 20,
       "originPeak": 6,
       "originQueuedMs": 0,
@@ -929,18 +929,18 @@
         "readHits": 303,
         "writes": 20,
         "deletes": 0,
-        "readMs": 225.43919499969343,
-        "writeMs": 18.152964000066277,
+        "readMs": 225.51768399996217,
+        "writeMs": 18.16213200002676,
         "bytesWritten": 90790,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 874.657,
-        "wallMs": 11956.40432000003,
-        "loopDelayP99Ms": 1.700863,
-        "loopDelayMaxMs": 2.279423
+        "cpuMs": 878.63,
+        "wallMs": 11956.499282000004,
+        "loopDelayP99Ms": 1.708031,
+        "loopDelayMaxMs": 2.156543
       },
-      "cpuPerRequestMs": 2.886656765676568
+      "cpuPerRequestMs": 2.8997689768976898
     },
     {
       "scenario": "upstream-proxy",
@@ -952,12 +952,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 29.50183523760643,
-      "p90": 60.54748035647208,
-      "p99": 102.2251091588987,
-      "p999": 117.64017296209931,
-      "max": 117.64017296209931,
-      "mean": 34.00283032426132,
+      "p50": 29.517557237646542,
+      "p90": 60.49775735649746,
+      "p99": 102.28516515897354,
+      "p999": 117.71531396207865,
+      "max": 117.71531396207865,
+      "mean": 34.03197699096288,
       "originCalls": 22,
       "originPeak": 6,
       "originQueuedMs": 0,
@@ -975,18 +975,18 @@
         "readHits": 303,
         "writes": 22,
         "deletes": 0,
-        "readMs": 10246.241878000263,
-        "writeMs": 1235.2480399999768,
+        "readMs": 10247.565142000385,
+        "writeMs": 1234.0545950002852,
         "bytesWritten": 99869,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1093.337,
-        "wallMs": 12027.121667,
-        "loopDelayP99Ms": 1.874943,
-        "loopDelayMaxMs": 2.185215
+        "cpuMs": 1102.109,
+        "wallMs": 12027.10164300003,
+        "loopDelayP99Ms": 1.891327,
+        "loopDelayMaxMs": 2.207743
       },
-      "cpuPerRequestMs": 3.6083729372937294
+      "cpuPerRequestMs": 3.637323432343234
     },
     {
       "scenario": "markdown-render",
@@ -998,12 +998,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 100.092196428217,
-      "p90": 315.1527818108443,
-      "p99": 595.7293492452009,
-      "p999": 625.359232901712,
-      "max": 625.359232901712,
-      "mean": 147.04113864906464,
+      "p50": 100.08366902841954,
+      "p90": 315.4288788107806,
+      "p99": 596.0053212451749,
+      "p999": 625.629931901698,
+      "max": 625.629931901698,
+      "mean": 147.25698560407417,
       "originCalls": 356,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -1027,12 +1027,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 9201.131,
-        "wallMs": 12016.26039000001,
-        "loopDelayP99Ms": 75.563007,
-        "loopDelayMaxMs": 626.524159
+        "cpuMs": 9180.772,
+        "wallMs": 12016.264134000055,
+        "loopDelayP99Ms": 75.694079,
+        "loopDelayMaxMs": 625.999871
       },
-      "cpuPerRequestMs": 25.845873595505616
+      "cpuPerRequestMs": 25.78868539325843
     },
     {
       "scenario": "markdown-render",
@@ -1044,12 +1044,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.06402209389489144,
-      "p90": 3.6913100971723907,
-      "p99": 25.141645730414893,
-      "p999": 25.236542116850615,
-      "max": 25.236542116850615,
-      "mean": 2.3707784524150166,
+      "p50": 0.06670418911380693,
+      "p90": 3.739119097124785,
+      "p99": 25.15644342818996,
+      "p999": 25.176762775692623,
+      "max": 25.176762775692623,
+      "mean": 2.3753663821850926,
       "originCalls": 26,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -1073,12 +1073,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1284.937,
-        "wallMs": 11991.296085999988,
-        "loopDelayP99Ms": 1.778687,
-        "loopDelayMaxMs": 26.083327
+        "cpuMs": 1288.113,
+        "wallMs": 11991.268542000034,
+        "loopDelayP99Ms": 1.822719,
+        "loopDelayMaxMs": 26.017791
       },
-      "cpuPerRequestMs": 3.609373595505618
+      "cpuPerRequestMs": 3.6182949438202248
     },
     {
       "scenario": "markdown-render",
@@ -1090,12 +1090,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.24534796923398972,
-      "p90": 4.300998097169213,
-      "p99": 25.49574619741179,
-      "p999": 25.963457730482332,
-      "max": 25.963457730482332,
-      "mean": 2.582821210857914,
+      "p50": 0.2527437474927865,
+      "p90": 4.314126097189728,
+      "p99": 25.494772197445855,
+      "p999": 25.625060985039454,
+      "max": 25.625060985039454,
+      "mean": 2.5889814636657627,
       "originCalls": 26,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -1113,18 +1113,18 @@
         "readHits": 330,
         "writes": 26,
         "deletes": 0,
-        "readMs": 63.366741999809165,
-        "writeMs": 5.007028000080027,
+        "readMs": 63.004674000665545,
+        "writeMs": 5.003572000190616,
         "bytesWritten": 543055,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1359.511,
-        "wallMs": 11991.387991000025,
-        "loopDelayP99Ms": 1.850367,
-        "loopDelayMaxMs": 26.279935
+        "cpuMs": 1353.478,
+        "wallMs": 11991.399665000034,
+        "loopDelayP99Ms": 1.786879,
+        "loopDelayMaxMs": 26.263551
       },
-      "cpuPerRequestMs": 3.8188511235955054
+      "cpuPerRequestMs": 3.801904494382023
     },
     {
       "scenario": "markdown-render",
@@ -1136,12 +1136,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.8667801037663594,
-      "p90": 6.024795097182505,
-      "p99": 26.257957985042594,
-      "p999": 26.451895810838323,
-      "max": 26.451895810838323,
-      "mean": 3.266398331641744,
+      "p50": 0.8735381037695333,
+      "p90": 6.092840097146109,
+      "p99": 26.29816319741076,
+      "p999": 26.479380810807925,
+      "max": 26.479380810807925,
+      "mean": 3.2792105114061627,
       "originCalls": 26,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -1159,18 +1159,18 @@
         "readHits": 330,
         "writes": 26,
         "deletes": 0,
-        "readMs": 328.1164769998286,
-        "writeMs": 26.71010999986902,
+        "readMs": 326.8139179998543,
+        "writeMs": 25.964091999980155,
         "bytesWritten": 543055,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1591.235,
-        "wallMs": 11991.738749000011,
-        "loopDelayP99Ms": 1.785855,
+        "cpuMs": 1574.675,
+        "wallMs": 11991.744963000005,
+        "loopDelayP99Ms": 1.829887,
         "loopDelayMaxMs": 26.230783
       },
-      "cpuPerRequestMs": 4.469761235955056
+      "cpuPerRequestMs": 4.423244382022472
     },
     {
       "scenario": "markdown-render",
@@ -1182,12 +1182,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.8851132016279735,
-      "p90": 6.059904097113758,
-      "p99": 26.283604985044803,
-      "p999": 26.48009281081613,
-      "max": 26.48009281081613,
-      "mean": 3.278631219253195,
+      "p50": 0.8972552159102634,
+      "p90": 6.175992097181734,
+      "p99": 26.3402381974156,
+      "p999": 26.48949381086277,
+      "max": 26.48949381086277,
+      "mean": 3.295953606929973,
       "originCalls": 26,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -1205,18 +1205,18 @@
         "readHits": 330,
         "writes": 26,
         "deletes": 0,
-        "readMs": 326.72710199968424,
-        "writeMs": 25.87142200022936,
+        "readMs": 328.08704500086606,
+        "writeMs": 25.919700999860652,
         "bytesWritten": 543263,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1589.415,
-        "wallMs": 11991.741836000001,
-        "loopDelayP99Ms": 1.843199,
-        "loopDelayMaxMs": 26.247167
+        "cpuMs": 1594.291,
+        "wallMs": 11991.75377999997,
+        "loopDelayP99Ms": 1.828863,
+        "loopDelayMaxMs": 26.460159
       },
-      "cpuPerRequestMs": 4.464648876404494
+      "cpuPerRequestMs": 4.478345505617978
     },
     {
       "scenario": "markdown-render",
@@ -1228,12 +1228,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 2.55386924627237,
-      "p90": 13.698384629620705,
-      "p99": 29.094046985032037,
-      "p999": 29.935263810795732,
-      "max": 29.935263810795732,
-      "mean": 5.241661326000938,
+      "p50": 2.555877267383039,
+      "p90": 13.686387629655655,
+      "p99": 29.0506379850558,
+      "p999": 29.99517181084957,
+      "max": 29.99517181084957,
+      "mean": 5.2539225423254345,
       "originCalls": 26,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -1251,18 +1251,18 @@
         "readHits": 330,
         "writes": 26,
         "deletes": 0,
-        "readMs": 1065.5167300003232,
-        "writeMs": 148.03763299999991,
+        "readMs": 1066.124343999778,
+        "writeMs": 148.04686100030085,
         "bytesWritten": 543055,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1772.289,
-        "wallMs": 11992.580948000017,
-        "loopDelayP99Ms": 1.894399,
-        "loopDelayMaxMs": 26.050559
+        "cpuMs": 1774.959,
+        "wallMs": 11992.510601999995,
+        "loopDelayP99Ms": 1.902591,
+        "loopDelayMaxMs": 26.279935
       },
-      "cpuPerRequestMs": 4.978339887640449
+      "cpuPerRequestMs": 4.9858398876404495
     },
     {
       "scenario": "markdown-render",
@@ -1274,12 +1274,12 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 32.59227630170062,
-      "p90": 61.59609018120682,
-      "p99": 113.28929986001458,
-      "p999": 119.2372992276214,
-      "max": 119.2372992276214,
-      "mean": 36.6258376883678,
+      "p50": 32.613309301726986,
+      "p90": 61.56663418124663,
+      "p99": 113.30991986003937,
+      "p999": 119.50442322762683,
+      "max": 119.50442322762683,
+      "mean": 36.63471954792026,
       "originCalls": 26,
       "originPeak": 1,
       "originQueuedMs": 0,
@@ -1297,18 +1297,18 @@
         "readHits": 330,
         "writes": 26,
         "deletes": 0,
-        "readMs": 12178.494659000135,
-        "writeMs": 1641.132947999984,
+        "readMs": 12179.26698700065,
+        "writeMs": 1641.2830159998266,
         "bytesWritten": 543055,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 1792.678,
-        "wallMs": 12008.77325300005,
-        "loopDelayP99Ms": 1.914879,
+        "cpuMs": 1780.564,
+        "wallMs": 12008.77559199999,
+        "loopDelayP99Ms": 1.946623,
         "loopDelayMaxMs": 26.296319
       },
-      "cpuPerRequestMs": 5.035612359550562
+      "cpuPerRequestMs": 5.001584269662922
     },
     {
       "scenario": "fanout-aggregate",
@@ -1320,15 +1320,15 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 6835.2974170179805,
-      "p90": 12073.803684695624,
-      "p99": 13081.429772392148,
-      "p999": 13464.700798546139,
-      "max": 13497.692151366966,
-      "mean": 6840.364401608554,
+      "p50": 322.3368700360297,
+      "p90": 540.3679759217193,
+      "p99": 785.9077173471451,
+      "p999": 1020.2954858700978,
+      "max": 1049.0305784805678,
+      "mean": 355.65935908017053,
       "originCalls": 3225,
-      "originPeak": 33,
-      "originQueuedMs": 20890251.831418972,
+      "originPeak": 90,
+      "originQueuedMs": 2696.293185000366,
       "originCallsPerRequest": 3,
       "status": {
         "hit": 0,
@@ -1349,12 +1349,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 15865.534,
-        "wallMs": 25437.896366,
-        "loopDelayP99Ms": 8.122367,
-        "loopDelayMaxMs": 32.243711
+        "cpuMs": 7027.095,
+        "wallMs": 12693.207411999989,
+        "loopDelayP99Ms": 2.023423,
+        "loopDelayMaxMs": 3.121151
       },
-      "cpuPerRequestMs": 14.758636279069767
+      "cpuPerRequestMs": 6.536832558139535
     },
     {
       "scenario": "fanout-aggregate",
@@ -1366,16 +1366,16 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.050281521398574114,
-      "p90": 5.539856128627434,
-      "p99": 480.21750185405836,
-      "p999": 748.9778541506967,
-      "max": 755.629530044389,
-      "mean": 20.812044602959894,
-      "originCalls": 729,
-      "originPeak": 30,
-      "originQueuedMs": 7539.803721999633,
-      "originCallsPerRequest": 0.6781395348837209,
+      "p50": 0.047645314887631685,
+      "p90": 0.283301348274108,
+      "p99": 450.2292723248247,
+      "p999": 592.7576333582983,
+      "max": 641.2820899690269,
+      "mean": 18.996658695081173,
+      "originCalls": 732,
+      "originPeak": 47,
+      "originQueuedMs": 0,
+      "originCallsPerRequest": 0.6809302325581396,
       "status": {
         "hit": 0,
         "stale": 0,
@@ -1387,7 +1387,7 @@
       "storage": {
         "reads": 1075,
         "readHits": 1015,
-        "writes": 243,
+        "writes": 244,
         "deletes": 0,
         "readMs": 0,
         "writeMs": 0,
@@ -1395,12 +1395,12 @@
         "evicted": 0
       },
       "process": {
-        "cpuMs": 4841.539,
-        "wallMs": 12373.564316999982,
-        "loopDelayP99Ms": 4.935679,
-        "loopDelayMaxMs": 12.181503
+        "cpuMs": 3120.699,
+        "wallMs": 12424.510410999996,
+        "loopDelayP99Ms": 1.966079,
+        "loopDelayMaxMs": 2.215935
       },
-      "cpuPerRequestMs": 4.503757209302325
+      "cpuPerRequestMs": 2.9029758139534882
     },
     {
       "scenario": "fanout-aggregate",
@@ -1412,15 +1412,153 @@
       "errors": 0,
       "shed": 0,
       "overloaded": false,
-      "p50": 0.9349679955048487,
-      "p90": 8.513303661136888,
-      "p99": 458.51671514532063,
-      "p999": 644.8395390463993,
-      "max": 674.8430433581816,
-      "mean": 21.24258946249846,
+      "p50": 0.7678224971750751,
+      "p90": 2.1609969758428633,
+      "p99": 452.05976532481145,
+      "p999": 593.140068358276,
+      "max": 643.414863969083,
+      "mean": 19.82983153326632,
+      "originCalls": 732,
+      "originPeak": 47,
+      "originQueuedMs": 0,
+      "originCallsPerRequest": 0.6809302325581396,
+      "status": {
+        "hit": 0,
+        "stale": 0,
+        "revalidated": 0,
+        "miss": 0,
+        "bypass": 1075,
+        "notModified": 0
+      },
+      "storage": {
+        "reads": 1075,
+        "readHits": 1015,
+        "writes": 244,
+        "deletes": 0,
+        "readMs": 878.9627409991808,
+        "writeMs": 273.2571109997807,
+        "bytesWritten": 1545056,
+        "evicted": 0
+      },
+      "process": {
+        "cpuMs": 3875.657,
+        "wallMs": 12427.06183999998,
+        "loopDelayP99Ms": 1.976319,
+        "loopDelayMaxMs": 2.437119
+      },
+      "cpuPerRequestMs": 3.6052623255813954
+    },
+    {
+      "scenario": "fanout-aggregate",
+      "mode": "cached",
+      "profile": "kv-edge",
+      "offeredRps": 90,
+      "achievedRps": 89.58333333333333,
+      "completed": 1075,
+      "errors": 0,
+      "shed": 0,
+      "overloaded": false,
+      "p50": 6.748697741189972,
+      "p90": 21.469526262255386,
+      "p99": 461.2662560506724,
+      "p999": 646.7964729713276,
+      "max": 690.0279931452824,
+      "mean": 27.427159792719365,
+      "originCalls": 750,
+      "originPeak": 49,
+      "originQueuedMs": 0,
+      "originCallsPerRequest": 0.6976744186046512,
+      "status": {
+        "hit": 0,
+        "stale": 0,
+        "revalidated": 0,
+        "miss": 0,
+        "bypass": 1075,
+        "notModified": 0
+      },
+      "storage": {
+        "reads": 1075,
+        "readHits": 1015,
+        "writes": 250,
+        "deletes": 0,
+        "readMs": 8867.193251000717,
+        "writeMs": 7860.309984000167,
+        "bytesWritten": 1583084,
+        "evicted": 0
+      },
+      "process": {
+        "cpuMs": 4556.594,
+        "wallMs": 12382.840138000087,
+        "loopDelayP99Ms": 2.013183,
+        "loopDelayMaxMs": 2.181119
+      },
+      "cpuPerRequestMs": 4.238692093023256
+    },
+    {
+      "scenario": "fanout-aggregate",
+      "mode": "tiered",
+      "profile": "redis-az",
+      "offeredRps": 90,
+      "achievedRps": 89.58333333333333,
+      "completed": 1075,
+      "errors": 0,
+      "shed": 0,
+      "overloaded": false,
+      "p50": 0.05216411408036947,
+      "p90": 0.30230941076297313,
+      "p99": 451.5574633247452,
+      "p999": 594.098761358182,
+      "max": 641.7640809689183,
+      "mean": 19.052917964827746,
+      "originCalls": 732,
+      "originPeak": 47,
+      "originQueuedMs": 0,
+      "originCallsPerRequest": 0.6809302325581396,
+      "status": {
+        "hit": 0,
+        "stale": 0,
+        "revalidated": 0,
+        "miss": 0,
+        "bypass": 1075,
+        "notModified": 0
+      },
+      "storage": {
+        "reads": 1135,
+        "readHits": 1015,
+        "writes": 303,
+        "deletes": 0,
+        "readMs": 44.31332000019029,
+        "writeMs": 56.319117999402806,
+        "bytesWritten": 372526,
+        "evicted": 0
+      },
+      "process": {
+        "cpuMs": 3211.259,
+        "wallMs": 12424.465473999968,
+        "loopDelayP99Ms": 1.972223,
+        "loopDelayMaxMs": 7.167999
+      },
+      "cpuPerRequestMs": 2.9872176744186048
+    },
+    {
+      "scenario": "fanout-aggregate",
+      "mode": "tiered",
+      "profile": "kv-edge",
+      "offeredRps": 90,
+      "achievedRps": 89.58333333333333,
+      "completed": 1075,
+      "errors": 0,
+      "shed": 0,
+      "overloaded": false,
+      "p50": 0.050849480321630836,
+      "p90": 0.4948062716284767,
+      "p99": 460.8428823247086,
+      "p999": 676.317811358138,
+      "max": 694.6380805399967,
+      "mean": 19.317927443876343,
       "originCalls": 735,
-      "originPeak": 30,
-      "originQueuedMs": 8857.938472999958,
+      "originPeak": 47,
+      "originQueuedMs": 0,
       "originCallsPerRequest": 0.6837209302325581,
       "status": {
         "hit": 0,
@@ -1431,160 +1569,22 @@
         "notModified": 0
       },
       "storage": {
-        "reads": 1075,
-        "readHits": 1015,
-        "writes": 245,
-        "deletes": 0,
-        "readMs": 1199.4678030002397,
-        "writeMs": 592.7704839996295,
-        "bytesWritten": 1551394,
-        "evicted": 0
-      },
-      "process": {
-        "cpuMs": 5460.14,
-        "wallMs": 12449.238025000086,
-        "loopDelayP99Ms": 4.947967,
-        "loopDelayMaxMs": 16.236543
-      },
-      "cpuPerRequestMs": 5.0792
-    },
-    {
-      "scenario": "fanout-aggregate",
-      "mode": "cached",
-      "profile": "kv-edge",
-      "offeredRps": 90,
-      "achievedRps": 89.58333333333333,
-      "completed": 1075,
-      "errors": 0,
-      "shed": 0,
-      "overloaded": false,
-      "p50": 8.468418319127522,
-      "p90": 26.01848883461207,
-      "p99": 500.0869542522123,
-      "p999": 711.9729461452225,
-      "max": 889.915150540066,
-      "mean": 31.28565125132532,
-      "originCalls": 741,
-      "originPeak": 30,
-      "originQueuedMs": 8473.737655999721,
-      "originCallsPerRequest": 0.6893023255813954,
-      "status": {
-        "hit": 0,
-        "stale": 0,
-        "revalidated": 0,
-        "miss": 0,
-        "bypass": 1075,
-        "notModified": 0
-      },
-      "storage": {
-        "reads": 1075,
-        "readHits": 1015,
-        "writes": 247,
-        "deletes": 0,
-        "readMs": 9653.231261000037,
-        "writeMs": 7808.788457000162,
-        "bytesWritten": 1564070,
-        "evicted": 0
-      },
-      "process": {
-        "cpuMs": 5959.414,
-        "wallMs": 12360.205236000009,
-        "loopDelayP99Ms": 4.919295,
-        "loopDelayMaxMs": 16.162815
-      },
-      "cpuPerRequestMs": 5.5436409302325576
-    },
-    {
-      "scenario": "fanout-aggregate",
-      "mode": "tiered",
-      "profile": "redis-az",
-      "offeredRps": 90,
-      "achievedRps": 89.58333333333333,
-      "completed": 1075,
-      "errors": 0,
-      "shed": 0,
-      "overloaded": false,
-      "p50": 0.05383991566486657,
-      "p90": 5.89768651209306,
-      "p99": 480.19731194118503,
-      "p999": 749.023624150781,
-      "max": 755.6756610444281,
-      "mean": 20.893636878345184,
-      "originCalls": 732,
-      "originPeak": 30,
-      "originQueuedMs": 6157.6942159998,
-      "originCallsPerRequest": 0.6809302325581396,
-      "status": {
-        "hit": 0,
-        "stale": 0,
-        "revalidated": 0,
-        "miss": 0,
-        "bypass": 1075,
-        "notModified": 0
-      },
-      "storage": {
         "reads": 1135,
         "readHits": 1015,
-        "writes": 303,
+        "writes": 304,
         "deletes": 0,
-        "readMs": 54.121694999863394,
-        "writeMs": 122.69542500050738,
+        "readMs": 444.68877000093926,
+        "writeMs": 1675.6357769998722,
         "bytesWritten": 372526,
         "evicted": 0
       },
       "process": {
-        "cpuMs": 5031.434,
-        "wallMs": 12387.090223999927,
-        "loopDelayP99Ms": 4.943871,
-        "loopDelayMaxMs": 16.629759
+        "cpuMs": 3241.647,
+        "wallMs": 12409.391556999995,
+        "loopDelayP99Ms": 1.968127,
+        "loopDelayMaxMs": 2.347007
       },
-      "cpuPerRequestMs": 4.680403720930233
-    },
-    {
-      "scenario": "fanout-aggregate",
-      "mode": "tiered",
-      "profile": "kv-edge",
-      "offeredRps": 90,
-      "achievedRps": 89.58333333333333,
-      "completed": 1075,
-      "errors": 0,
-      "shed": 0,
-      "overloaded": false,
-      "p50": 0.05390184372663498,
-      "p90": 7.125729392049834,
-      "p99": 467.1685335667571,
-      "p999": 629.5281120506115,
-      "max": 679.2892603582004,
-      "mean": 21.58947665224675,
-      "originCalls": 732,
-      "originPeak": 30,
-      "originQueuedMs": 9447.65405200061,
-      "originCallsPerRequest": 0.6809302325581396,
-      "status": {
-        "hit": 0,
-        "stale": 0,
-        "revalidated": 0,
-        "miss": 0,
-        "bypass": 1075,
-        "notModified": 0
-      },
-      "storage": {
-        "reads": 1135,
-        "readHits": 1015,
-        "writes": 303,
-        "deletes": 0,
-        "readMs": 458.1640570004238,
-        "writeMs": 1708.1070010003168,
-        "bytesWritten": 372526,
-        "evicted": 0
-      },
-      "process": {
-        "cpuMs": 4957.074,
-        "wallMs": 12388.067109999945,
-        "loopDelayP99Ms": 4.939775,
-        "loopDelayMaxMs": 20.185087
-      },
-      "cpuPerRequestMs": 4.611231627906976
+      "cpuPerRequestMs": 3.0154855813953487
     }
   ],
   "sustained": []

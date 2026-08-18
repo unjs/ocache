@@ -73,8 +73,11 @@ async function timePair(
     pairs.push({ baselineUs, cachedUs, addedUs: cachedUs - baselineUs });
   }
   pairs.sort((a, b) => a.addedUs - b.addedUs);
-  const lower = pairs[REPEATS / 2 - 1]!;
-  const upper = pairs[REPEATS / 2]!;
+  // The two central pairs for an even count, the one central pair for an odd one, so the
+  // estimator does not depend on `REPEATS` staying even.
+  const mid = pairs.length >> 1;
+  const lower = pairs[pairs.length % 2 === 0 ? mid - 1 : mid]!;
+  const upper = pairs[mid]!;
   const baselineUs = (lower.baselineUs + upper.baselineUs) / 2;
   const cachedUs = (lower.cachedUs + upper.cachedUs) / 2;
   return { baselineUs, cachedUs, addedUs: cachedUs - baselineUs };

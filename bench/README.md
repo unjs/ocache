@@ -152,5 +152,10 @@ only of favourable cases is not a measurement.
   any particular Redis client behaves.
 - The clock pump competes with the workload for the event loop, so `cpu/req` includes some
   harness overhead. It is the same in both modes, so the comparison holds.
+- A configuration offered more than it can serve reports percentiles that grow with
+  `durationMs`, because an open-loop backlog that never clears is still counted when the
+  window closes. `⚠` does not catch it — that flag is the in-flight ceiling only. A
+  scenario's origin limits are per call, so check them against the calls a request makes,
+  and confirm a suspect row by re-running it at two window lengths.
 - Multi-tier `base` prefixes live on one `StorageInterface`, so a memory-over-remote tier
   needs the prefix router in `harness/storage.ts`. ocache ships no such router.
