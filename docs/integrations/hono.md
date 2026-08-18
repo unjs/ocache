@@ -9,9 +9,7 @@ icon: simple-icons:hono
 
 ## Install
 
-```bash
-pnpm add hono ocache
-```
+:pm-install{name="hono ocache"}
 
 ## Cache a route
 
