@@ -11,6 +11,18 @@ export interface StorageInterface {
    * backend could never store is refused before it is buffered.
    */
   maxEntryBytes?: number;
+
+  /**
+   * Whether stored values return byte views unchanged, including views nested in an object.
+   *
+   * Cached handlers store a binary response body as a `Uint8Array` when a backend declares
+   * this, and as base64 text otherwise. A backend that serializes entries must leave it unset:
+   * JSON renders a byte view as `{"0":255,...}`, which no reader can undo. A value read back
+   * in that shape is rejected as a miss rather than served.
+   *
+   * A declaring backend hands the same view to every hit, so nothing may mutate a stored body.
+   */
+  binary?: boolean;
 }
 
 const SharedBuffer = globalThis.SharedArrayBuffer as SharedArrayBufferConstructor | undefined;
@@ -77,6 +89,9 @@ export function createMemoryStorage(opts: MemoryStorageOptions = {}): StorageInt
   return {
     // Declare the per-entry ceiling so callers can refuse oversized values earlier.
     maxEntryBytes: maxBytes,
+
+    // Entries are held by reference, so a byte view survives a round trip as itself.
+    binary: true,
 
     get(key) {
       const entry = map.get(key);

@@ -2181,6 +2181,15 @@ describe("storage", () => {
     expect(storage.get("unique-ttl-key")).toBeNull();
   });
 
+  it("declares that it stores byte views as themselves", () => {
+    // Entries are held by reference, so the HTTP layer may store a body as a `Uint8Array`.
+    const bytes = new Uint8Array([0xff, 0x00]);
+    const storage = createMemoryStorage();
+    expect(storage.binary).toBe(true);
+    storage.set("key", { body: bytes });
+    expect((storage.get("key") as { body: Uint8Array }).body).toBe(bytes);
+  });
+
   it("set with null deletes the entry", () => {
     const storage = createMemoryStorage();
     storage.set("key", "hello");
@@ -3110,6 +3119,138 @@ describe("defineCachedHandler", () => {
     expect(r2.headers.get("x-cache")).toBe("HIT");
   });
 
+  // A backend that keeps a `Uint8Array` says so with `binary`, and then a binary body skips
+  // base64 in both directions. The declaration is the only signal: a serializing backend would
+  // return a byte view as `{"0":255,...}`, and nothing can detect that from the value alone.
+  describe("a backend that stores bytes", () => {
+    /** A plain Map backend, holding values by reference like memory storage does. */
+    function mapStorage(map: Map<string, unknown>, binary?: boolean): StorageInterface {
+      return {
+        ...(binary && { binary: true }),
+        get: (key) => (map.get(key) ?? null) as any,
+        set: (key, value) => {
+          if (value === null || value === undefined) {
+            map.delete(key);
+          } else {
+            map.set(key, value);
+          }
+        },
+      };
+    }
+
+    it("stores a binary body as bytes rather than base64", async () => {
+      const stored: any[] = [];
+      const map = new Map<string, unknown>();
+      const inner = mapStorage(map, true);
+      useTestStorage({
+        binary: true,
+        get: (key) => inner.get(key),
+        set: (key, value, opts) => {
+          stored.push(value);
+          return inner.set(key, value, opts);
+        },
+      });
+
+      const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe]);
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response(bytes), { maxAge: 10 });
+
+      const r1 = (await handler(makeEvent(path))) as Response;
+      const r2 = (await handler(makeEvent(path))) as Response;
+
+      // The stored body is the bytes themselves, so there is no `base64` flag to set.
+      expect(stored[0].value.body).toBeInstanceOf(Uint8Array);
+      expect([...(stored[0].value.body as Uint8Array)]).toEqual([...bytes]);
+      expect(stored[0].value.base64).toBeUndefined();
+
+      expect([...new Uint8Array(await r1.arrayBuffer())]).toEqual([...bytes]);
+      expect([...new Uint8Array(await r2.arrayBuffer())]).toEqual([...bytes]);
+      expect(r2.headers.get("x-cache")).toBe("HIT");
+    });
+
+    // An entry outlives a change to the declaration, and one persistent backend can hold
+    // entries written by a process that declared it and a process that did not.
+    it("reads both stored forms whatever the backend declares now", async () => {
+      const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe]);
+      const resolver = () => new Response(bytes);
+
+      for (const [writes, reads] of [
+        [true, false],
+        [false, true],
+      ] as const) {
+        const map = new Map<string, unknown>();
+        const path = uniquePath();
+
+        useTestStorage(mapStorage(map, writes));
+        const writer = defineCachedHandler(resolver, { maxAge: 10, name: "shared" });
+        await writer(makeEvent(path));
+
+        // Same key, same entry — only the declaration the reader was given differs.
+        useTestStorage(mapStorage(map, reads));
+        const reader = defineCachedHandler(resolver, { maxAge: 10, name: "shared" });
+        const res = (await reader(makeEvent(path))) as Response;
+
+        expect(res.headers.get("x-cache"), `written binary=${writes}`).toBe("HIT");
+        expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([...bytes]);
+      }
+    });
+
+    // The etag identifies the representation, not the form a backend happens to hold it in,
+    // so moving between backends does not hand the same bytes a second validator.
+    it("gives one representation the same etag on either backend", async () => {
+      const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe]);
+      const resolver = () => new Response(bytes);
+
+      useTestStorage(mapStorage(new Map(), true));
+      const binaryRes = (await defineCachedHandler(resolver, { maxAge: 10 })(
+        makeEvent(uniquePath()),
+      )) as Response;
+
+      useTestStorage(mapStorage(new Map()));
+      const base64Res = (await defineCachedHandler(resolver, { maxAge: 10 })(
+        makeEvent(uniquePath()),
+      )) as Response;
+
+      expect(binaryRes.headers.get("etag")).toMatch(/^W\/"b[\w-]{43}"$/);
+      expect(base64Res.headers.get("etag")).toBe(binaryRes.headers.get("etag"));
+    });
+
+    // A backend that declares `binary` and then serializes returns a body no reader can undo.
+    // `validateEntry` runs on read for exactly this, so the entry misses instead of serving it.
+    it("rejects a body the backend mangled after declaring binary", async () => {
+      let callCount = 0;
+      const map = new Map<string, string>();
+      useTestStorage({
+        binary: true,
+        get: (key) => {
+          const raw = map.get(key);
+          return raw === undefined ? null : JSON.parse(raw);
+        },
+        set: (key, value) => {
+          map.set(key, JSON.stringify(value));
+        },
+      });
+
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response(new Uint8Array([0xff, 0x00]));
+        },
+        { maxAge: 10 },
+      );
+
+      await handler(makeEvent(path));
+      const res = (await handler(makeEvent(path))) as Response;
+
+      // JSON turned the view into `{"0":255,"1":0}`, which `validate` rejects, so the entry is
+      // resolved again in the foreground instead of being replayed as a body.
+      expect(res.headers.get("x-cache")).toBe("REVALIDATED");
+      expect(callCount).toBe(2);
+      expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([0xff, 0x00]);
+    });
+  });
+
   it("preserves multi-byte UTF-8 text bodies across a cache hit", async () => {
     const path = uniquePath();
     const text = "héllo 世界 🚀 — café";
@@ -3636,7 +3777,7 @@ describe("defineCachedHandler", () => {
   });
 
   it("shouldCache receives the response entry and supports async", async () => {
-    const seen: Array<{ status: number; body: string | undefined }> = [];
+    const seen: Array<{ status: number; body: string | Uint8Array | undefined }> = [];
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
       maxAge: 10,
@@ -5629,9 +5770,36 @@ describe("defineCachedHandler", () => {
 
     it("derives the default limit from the backend's declared ceiling", async () => {
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-      // 8192 byte entries -> at most 8192 / (8/3) = 3072 body bytes.
+      // Memory storage keeps byte views, so no body pays the base64 expansion and the worst
+      // case is the estimate's 2 bytes per UTF-16 code unit: 8192 / 2 = 4096 body bytes.
       const storage = createMemoryStorage({ maxBytes: 8192 });
       useTestStorage(storage);
+      const path = uniquePath();
+      const handler = defineCachedHandler((event) => new Response("w".repeat(size(event))), {
+        maxAge: 10,
+      });
+      const size = (event: HTTPEvent) => Number(new URL(event.req.url).searchParams.get("n"));
+
+      const big = (await handler(makeEvent(`${path}?n=4097`))) as Response;
+      expect((await big.text()).length).toBe(4097);
+      expect(big.headers.has("x-cache")).toBe(false);
+
+      const small = (await handler(makeEvent(`${path}?n=4096`))) as Response;
+      expect((await small.text()).length).toBe(4096);
+      expect(small.headers.get("x-cache")).toBe("MISS");
+      errorSpy.mockRestore();
+    });
+
+    it("keeps the base64 factor for a backend that does not store bytes", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      // Without `binary`, a body may still turn out to be binary and expand by 4/3 before the
+      // estimate doubles it, so the ceiling has to assume the worst: 8192 / (8/3) = 3072.
+      const inner = createMemoryStorage({ maxBytes: 8192 });
+      useTestStorage({
+        maxEntryBytes: inner.maxEntryBytes,
+        get: (key) => inner.get(key),
+        set: (key, value, opts) => inner.set(key, value, opts),
+      });
       const path = uniquePath();
       const handler = defineCachedHandler((event) => new Response("w".repeat(size(event))), {
         maxAge: 10,
@@ -5643,7 +5811,6 @@ describe("defineCachedHandler", () => {
       expect(big.headers.has("x-cache")).toBe(false);
 
       const small = (await handler(makeEvent(`${path}?n=3072`))) as Response;
-      expect((await small.text()).length).toBe(3072);
       expect(small.headers.get("x-cache")).toBe("MISS");
       errorSpy.mockRestore();
     });

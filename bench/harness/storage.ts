@@ -140,6 +140,10 @@ export function createProfiledStorage(
 
   const storage: ProfiledStorage = {
     maxEntryBytes: inner.maxEntryBytes,
+    // A profile that does not serialize stores the inner value as it is, byte views included,
+    // so it must declare what the shipped memory backend declares. A serializing profile must
+    // not: its JSON round trip is exactly what the flag promises does not happen.
+    ...(free && { binary: true }),
     stats,
     instant: false,
     reset() {
@@ -214,6 +218,8 @@ export function createRoutedStorage(
   return {
     // Both tiers must agree on the ceiling the HTTP layer derives its body limit from.
     maxEntryBytes: Math.min(...routes.map(([, s]) => s.maxEntryBytes ?? Infinity)),
+    // One entry can land in either tier, so bytes survive only if every route keeps them.
+    ...(routes.every(([, s]) => s.binary) && { binary: true }),
     get: (key) => resolve(key).get(key),
     set: (key, value, opts) => resolve(key).set(key, value, opts),
   };

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { digest as portableDigest } from "../lib/digest.mjs";
 import { digest as nodeDigest } from "../lib/digest.node.mjs";
-import { hash, serialize } from "../src/hash.ts";
+import { hash, hashBytes, serialize } from "../src/hash.ts";
 
 // `hash`/`serialize` are a storage format, not an implementation detail: their output *is* every
 // cache key and every `integrity` field, so these tests pin the properties the rest of the
@@ -17,6 +17,23 @@ describe("hash", () => {
     // Stable across calls, and equal for equal values built independently.
     expect(hash("value")).toBe(digest);
     expect(hash(["a", { b: 1 }])).toBe(hash(["a", { b: 1 }]));
+  });
+
+  it("hashes bytes without serializing them", () => {
+    const bytes = new Uint8Array([0xff, 0x00, 0x80]);
+    expect(hashBytes(bytes)).toMatch(/^[\w-]{43}$/);
+    // `serialize` renders a typed array as `'10:Uint8Array[255,0,128]`, which is both a string
+    // allocation per byte and a different digest. `hashBytes` covers the bytes themselves.
+    expect(hashBytes(bytes)).toBe(createHash("sha256").update(bytes).digest("base64url"));
+    expect(hashBytes(bytes)).not.toBe(hash(bytes));
+  });
+
+  it("hashes a byte view's own window, not its backing buffer", () => {
+    // The portable arm reads the message in place through a `DataView` over the same buffer,
+    // so a view with a non-zero `byteOffset` has to hash from where it starts.
+    const backing = new Uint8Array(128).map((_, index) => index);
+    const view = backing.subarray(64, 100);
+    expect(hashBytes(view)).toBe(createHash("sha256").update(view).digest("base64url"));
   });
 
   it("keeps values of different types apart", () => {
@@ -75,6 +92,20 @@ describe("#crypto arms", () => {
       const expected = createHash("sha256").update(input).digest("base64url");
       expect(portableDigest(input), `portable, for a ${input.length}-char input`).toBe(expected);
       expect(nodeDigest(input), `node, for a ${input.length}-char input`).toBe(expected);
+    }
+  });
+
+  // A response body reaches `digest` as bytes rather than as text, and the same entry is read
+  // back on whichever arm the reader resolved, so both must agree there too. The lengths repeat
+  // the padding boundaries above because the bytes path skips `encode`, not the padding.
+  it("agree with `node:crypto` on raw bytes", () => {
+    const lengths = [0, 1, 55, 56, 63, 64, 65, 119, 120, 1000, 150_000];
+    for (const length of lengths) {
+      // Include bytes that are not valid UTF-8, which is what sends a body down this path.
+      const bytes = new Uint8Array(length).map((_, index) => (index * 7 + 0x80) & 0xff);
+      const expected = createHash("sha256").update(bytes).digest("base64url");
+      expect(portableDigest(bytes), `portable, for ${length} bytes`).toBe(expected);
+      expect(nodeDigest(bytes), `node, for ${length} bytes`).toBe(expected);
     }
   });
 

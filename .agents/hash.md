@@ -4,6 +4,14 @@
 
 This code replaced the `ohash` dependency, so ocache now has no runtime dependencies. The output has the same general shape as ohash: sha256, base64url, function source text, and sorted object entries. It is **not** byte-compatible. An upgrade changes every key and integrity value once. ocache does not find entries from an older version. This causes one cold read, not a found entry that fails integrity validation. Adding the length prefix described below rotated the keys a second time, with the same one-time effect. Length-prefixing the constructor-name tags rotated the keys for class instances, typed arrays, buffers, `URL`, `RegExp`, and `Error` a third time. Plain objects, arrays, strings, `Set`, `Map`, and `Date` were deliberately left byte-identical, so the common shapes did not rotate again.
 
+## Two entry points: `hash` and `hashBytes`
+
+`hash(input)` serializes first. `hashBytes(bytes)` goes straight to `digest`, and it exists because `serialize` renders a typed array as its decimal element values — a string allocation per byte, over a response body. Only `http/entry.ts` calls it, for the binary body etag.
+
+Both arms of `#crypto` therefore accept `string | Uint8Array` and must agree on bytes as they do on text: the same entry is read back on whichever arm the reader resolved. The node arm already accepted a `TypedArray`; the portable arm skips `encode` rather than branching inside it, and `sha256` already read the message in place through a `DataView` over `byteOffset`, so a view into a larger buffer hashes its own window. `test/hash.test.ts` holds both arms against `node:crypto` over the padding boundaries for bytes as well as text.
+
+The two outputs share one value space — `hashBytes(utf8("abc"))` is not the digest of `hash("abc")`, but nothing structurally separates them either — so a caller that digests both must domain-separate its own, as the etag's `b` prefix does.
+
 ## The digest backend: `#crypto`
 
 `src/hash.ts` imports `digest` from `#crypto` and has no other crypto knowledge. Do not add a capability check, `try`/`catch`, or a `node:` specifier there. No other code may access a crypto API. The conditional `imports` entry in package.json selects the implementation:

@@ -37,8 +37,10 @@ export async function validateEntry<E extends HTTPEvent>(
   if (!isCacheableStatus(value.status)) {
     return false;
   }
-  // An empty string is a valid zero-byte representation.
-  if (value.body === undefined) {
+  // An empty string is a valid zero-byte representation, and a byte view is the binary form.
+  // Anything else is a missing body or a backend that declared `binary` without keeping views:
+  // a serializing one returns `{"0":255,...}` here, which no reader can turn back into bytes.
+  if (typeof value.body !== "string" && !ArrayBuffer.isView(value.body)) {
     return false;
   }
   if (value.headers.etag === "undefined" || value.headers["last-modified"] === "undefined") {

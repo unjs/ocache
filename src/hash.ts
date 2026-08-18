@@ -21,6 +21,20 @@ export function hash(input: unknown): string {
 }
 
 /**
+ * Returns a base64url SHA-256 digest of raw bytes.
+ *
+ * Bytes bypass `serialize`, which renders a typed array as its decimal element values: over a
+ * response body that is a string allocation per byte. The digest covers the bytes themselves, so
+ * it does not depend on how a backend stores them.
+ *
+ * This output shares one value space with {@link hash}, and a caller that digests both must
+ * domain-separate them, as the body etag in `http/entry.ts` does.
+ */
+export function hashBytes(bytes: Uint8Array): string {
+  return digest(bytes);
+}
+
+/**
  * Renders values in a deterministic, type-tagged storage format.
  *
  * Text and type tags are length-prefixed, so chosen input cannot imitate a member boundary.

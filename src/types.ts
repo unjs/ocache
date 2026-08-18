@@ -193,9 +193,10 @@ export interface ResponseCacheEntry {
   headers: Record<string, string>;
   /**
    * Stored response body.
-   * Invalid UTF-8 bytes use base64 and set {@link base64}.
+   * Invalid UTF-8 bytes are stored as a `Uint8Array` when the backend declares
+   * `StorageInterface.binary`, and as base64 with {@link base64} set otherwise.
    */
-  body: string | undefined;
+  body: string | Uint8Array | undefined;
   /** Marks a base64-encoded binary {@link body}. */
   base64?: boolean;
 }

@@ -156,6 +156,12 @@ What is left, and what it costs:
   free: `hash` renders a typed array as its element values, so the etag would need a
   bytes-capable digest or the store would simply move its cost from the encoder to `serialize`.
 
+  **Done**, as `StorageInterface.binary` plus `hashBytes` (`.agents/http/response.md`). In
+  `bench/micro.ts` at 40 KiB, against the same memory store with the declaration removed: a hit
+  is 53.2 µs against 79.1 µs, and a store 246 µs against 301 µs, halving per-store allocation
+  (54.6 kb against 107.9 kb). One machine, one mitata run — the load scenarios have not been
+  re-run, and `og-image`'s 4/3 storage expansion in `results/steady.md` still predates it.
+
 `og-image` is where this shows up under load, and its steady-state numbers in
 `results/steady.md` predate the fix.
 

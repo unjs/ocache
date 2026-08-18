@@ -11,6 +11,8 @@ import { bench, boxplot, compact, do_not_optimize, group, run, summary } from "m
 
 import { createMemoryStorage, defineCachedFunction, defineCachedHandler } from "../src/index.ts";
 import { hash } from "../src/hash.ts";
+
+import type { StorageInterface } from "../src/index.ts";
 import { filler, makeEvent } from "./harness/scenario.ts";
 
 const noop = () => {};
@@ -143,11 +145,16 @@ group("handler hit path, 8 KiB", () => {
   });
 });
 
-// --- Binary bodies take the base64 path both ways ---
+// --- A binary body takes the base64 path only where the backend cannot hold bytes ---
 
 group("text vs binary body, 40 KiB", () => {
   const text = BODIES.get(40 * 1024)!;
   const bytes = new Uint8Array(40 * 1024).fill(0x80);
+  // Same store, minus the declaration: this is what a JSON-serializing backend gets.
+  const base64Store = (): StorageInterface => {
+    const inner = store();
+    return { get: (key) => inner.get(key) as any, set: inner.set.bind(inner) };
+  };
   const textHandler = defineCachedHandler(() => new Response(text), {
     name: "b1",
     maxAge: 600,
@@ -158,17 +165,65 @@ group("text vs binary body, 40 KiB", () => {
     maxAge: 600,
     storage: store(),
   });
+  const base64Handler = defineCachedHandler(() => new Response(bytes), {
+    name: "b3",
+    maxAge: 600,
+    storage: base64Store(),
+  });
   const url = "https://bench.example/body";
   void textHandler(makeEvent(url, undefined, noop));
   void binaryHandler(makeEvent(url, undefined, noop));
+  void base64Handler(makeEvent(url, undefined, noop));
 
   boxplot(() => {
     bench("text hit", async () => {
       const res = (await textHandler(makeEvent(url, undefined, noop))) as Response;
       await res.arrayBuffer();
     });
-    bench("binary hit (base64)", async () => {
+    bench("binary hit (stored bytes)", async () => {
       const res = (await binaryHandler(makeEvent(url, undefined, noop))) as Response;
+      await res.arrayBuffer();
+    });
+    bench("binary hit (base64)", async () => {
+      const res = (await base64Handler(makeEvent(url, undefined, noop))) as Response;
+      await res.arrayBuffer();
+    });
+  });
+});
+
+// A store is where base64 was actually paid: the encode, and then the etag digest over a
+// string 4/3 the size of the bytes. Every iteration uses a fresh key, so every one is a miss.
+group("binary store, 40 KiB", () => {
+  const bytes = new Uint8Array(40 * 1024).fill(0x80);
+  // Bounded by entry count so a long run does not retain every body it wrote.
+  const bounded = () => createMemoryStorage({ maxBytes: Infinity, maxSize: 64 });
+  const asBase64 = (): StorageInterface => {
+    const inner = bounded();
+    return { get: (key) => inner.get(key) as any, set: inner.set.bind(inner) };
+  };
+  const binaryHandler = defineCachedHandler(() => new Response(bytes), {
+    name: "s1",
+    maxAge: 600,
+    storage: bounded(),
+  });
+  const base64Handler = defineCachedHandler(() => new Response(bytes), {
+    name: "s2",
+    maxAge: 600,
+    storage: asBase64(),
+  });
+  let n = 0;
+
+  boxplot(() => {
+    bench("binary store (stored bytes)", async () => {
+      const res = (await binaryHandler(
+        makeEvent(`https://bench.example/s/${n++}`, undefined, noop),
+      )) as Response;
+      await res.arrayBuffer();
+    });
+    bench("binary store (base64)", async () => {
+      const res = (await base64Handler(
+        makeEvent(`https://bench.example/s/${n++}`, undefined, noop),
+      )) as Response;
       await res.arrayBuffer();
     });
   });

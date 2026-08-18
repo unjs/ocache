@@ -1,7 +1,7 @@
 // Docs: @docs/5.handler.md, @docs/7.cookies.md, @docs/8.cache-control.md, @docs/9.isr.md
 
 import { base64ToBytes, bytesToBase64 } from "../base64.ts";
-import { hash } from "../hash.ts";
+import { hash, hashBytes } from "../hash.ts";
 
 import type { HandlerConfig } from "./config.ts";
 import { isCacheableStatus } from "./validate.ts";
@@ -22,6 +22,10 @@ const transportHeaders: readonly string[] = /* @__PURE__ */ Object.freeze([
 // storage estimate charges 2 bytes per UTF-16 code unit.
 const BODY_CHARGE_FACTOR = 8 / 3;
 
+// A backend that stores bytes charges one byte per binary body byte, so text at 2 bytes per
+// UTF-16 code unit becomes the worst case there.
+const BINARY_BODY_CHARGE_FACTOR = 2;
+
 // Response constructors reject non-null bodies for these statuses.
 const nullBodyStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([204, 205, 304]);
 
@@ -38,15 +42,19 @@ export async function serializeResponse<E extends HTTPEvent>(
   // Use byte validity, not Content-Type, to preserve binary data in JSON storage.
   const bytes = await readBody(res, resolveMaxBodySize(opts.maxBodySize, storage), event);
   const text = decodeUtf8(bytes);
-  const base64 = text === undefined;
-  const body = base64 ? bytesToBase64(bytes) : text;
+  // Store bytes as themselves where the backend keeps them, and as base64 everywhere else.
+  // A declaring backend hands one view to every hit, so no reader may mutate a stored body.
+  const base64 = text === undefined && !isBinaryStorage(storage);
+  const body = text ?? (base64 ? bytesToBase64(bytes) : bytes);
 
   // Copy headers because fetch and redirect responses can have immutable headers.
   const headers = new Headers(res.headers);
 
   if (!headers.has("etag")) {
     // Text and base64 share one value space: the text `/w==` and the byte 0xff hash alike.
-    headers.set("etag", `W/"${base64 ? "b" : ""}${hash(body)}"`);
+    // The binary tag digests the bytes rather than a storage form, so one representation keeps
+    // one validator whichever backend holds it.
+    headers.set("etag", text === undefined ? `W/"b${hashBytes(bytes)}"` : `W/"${hash(text)}"`);
   }
 
   // No `last-modified` is synthesized: fill time is not a modification time, and its
@@ -111,6 +119,9 @@ export async function serializeResponse<E extends HTTPEvent>(
  * Returns the body and init data needed to rebuild a stored response.
  *
  * Null-body statuses use `null` because Response rejects an empty string body for them.
+ *
+ * Both stored forms are read whatever the backend declares now: an entry outlives a change to
+ * `StorageInterface.binary`, and a persistent backend can hold entries from both eras at once.
  */
 export function deserializeEntry(entry: ResponseCacheEntry): {
   body: string | Uint8Array | null;
@@ -177,6 +188,11 @@ export class ResponseTooLargeError extends Error {
   }
 }
 
+/** Whether the backend returns a stored byte view as itself. */
+function isBinaryStorage(storage: StorageOption | undefined): boolean {
+  return typeof storage === "object" && storage?.binary === true;
+}
+
 /** Returns the buffering limit in bytes, or `undefined` when nothing bounds the body. */
 function resolveMaxBodySize(
   maxBodySize: number | undefined,
@@ -187,8 +203,10 @@ function resolveMaxBodySize(
   }
   // Derive the default from the backend: a larger body could never be stored anyway.
   const maxEntryBytes = typeof storage === "object" ? storage?.maxEntryBytes : undefined;
+  // The factor follows the same backend declaration the body form does.
+  const factor = isBinaryStorage(storage) ? BINARY_BODY_CHARGE_FACTOR : BODY_CHARGE_FACTOR;
   return maxEntryBytes != null && Number.isFinite(maxEntryBytes) && maxEntryBytes > 0
-    ? Math.floor(maxEntryBytes / BODY_CHARGE_FACTOR)
+    ? Math.floor(maxEntryBytes / factor)
     : undefined;
 }
 
