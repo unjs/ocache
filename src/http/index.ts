@@ -10,7 +10,7 @@ import { resolveStorage } from "../storage.ts";
 
 import { requiresRevalidation } from "./cache-control.ts";
 import { integrityOpts, resolveHandlerConfig } from "./config.ts";
-import { defaultHandleCacheHeaders, notModifiedHeaders } from "./conditional.ts";
+import { defaultHandleCacheHeaders, notModifiedHeaders, readConditions } from "./conditional.ts";
 import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
 import { NarrowRequestError, isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
@@ -117,6 +117,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   }, _opts);
 
   const cachedHandler: EventHandler<E> = async (event) => {
+    // Read the request validators before the handler runs, because narrowing keeps
+    // only headers the key covers and no key covers a validator.
+    const requestConditions = readConditions(event);
+
     if (opts.headersOnly) {
       // Nothing is stored, so the handler's own validators are the only conditions
       // there are: run it first, then answer a matching conditional request with 304.
@@ -128,6 +132,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       const lastModified = live.headers.get("last-modified");
       if (
         handleCacheHeaders(event, {
+          ...requestConditions,
           modifiedTime: lastModified ? new Date(lastModified) : undefined,
           etag: live.headers.get("etag") ?? undefined,
           maxAge: opts.maxAge,
@@ -169,6 +174,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     const modifiedTime = response.headers["last-modified"] as string | undefined;
     if (
       handleCacheHeaders(event, {
+        ...requestConditions,
         modifiedTime: modifiedTime ? new Date(modifiedTime) : undefined,
         etag: response.headers.etag as string,
         maxAge: opts.maxAge,

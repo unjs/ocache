@@ -104,7 +104,7 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   shouldInvalidateCache?: (...args: ArgsT) => boolean | Promise<boolean>;
   /** Return `true` to call the function without cache processing. */
   shouldBypassCache?: (...args: ArgsT) => boolean | Promise<boolean>;
-  /** Cache-key group. Defaults to `"functions"`. */
+  /** Cache-key group. Defaults to `"functions"`. Escaped like `name`. */
   group?: string;
   /** Integrity value. Defaults to a hash of the function and options. */
   integrity?: any;
@@ -197,11 +197,21 @@ export interface ResponseCacheEntry {
   base64?: boolean;
 }
 
-/** Values passed to the conditional response hook. */
+/**
+ * Values passed to the conditional response hook.
+ *
+ * The request validators are captured before narrowing, because narrowing forwards
+ * only headers the cache key covers and no key covers a validator. Read them here
+ * rather than from `event.req`, which no longer carries them.
+ */
 export interface CacheConditions {
   modifiedTime?: Date;
   maxAge?: number;
   etag?: string;
+  /** The request's `If-None-Match`, captured before narrowing. */
+  ifNoneMatch?: string;
+  /** The request's `If-Modified-Since`, captured before narrowing. */
+  ifModifiedSince?: string;
 }
 
 /**

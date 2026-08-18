@@ -1,25 +1,6 @@
 // Key composition and request narrowing must use these same filtered values.
 
 /**
- * Headers that remain visible unchanged without separate key components.
- *
- * Conditional headers can produce only non-storable responses.
- * Trace headers support propagation but must not affect rendered output.
- *
- * `host` is not one of them: `request.ts` replaces it with the keyed URL authority.
- *
- * `ReadonlySet` rather than `Object.freeze`, which does not stop `Set` mutation.
- */
-export const safeHeaderNames: ReadonlySet<string> = /* @__PURE__ */ new Set([
-  "if-modified-since",
-  "if-none-match",
-  "traceparent",
-  "tracestate",
-  "x-correlation-id",
-  "x-request-id",
-]);
-
-/**
  * Returns an order-independent query with only allowed names.
  *
  * Pure, so key composition and URL rewriting agree without shared per-request state.

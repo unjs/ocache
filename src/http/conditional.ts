@@ -1,19 +1,34 @@
 import type { HTTPEvent, CacheConditions, ResponseCacheEntry } from "../types.ts";
 
 /**
+ * Reads the conditional request headers before narrowing removes them.
+ *
+ * Narrowing forwards only what the key covers, and no key covers a validator, so
+ * `event.req` no longer carries these by the time the 304 decision runs. Capture
+ * them from the original request and pass them through {@link CacheConditions}.
+ */
+export function readConditions(
+  event: HTTPEvent,
+): Pick<CacheConditions, "ifNoneMatch" | "ifModifiedSince"> {
+  return {
+    ifNoneMatch: event.req.headers.get("if-none-match") ?? undefined,
+    ifModifiedSince: event.req.headers.get("if-modified-since") ?? undefined,
+  };
+}
+
+/**
  * Decides `304 Not Modified` from the request's conditional headers.
  *
  * RFC 9110 section 13.2.2 gives `If-None-Match` precedence: when it is present the
  * date check never runs, so a client holding a different representation gets the
  * full response instead of a `304` from an unrelated `If-Modified-Since`.
  */
-export function defaultHandleCacheHeaders(event: HTTPEvent, conditions: CacheConditions): boolean {
-  const ifNoneMatch = event.req.headers.get("if-none-match");
+export function defaultHandleCacheHeaders(_event: HTTPEvent, conditions: CacheConditions): boolean {
+  const { ifNoneMatch, ifModifiedSince } = conditions;
   if (ifNoneMatch) {
     return matchesIfNoneMatch(ifNoneMatch, conditions.etag);
   }
 
-  const ifModifiedSince = event.req.headers.get("if-modified-since");
   if (ifModifiedSince && conditions.modifiedTime) {
     if (new Date(ifModifiedSince) >= conditions.modifiedTime) {
       return true;

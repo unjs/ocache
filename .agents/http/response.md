@@ -120,6 +120,8 @@ The two arms then share one value space, so the synthesized etag **domain-separa
 
 Use `if-none-match` and `if-modified-since` to select a 304. `handleCacheHeaders` may replace this decision.
 
+Read both from `conditions`, never from `event.req`. `readConditions` captures them in `http/index.ts` before `narrowRequest` runs, because narrowing forwards only headers the key covers and no key covers a validator. A custom `handleCacheHeaders` must read `conditions.ifNoneMatch` and `conditions.ifModifiedSince` for the same reason. See `.agents/http/request.md`.
+
 **`If-None-Match` wins when it is present** (RFC 9110 §13.2.2). Return its result and never evaluate the date. Earlier code fell through to `if-modified-since` on a non-matching tag, so a client holding an older representation received a 304 for changed content whenever its `If-Modified-Since` was newer than `last-modified`. Browsers send both headers together, so this was the common case, not a crafted one.
 
 Compare tags **weakly** (§8.8.3.2): strip a `W/` prefix from both sides, so `W/"x"` and `"x"` match. `serialize` mints weak etags, and clients echo either form. `*` matches whenever a representation exists, which is always true at this point because an entry was found. `If-None-Match` is a **list**, so a match on any member returns 304. Split it by scanning quoted strings rather than by splitting on `,`: `etagc` excludes `"` but allows `,`, so `W/"a,b"` is one tag. An unquoted token is malformed but is still compared as sent, which preserves the old exact-equality behavior for handlers that emit bare etags.

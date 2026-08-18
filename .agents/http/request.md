@@ -18,7 +18,7 @@ Return bypassed responses without changes. A bypassed call never enters `cachedF
 
 ## What the handler sees
 
-The header filter is an **allowlist**. A header reaches the handler only when it appears in `keyHeaderNames`, is `cookie` under the three-way rule below, or appears in `safeHeaderNames`. Remove every other header on cacheable calls. `host` is the one rewritten name: narrowing replaces its value with the keyed URL authority.
+The header filter is an **allowlist**. A header reaches the handler only when it appears in `keyHeaderNames` or is `cookie` under the three-way rule below. Remove every other header on cacheable calls. `host` is the one rewritten name: narrowing replaces its value with the keyed URL authority. There is no exemption list.
 
 Forward `varies` headers. Their values are part of the key, so the handler can safely read them. Reading them is the reason to declare them. Earlier code removed declared `varies` headers instead of forwarding them. For example, `varies: ["accept-language"]` produced separate keys and correct `Vary`, but every entry contained the default rendering. Correct forwarding was therefore a breaking behavior change.
 
@@ -28,22 +28,27 @@ This change is broad and breaking. A handler that reads an undeclared header now
 
 This rule is the request-side counterpart to `hasUnkeyedVary` in `.agents/http/response.md`. The response side refuses to store output that varies on an unkeyed header. The request side refuses to expose that header to the handler. A route that is wrong in both directions triggers both protections.
 
-### `safeHeaderNames`
+### There is no exemption list
 
-`filters.ts` defines these exemptions beside the cookie and query filters. No module may create its own list. Each exempt header cannot vary a rendering and cannot usefully be placed in `varies`:
+`filters.ts` used to export `safeHeaderNames`, six headers that narrowing forwarded unkeyed: the two conditional validators and the four trace headers. It is removed. The justification for each was that no key could usefully cover it — but "no key covers it" is the argument for **removing** a header, not for exempting it. Every exempt header was a channel for attacker-controlled data to reach the handler with no key covering the result. Echoing `x-request-id` into a cacheable 200 stored one caller's value and replayed it to every later caller for the full TTL. With the allowlist otherwise closed, these six were the only remaining channel, so the exemption carried the entire residual risk.
 
-- **`if-none-match` / `if-modified-since`** remain visible because `defaultHandleCacheHeaders` reads them from `event.req` in `http/index.ts` after narrowing replaces that request. If narrowing removed them, 304 responses worked on a HIT but never on a MISS. They are safe to forward. The only conditional responses that a handler can derive from them are 304 and 412, and those statuses are not in `cacheableStatuses`. The cache never stores such output.
-- **`traceparent`, `tracestate`, `x-request-id`, `x-correlation-id`** support logging and trace propagation. They are unique per request by design. Adding one to `varies` would create one entry per request, so no useful keyed configuration exists. A handler that renders one into output creates data that no cache key can cover.
+- **`if-none-match` / `if-modified-since`** were exempt because `defaultHandleCacheHeaders` read them from `event.req` in `http/index.ts` _after_ narrowing had already replaced that request. Removing them alone left 304 responses working on a HIT and never firing on a MISS. That is now fixed at the source rather than by exemption: `readConditions` captures both from the original request before narrowing, and `http/index.ts` passes them through `CacheConditions`. The rejected form of this fix predates `CacheConditions` carrying the values; the hook already received a conditions object, so the values had somewhere to go.
+
+  The earlier defence — that a handler can derive only 304 and 412 from them, and neither is in `cacheableStatuses` — is a claim about well-behaved handlers, not an enforced invariant. Nothing stopped a handler from rendering a validator into a 200.
+
+- **`traceparent`, `tracestate`, `x-request-id`, `x-correlation-id`** were exempt for logging and trace propagation. They are unique per request by design, so a handler that renders one produces output no key can cover, and `varies` cannot help: it would produce one entry per request. Removing all four is deliberate rather than removing only the non-standard `x-` pair. Splitting the set would have kept the W3C pair on the argument that nothing sensibly renders opaque plumbing — the same "handlers behave" reasoning that justified the whole list. A handler needing trace context must read it from the framework event or middleware, which narrowing does not touch, never from `event.req`.
+
+**Consequence.** A handler can no longer do its own conditional handling. `serveStatic`-style routes that branch on `if-modified-since`, and proxy routes that forward validators upstream, now always render the full representation; ocache alone decides 304, from validators it captured itself. This is a breaking change and it removes the earlier "handler's own 304 poisons the unconditional path" failure by construction — a handler cannot branch on a header it cannot see. Declaring a validator in `varies` is the escape hatch, at one entry per distinct validator; `shouldBypassCache` is usually the better answer.
 
 ### `host`
 
-`host` is **not** in `safeHeaderNames`. Narrowing removes the raw header and sets `host` to `(event.url ?? new URL(event.req.url)).host` — the host component of the very authority `resolveKey` hashes. A handler that renders a canonical link, an absolute asset URL, or a `Location` from `host` therefore renders from keyed data by construction.
+`host` is the one rewritten name, not an exemption. Narrowing removes the raw header and sets `host` to `(event.url ?? new URL(event.req.url)).host` — the host component of the very authority `resolveKey` hashes. A handler that renders a canonical link, an absolute asset URL, or a `Location` from `host` therefore renders from keyed data by construction.
 
 The old exemption assumed the two always agree. They agree only on adapters that build the URL _from_ `Host`. An adapter that resolves `event.url` from the connection, from a fixed base, or from a trusted proxy header leaves `Host` attacker-controlled and unkeyed. `Host: a.example` and `Host: b.example` on one resolved authority then shared an entry, and the first tenant's rendering was replayed under a synthesized `max-age` with no `Vary`. This is the same defect that `x-forwarded-host` has, reached through the one header the allowlist still exempted.
 
 Normalizing, rather than removing, keeps host-dependent rendering working on the adapters where it was already correct. An authority-less URL (`file:`, `data:`) has no host to give, so the handler sees none. `varies: ["host"]` still puts `host` in `keyHeaderNames`; the raw header is then keyed, so narrowing forwards it unchanged and skips normalization.
 
-Do **not** exempt `user-agent` or `baggage`. Device and bot branching commonly use `user-agent`. OTel `baggage` is designed for application values such as tenant IDs and feature flags. This differs from the opaque `traceparent` and `tracestate` pair. Declare both headers in `varies` when they affect output.
+`user-agent` and `baggage` were never exempt and there is now nothing to exempt them from. Device and bot branching commonly use `user-agent`. OTel `baggage` is designed for application values such as tenant IDs and feature flags. Declare either in `varies` when it affects output.
 
 ### Cookies (request side)
 

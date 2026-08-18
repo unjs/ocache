@@ -1,7 +1,7 @@
 // A handler may read only request data that its cache key covers.
 
 import type { HandlerConfig } from "./config.ts";
-import { filterCookie, filterSearch, safeHeaderNames } from "./filters.ts";
+import { filterCookie, filterSearch } from "./filters.ts";
 import { cacheableMethods } from "./key.ts";
 
 import type { HTTPEvent, ServerRequest } from "../types.ts";
@@ -37,7 +37,9 @@ export function narrowRequest<E extends HTTPEvent>(
   const _url = event.url ?? new URL(event.req.url);
   const _hostIsKeyed = keyHeaderNames.includes("host");
 
-  // Remove every header that is neither keyed nor explicitly safe.
+  // Remove every header the key does not cover. There are no exemptions: a header
+  // no key covers is a header no handler may render. Conditional headers reach
+  // `handleCacheHeaders` through `CacheConditions`, captured before narrowing.
   const filteredHeaders = [...event.req.headers.entries()].flatMap(([key, value]) => {
     const name = key.toLowerCase();
     if (name !== "cookie") {
@@ -46,9 +48,7 @@ export function narrowRequest<E extends HTTPEvent>(
       if (name === "host" && !_hostIsKeyed) {
         return [];
       }
-      return keyHeaderNames.includes(name) || safeHeaderNames.has(name)
-        ? [[key, value] as [string, string]]
-        : [];
+      return keyHeaderNames.includes(name) ? [[key, value] as [string, string]] : [];
     }
     // Forward the keyed cookie subset, the keyed raw header, or no cookies.
     if (!allowedCookieNames) {

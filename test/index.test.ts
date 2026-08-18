@@ -5777,7 +5777,7 @@ describe("defineCachedHandler", () => {
     expect(b.headers.get("vary")).toContain("host");
   });
 
-  it("forwards host and the propagation headers, but not user-agent or baggage", async () => {
+  it("forwards host but removes the trace headers, user-agent, and baggage", async () => {
     const seen: Array<Record<string, string | null>> = [];
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -5807,14 +5807,15 @@ describe("defineCachedHandler", () => {
       }),
     );
 
-    // `host` is already keyed (the URL authority) and the trace pair is per-request plumbing
-    // no key could cover; `user-agent` (device branching) and `baggage` (OTel's app-readable
-    // tenant/flag context) are rendering inputs, so they follow the general rule.
+    // `host` is keyed (the URL authority), so it survives with the keyed value. Everything
+    // else follows the one rule: no key covers it, so the handler cannot read it. The trace
+    // headers are unique per request, so no `varies` configuration could ever cover them —
+    // that is the reason to remove them, not a reason to exempt them.
     expect(seen).toEqual([
       {
         host: "localhost",
-        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
-        requestId: "req-1",
+        traceparent: null,
+        requestId: null,
         userAgent: null,
         baggage: null,
       },
@@ -5843,7 +5844,7 @@ describe("defineCachedHandler", () => {
     expect(mobile.headers.get("vary")).toBe("user-agent");
   });
 
-  it("keeps the conditional headers visible, so a MISS can still answer 304", async () => {
+  it("answers 304 on a MISS from validators captured before narrowing", async () => {
     let callCount = 0;
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -5854,9 +5855,9 @@ describe("defineCachedHandler", () => {
       { maxAge: 10 },
     );
 
-    // First request on this key, so this is a MISS — and `handleCacheHeaders` reads
-    // `if-none-match` off `event.req` *after* narrowing has already swapped it. Stripping it
-    // would leave 304s working on a HIT and silently never firing on a MISS.
+    // First request on this key, so this is a MISS: `handleCacheHeaders` runs *after*
+    // narrowing has swapped `event.req`, which no longer carries `if-none-match`. The
+    // validator reaches it through `CacheConditions`, read from the original request.
     const res = (await handler(
       makeEvent(path, { headers: { "if-none-match": '"v1"' } }),
     )) as Response;
@@ -6781,7 +6782,7 @@ describe("defineCachedHandler", () => {
     });
   }
 
-  it("does not let a handler's own 304 poison the unconditional path", async () => {
+  it("hides the conditional headers from a handler that does its own 304", async () => {
     let callCount = 0;
     const path = uniquePath();
     const handler = defineCachedHandler(
@@ -6796,21 +6797,22 @@ describe("defineCachedHandler", () => {
       { maxAge: 100 },
     );
 
-    // One crafted conditional request used to store a 304 that every later unconditional
-    // request was then served (and crashed on).
+    // The handler cannot branch on a validator it cannot see, so the crafted request
+    // renders the ordinary representation. ocache owns the 304 decision alone, from the
+    // validators it captured itself. Declaring `if-modified-since` in `varies` is the
+    // escape hatch, at one entry per distinct validator.
     const attacker = (await handler(
       makeEvent(path, { headers: { "if-modified-since": "Fri, 31 Dec 2999 23:59:59 GMT" } }),
     )) as Response;
-    expect(attacker.status).toBe(304);
+    expect(attacker.status).toBe(200);
+    expect(await attacker.text()).toBe("fresh body");
 
-    const [key] = await handler.resolveKeys(makeEvent(path));
-    expect(await testStorage.get(key!)).toBeFalsy();
-
-    // The unconditional path still reaches the handler and gets the real representation.
+    // The unconditional path serves the same stored representation.
     const victim = (await handler(makeEvent(path))) as Response;
     expect(victim.status).toBe(200);
     expect(await victim.text()).toBe("fresh body");
-    expect(callCount).toBe(2);
+    expect(victim.headers.get("x-cache")).toBe("HIT");
+    expect(callCount).toBe(1);
   });
 
   it("serves HEAD against a 204 route", async () => {
