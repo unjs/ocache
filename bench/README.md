@@ -9,7 +9,8 @@ pnpm bench ssr-product-page             # one scenario
 pnpm bench --load=ramp                  # capacity: highest rate each config sustains
 pnpm bench --load=burst                 # cold-cache stampede
 pnpm bench --profiles=memory,sql        # override the storage sweep
-pnpm bench --md=bench.md --json=bench.json
+pnpm bench --md=bench.md --json=bench.json   # default: bench/results/<load>.{md,json}
+pnpm bench --md=-                       # print the report instead of writing it
 pnpm bench --list
 
 pnpm bench:micro                        # per-call cost of a hit (mitata)
@@ -17,6 +18,9 @@ pnpm bench:chart bench/results/steady.json --out=bench/charts
 pnpm bench:chart bench/results/steady.json --no-landing   # skip the site's summary SVG
 pnpm bench:docs bench/results/steady.json
 ```
+
+Each run writes `bench/results/<load>.json` and `bench/results/<load>.md`, which is where
+the chart and docs stages read from; `--json`/`--md` send them elsewhere.
 
 `bench:chart` is a second stage over a JSON run: it re-renders the SVG charts without
 re-running the benchmark. Each chart is one file that carries both palettes and follows the

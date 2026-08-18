@@ -7,11 +7,16 @@
 //   node bench/index.ts --profiles=memory,sql    override the storage sweep
 //   node bench/index.ts --json=out.json --md=out.md
 //
+// Both files default to `bench/results/<load>.{json,md}`, which is where the chart and docs
+// stages read from. `--md=-` prints the report to stdout instead of writing it.
+//
 // Every configuration runs against the same seed, the same key sequence and the same
 // offered arrival times. The only difference between a baseline row and a cached row is
 // whether ocache is in the request path.
 
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { measureHitCost } from "./harness/calibrate.ts";
 import { renderBreakEven, renderScenario } from "./harness/report.ts";
@@ -30,6 +35,8 @@ import type { HitCost } from "./harness/calibrate.ts";
 import type { RunRow } from "./harness/run.ts";
 import type { Scenario } from "./harness/scenario.ts";
 import type { ProfileName } from "./harness/storage.ts";
+
+const RESULTS = join(dirname(fileURLToPath(import.meta.url)), "results");
 
 const SCENARIOS: Scenario[] = [
   ssrProductPage,
@@ -183,23 +190,26 @@ const markdown = [
   renderBreakEven(hitCosts),
 ].join("\n");
 
-const mdPath = flags.get("md");
-if (mdPath) {
+/** `--md=-` prints the report; anything else is a path, defaulting to `results/<load>.md`. */
+const mdFlag = flags.get("md");
+if (mdFlag === "-") {
+  console.log(`\n${markdown}`);
+} else {
+  const mdPath = mdFlag ? resolve(mdFlag) : join(RESULTS, `${load}.md`);
+  mkdirSync(dirname(mdPath), { recursive: true });
   writeFileSync(mdPath, markdown);
   console.error(`\nwrote ${mdPath}`);
-} else {
-  console.log(`\n${markdown}`);
 }
 
-const jsonPath = flags.get("json");
-if (jsonPath) {
-  writeFileSync(
-    jsonPath,
-    JSON.stringify(
-      { node: process.version, seed, load, hitCosts, rows: allRows, sustained },
-      undefined,
-      2,
-    ),
-  );
-  console.error(`wrote ${jsonPath}`);
-}
+const jsonFlag = flags.get("json");
+const jsonPath = jsonFlag ? resolve(jsonFlag) : join(RESULTS, `${load}.json`);
+mkdirSync(dirname(jsonPath), { recursive: true });
+writeFileSync(
+  jsonPath,
+  JSON.stringify(
+    { node: process.version, seed, load, hitCosts, rows: allRows, sustained },
+    undefined,
+    2,
+  ),
+);
+console.error(`wrote ${jsonPath}`);
