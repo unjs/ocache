@@ -289,17 +289,35 @@ function chartOrder(data: BenchFile, charts: Map<string, string>): string[] {
 const inlined = new Set<string>();
 
 /**
+ * The root `<svg>` sized from its own `viewBox` instead of from the pixel width the chart stage
+ * drew it at, so a chart takes the width of the page column and scales down with it. `max-width`
+ * comes from the `viewBox` rather than from a repeated constant, and holds a chart to its drawn
+ * size on a wide page: stretching a chart past the width its labels were laid out for buys
+ * nothing.
+ */
+function responsive(svg: string): string {
+  return svg.replace(/^<svg\b[^>]*>/, (tag) => {
+    const drawn = /viewBox="0 0 (\d+(?:\.\d+)?)/.exec(tag)?.[1];
+    if (!drawn) throw new Error("chart svg has no viewBox to size from");
+    const style = `width:100%;height:auto;max-width:${drawn}px`;
+    return tag
+      .replaceAll(/\s(?:width|height)="[^"]*"/g, "")
+      .replace(/^<svg\b/, `<svg style="${style}"`);
+  });
+}
+
+/**
  * A chart inlined into the page rather than linked as an image.
  *
  * Each SVG carries both palettes: `prefers-color-scheme` when it is fetched on its own, an
  * ancestor `.dark` or `[data-theme]` when it is part of a document. Only an inlined chart can
  * see the site's own theme class, and undocs renders the site dark by default, so a linked
- * image would show a light chart on a dark page. The wrapper scrolls instead of shrinking the
- * chart, because 800px of labels do not survive being scaled to a phone.
+ * image would show a light chart on a dark page. The wrapper keeps the chart a block of its
+ * own and stays a scroll container for anything the page puts beside it.
  */
 function figure(name: string, svg: string): string {
   inlined.add(name);
-  return `<div style="overflow-x:auto">\n${svg.trim()}\n</div>`;
+  return `<div style="max-width:100%;overflow-x:auto">\n${responsive(svg.trim())}\n</div>`;
 }
 
 // -- output -----------------------------------------------------------------------------
