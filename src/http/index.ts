@@ -165,9 +165,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       return toResponse(await handler(event), event);
     }
 
+    // Only a handler sets `last-modified`, so a stored entry often has none.
+    const modifiedTime = response.headers["last-modified"] as string | undefined;
     if (
       handleCacheHeaders(event, {
-        modifiedTime: new Date(response.headers["last-modified"] as string),
+        modifiedTime: modifiedTime ? new Date(modifiedTime) : undefined,
         etag: response.headers.etag as string,
         maxAge: opts.maxAge,
       })

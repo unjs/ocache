@@ -39,9 +39,8 @@ export async function serializeResponse<E extends HTTPEvent>(
     headers.set("etag", `W/"${base64 ? "b" : ""}${hash(body)}"`);
   }
 
-  if (!headers.has("last-modified")) {
-    headers.set("last-modified", new Date().toUTCString());
-  }
+  // No `last-modified` is synthesized: fill time is not a modification time, and its
+  // one-second resolution cannot distinguish two bodies. The etag above is the validator.
 
   // Advertisement must use the same status and Vary predicates as storage validation.
   const declaredVary = headers.get("vary");

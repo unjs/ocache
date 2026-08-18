@@ -15,7 +15,7 @@ Composable caching primitives with TTL, stale-while-revalidate, and HTTP respons
 ## Features
 
 - 🗃️ **[Function caching](https://ocache.unjs.io/guide/functions)** — wrap any function with TTL, stale-while-revalidate, and request deduplication.
-- 🌐 **[HTTP response caching](https://ocache.unjs.io/guide/handler)** — automatic `etag`, `last-modified`, and `304 Not Modified` support.
+- 🌐 **[HTTP response caching](https://ocache.unjs.io/guide/handler)** — automatic `etag` and `304 Not Modified` support.
 - 🔑 **[Smart cache keys](https://ocache.unjs.io/guide/query-params)** — derived from arguments or request URL, with per-header and per-query variance.
 - 🔌 **[Pluggable storage](https://ocache.unjs.io/guide/storage)** — bring your own backend via a minimal `get`/`set` interface.
 - ♻️ **[Invalidation & expiration](https://ocache.unjs.io/guide/invalidation)** — remove or mark entries stale on demand, with SWR background refresh.
@@ -49,7 +49,7 @@ const data = await cachedFetch("https://api.example.com/data");
 
 ### Caching HTTP Handlers
 
-Wrap HTTP handlers with `defineCachedHandler` for automatic response caching with `etag`, `last-modified`, and `304 Not Modified` support:
+Wrap HTTP handlers with `defineCachedHandler` for automatic response caching with `etag` and `304 Not Modified` support:
 
 ```ts
 import { defineCachedHandler } from "ocache";

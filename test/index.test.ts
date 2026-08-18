@@ -3021,8 +3021,8 @@ describe("defineCachedHandler", () => {
     });
 
     const res = (await handler(makeEvent(path))) as Response;
-    // `max-age` accompanies `s-maxage`: the latter is shared-cache-only, and a private cache
-    // fell back to a heuristic freshness of ≈ 0 (`last-modified` is stamped at fill time).
+    // `max-age` accompanies `s-maxage`: the latter is shared-cache-only, so a private cache
+    // was left with no freshness lifetime at all and revalidated on every navigation.
     expect(res.headers.get("cache-control")).toBe(
       "max-age=60, s-maxage=60, stale-while-revalidate=120",
     );
@@ -3076,11 +3076,10 @@ describe("defineCachedHandler", () => {
     expect(r1.headers.get("cache-control")).toBeNull();
     expect(r2.headers.get("cache-control")).toBeNull();
     // ...but the response is still stored and served from cache (only one handler run),
-    // and etag/last-modified are still synthesized.
+    // and the etag is still synthesized.
     expect(callCount).toBe(1);
     expect(r2.headers.get("x-cache")).toBe("HIT");
     expect(r1.headers.get("etag")).toBeTruthy();
-    expect(r1.headers.get("last-modified")).toBeTruthy();
   });
 
   it("still sends an explicit handler cache-control when sendCacheControl is false", async () => {
@@ -3615,13 +3614,15 @@ describe("defineCachedHandler", () => {
     expect(r2.headers.get("x-cache")).toBe("HIT");
   });
 
-  it("auto-generates etag and last-modified", async () => {
+  it("auto-generates an etag but never a last-modified", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("test-body"), { maxAge: 10 });
 
     const res = (await handler(makeEvent(path))) as Response;
     expect(res.headers.get("etag")).toMatch(/^W\/".*"$/);
-    expect(res.headers.get("last-modified")).toBeTruthy();
+    // Fill time is not a modification time: two bodies filled within one second would
+    // share an HTTP-date and the second could be answered with a 304 for the first.
+    expect(res.headers.has("last-modified")).toBe(false);
   });
 
   it("gives a binary body and the text of its base64 form distinct etags", async () => {
@@ -3678,6 +3679,24 @@ describe("defineCachedHandler", () => {
 
     const res = (await handler(makeEvent(path))) as Response;
     expect(res.headers.get("last-modified")).toBe("Mon, 01 Jan 2024 00:00:00 GMT");
+  });
+
+  it("never answers if-modified-since from a synthesized date", async () => {
+    const path = uniquePath();
+    let callCount = 0;
+    const handler = defineCachedHandler(() => new Response(`v${++callCount}`), { maxAge: 10 });
+
+    const first = (await handler(makeEvent(path))) as Response;
+    expect(first.headers.has("last-modified")).toBe(false);
+    await handler.invalidate(makeEvent(path));
+
+    // A second body filled in the same second once shared the first one's HTTP-date, so
+    // an if-modified-since client holding v1 was told v2 had not changed.
+    const res = (await handler(
+      makeEvent(path, { headers: { "if-modified-since": new Date("2030-01-01").toUTCString() } }),
+    )) as Response;
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("v2");
   });
 
   it("returns 304 for matching if-none-match", async () => {
