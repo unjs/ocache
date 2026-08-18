@@ -8,14 +8,15 @@ import {
   invalidateCache,
   resolveCacheKeys,
 } from "../cache.ts";
+import { NarrowRequestError, ResponseTooLargeError, UnsupportedValueError } from "../error.ts";
 import { resolveStorage } from "../storage.ts";
 
 import { requiresRevalidation } from "./cache-control.ts";
 import { integrityOpts, resolveHandlerConfig } from "./config.ts";
 import { defaultHandleCacheHeaders, notModifiedHeaders, readConditions } from "./conditional.ts";
-import { ResponseTooLargeError, deserializeEntry, serializeResponse } from "./entry.ts";
+import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
-import { NarrowRequestError, isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
+import { isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
 import { isCacheableStatus, validateEntry } from "./validate.ts";
 
 import type {
@@ -26,32 +27,6 @@ import type {
   CachedEventHandlerOptions,
   ResponseCacheEntry,
 } from "../types.ts";
-
-/**
- * Signals that the default `toResponse` cannot convert a handler's return value.
- *
- * `String(value)` renders an object as `[object Object]` and a byte view as its
- * comma-joined digits. Either is a valid 200, so the cache stored it and replayed it
- * for the whole lifetime without running the handler again. See
- * `.agents/http/response.md`.
- */
-export class UnsupportedValueError extends TypeError {
-  override name = "UnsupportedValueError";
-
-  constructor(value: unknown) {
-    super(
-      `Handler returned ${describeValue(value)}, which the default \`toResponse\` cannot convert to a Response. ` +
-        "Return a Response (`Response.json(value)`) or set the `toResponse` option.",
-    );
-  }
-}
-
-function describeValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  return typeof value === "object" ? (value.constructor?.name ?? "an object") : typeof value;
-}
 
 /** Body types `Response` carries as-is. It stringifies everything else. */
 function isBodyInit(value: object): boolean {

@@ -1,6 +1,7 @@
 // Docs: @docs/5.handler.md, @docs/7.cookies.md, @docs/8.cache-control.md, @docs/9.isr.md
 
 import { base64ToBytes, bytesToBase64 } from "../base64.ts";
+import { ResponseTooLargeError } from "../error.ts";
 import { hash, hashBytes } from "../hash.ts";
 
 import type { HandlerConfig } from "./config.ts";
@@ -140,52 +141,6 @@ export function deserializeEntry(entry: ResponseCacheEntry): {
       headers: entry.headers,
     },
   };
-}
-
-/**
- * Signals that a response body passed the buffering limit and was not stored.
- *
- * The error carries the live response so the request that produced it can still be
- * served. That response holds a one-use stream, so only one caller may claim it.
- */
-export class ResponseTooLargeError extends Error {
-  override name = "ResponseTooLargeError";
-
-  /** The request whose resolution read this body, when the caller is an HTTP event. */
-  #event: HTTPEvent | undefined;
-  #response: Response | undefined;
-
-  constructor(limit: number, event: HTTPEvent | undefined, response: Response) {
-    super(`Response body exceeds the ${limit} byte cache limit.`);
-    this.#event = event;
-    this.#response = response;
-    // Nothing claims the response of a background revalidation. Release its stream one
-    // macrotask later, because the rejection only ever reaches a caller through microtasks.
-    const timer = setTimeout(() => {
-      const unclaimed = this.#response;
-      this.#response = undefined;
-      void unclaimed?.body?.cancel().catch(() => {});
-    }, 0);
-    // Do not keep the process alive for this release.
-    if (timer && typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
-  }
-
-  /**
-   * Returns the live response once, and only to the request that produced it.
-   *
-   * A deduplicated follower receives `undefined` because it cannot share the stream,
-   * and because the response answers another request that was narrowed for the key.
-   */
-  claim(event: HTTPEvent): Response | undefined {
-    if (!this.#response || event !== this.#event) {
-      return undefined;
-    }
-    const response = this.#response;
-    this.#response = undefined;
-    return response;
-  }
 }
 
 /** Whether the backend returns a stored byte view as itself. */

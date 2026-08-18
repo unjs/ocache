@@ -22,6 +22,7 @@ src/
 │   ├── cache-control.ts # RFC 9111 directive parser (no policy, just syntax)
 │   ├── vary.ts          # Vary merging and the two response-`Vary` predicates
 │   └── conditional.ts   # 304 decisions and the headers a 304 must echo
+├── error.ts        # Every error class and user-visible error message
 ├── hash.ts         # `hash`/`serialize`: cache keys + integrity, digest via `#crypto`
 ├── base64.ts       # Binary-body codec: one implementation picked per runtime
 └── storage.ts      # Storage interface, built-in memory storage, `createBlobStorage` frame codec

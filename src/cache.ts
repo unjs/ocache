@@ -1,6 +1,7 @@
 // Docs: @docs/2.functions.md, @docs/4.invalidation.md, @docs/9.isr.md
 
 import { base64ToBytes, bytesToBase64 } from "./base64.ts";
+import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage } from "./storage.ts";
 
@@ -166,7 +167,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     // https://github.com/nitrojs/nitro/issues/2160
     if (typeof entry !== "object") {
       entry = {};
-      const error = new Error("Malformed data read from cache.");
+      const error = malformedEntryError();
       onError("[cache]", error);
     } else {
       // Clone entries because a backend may return a shared object reference.
@@ -570,7 +571,7 @@ function requireStorage(
   caller: string,
 ): StorageInterface {
   if (!options?.storage) {
-    throw new Error(`[ocache] ${caller}() requires \`options.storage\``);
+    throw storageRequiredError(caller);
   }
   return resolveStorage(options);
 }
@@ -585,9 +586,7 @@ function withDeadline<T>(
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      const error = new Error(`[cache] Resolver timed out after ${seconds}s.`);
-      // Match the platform timeout error name.
-      error.name = "TimeoutError";
+      const error = timeoutError(seconds);
       // Reject before aborting, so the waiters' error is decided first: a resolver that
       // rejects on abort settles `work` one microtask too late to be seen here.
       reject(error);

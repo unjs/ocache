@@ -5,6 +5,7 @@
 // Keep serialization allocation-light because cache-key paths call it per request.
 
 import { bytesToBase64 } from "./base64.ts";
+import { tooDeepError } from "./error.ts";
 
 import { digest } from "#crypto";
 
@@ -114,9 +115,7 @@ function ser(value: unknown, seen: Map<object, string>, depth: number): string {
         return ref;
       }
       if (depth >= MAX_DEPTH) {
-        throw new RangeError(
-          `[ocache] Cannot hash a value nested deeper than ${MAX_DEPTH} levels. Pass an explicit \`getKey\` that derives the key from what identifies the value.`,
-        );
+        throw tooDeepError(MAX_DEPTH);
       }
       seen.set(value, `#${seen.size}`);
       const serialized = serObject(value, seen, depth + 1);

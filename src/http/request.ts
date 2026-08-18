@@ -3,6 +3,7 @@
 // A handler may read only request data that its cache key covers.
 
 import { resolveSignal } from "../cache.ts";
+import { NarrowRequestError, readOnlyEventError } from "../error.ts";
 import type { HandlerConfig } from "./config.ts";
 import { filterCookie, filterSearch } from "./filters.ts";
 import { cacheableMethods } from "./key.ts";
@@ -97,14 +98,14 @@ export function narrowRequest<E extends HTTPEvent>(
     replacedReq = true;
     // A silent setter is as unsafe as a throwing one, so read the value back.
     if (event.req !== req) {
-      throw new Error("`event.req` is read-only.");
+      throw readOnlyEventError("req");
     }
     if (allowedQueryNames && event.url) {
       const url = new URL(_reqUrl);
       (event as any).url = url;
       replacedUrl = true;
       if (event.url !== url) {
-        throw new Error("`event.url` is read-only.");
+        throw readOnlyEventError("url");
       }
     }
   } catch (error) {
@@ -117,18 +118,5 @@ export function narrowRequest<E extends HTTPEvent>(
       (event as any).url = originalUrl;
     }
     throw new NarrowRequestError(error);
-  }
-}
-
-/**
- * Signals that the event could not be narrowed to what the cache key covers.
- *
- * The handler could read credentials or excluded query values that no key covers,
- * so `defineCachedHandler` bypasses the cache for the request instead of storing it.
- */
-export class NarrowRequestError extends Error {
-  override name = "NarrowRequestError";
-  constructor(cause: unknown) {
-    super("Cannot narrow the request to what the cache key covers.", { cause });
   }
 }
