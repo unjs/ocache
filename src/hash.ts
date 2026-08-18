@@ -4,6 +4,8 @@
 // Both implementations must return identical digests for shared storage.
 // Keep serialization allocation-light because cache-key paths call it per request.
 
+import { bytesToBase64 } from "./base64.ts";
+
 import { digest } from "#crypto";
 
 // A `SharedArrayBuffer` is not an `ArrayBuffer`, and the global is absent in runtimes that do not
@@ -23,9 +25,8 @@ export function hash(input: unknown): string {
 /**
  * Returns a base64url SHA-256 digest of raw bytes.
  *
- * Bytes bypass `serialize`, which renders a typed array as its decimal element values: over a
- * response body that is a string allocation per byte. The digest covers the bytes themselves, so
- * it does not depend on how a backend stores them.
+ * Bytes bypass `serialize`, which renders them as base64 inside a tagged, length-prefixed member.
+ * The digest covers the bytes themselves, so it does not depend on how a backend stores them.
  *
  * This output shares one value space with {@link hash}, and a caller that digests both must
  * domain-separate them, as the body etag in `http/entry.ts` does.
@@ -70,6 +71,18 @@ function serString(value: string): string {
  */
 function serTag(ctor: { name?: string }): string {
   return serString(typeof ctor.name === "string" ? ctor.name : "");
+}
+
+/**
+ * Renders bytes as length-prefixed base64.
+ *
+ * Decimal element values cost about four characters and one string allocation per byte, which a
+ * megabyte-sized argument pays on every call before the key exists. Base64 is 4/3 of the bytes
+ * and one call into the runtime's own encoder. Byte order does not enter this rendering, so it is
+ * only used where the value is bytes rather than multi-byte elements.
+ */
+function serBytes(bytes: Uint8Array): string {
+  return serString(bytesToBase64(bytes));
 }
 
 // `depth` counts the object levels already entered above `value`.
@@ -171,14 +184,17 @@ function serObject(value: object, seen: Map<object, string>, depth: number): str
     return `Map{${parts.sort().join(",")}}`;
   }
   if (value instanceof ArrayBuffer || (SharedBuffer && value instanceof SharedBuffer)) {
-    return `${serTag(ctor)}[${new Uint8Array(value as ArrayBuffer).join(",")}]`;
+    return `${serTag(ctor)}[${serBytes(new Uint8Array(value as ArrayBuffer))}]`;
   }
   if (ArrayBuffer.isView(value)) {
-    // Element values keep typed-array hashes independent of machine endianness.
+    // Element values keep a multi-byte view's hash independent of machine endianness. A view
+    // whose elements are bytes has no such reading, and a `DataView` has no elements at all;
+    // both take the byte path, which is why `BYTES_PER_ELEMENT` decides and `join` no longer does.
+    const perElement = (value as { BYTES_PER_ELEMENT?: number }).BYTES_PER_ELEMENT;
     const items =
-      "join" in value
-        ? (value as unknown as number[]).join(",")
-        : new Uint8Array(value.buffer, value.byteOffset, value.byteLength).join(",");
+      perElement === undefined || perElement === 1
+        ? serBytes(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))
+        : (value as unknown as number[]).join(",");
     return `${serTag(ctor)}[${items}]`;
   }
   return serProperties(serTag(ctor), value, seen, depth);

@@ -60,6 +60,15 @@ export interface CacheEntry<T = any> {
   /** Per-entry stale lifetime in seconds. */
   staleMaxAge?: number;
   /**
+   * Stored form of a binary {@link value}.
+   *
+   * Set only for a value that is a byte view: `"bytes"` when the backend declares
+   * `StorageInterface.binary`, and `"base64"` when it does not.
+   * The field exists only between the storage write and the read that decodes it;
+   * hooks and callers always see a `Uint8Array`.
+   */
+  encoding?: "bytes" | "base64";
+  /**
    * Status for the current call.
    * This field is available to `transform` and is not stored.
    */

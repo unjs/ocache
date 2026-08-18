@@ -1,5 +1,6 @@
 // Docs: @docs/2.functions.md, @docs/4.invalidation.md, @docs/9.isr.md
 
+import { base64ToBytes, bytesToBase64 } from "./base64.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage } from "./storage.ts";
 
@@ -161,6 +162,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     } else {
       // Clone entries because a backend may return a shared object reference.
       entry = { ...entry };
+      // Undo the stored form before anything reads the value, including `validate`.
+      decodeBinary(entry);
     }
 
     // Per-entry lifetimes override static options.
@@ -255,7 +258,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           }
           // Run `serialize` after `getMaxAge` so the lifetime hook sees the live value.
           const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
-          return { value: stored, maxAge, staleMaxAge };
+          // Every byte value becomes a `Uint8Array` here, so a miss returns what a hit returns.
+          return { value: normalizeBinary(stored) as T, maxAge, staleMaxAge };
         })();
         // Reject all waiters on timeout and prevent a late result from reaching storage.
         current = {
@@ -312,8 +316,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           if (isValid && setOpts !== false) {
             // Write misses to all tiers and promote lower-tier hits.
             const writeBases = hitIndex < 0 ? bases : bases.slice(0, hitIndex + 1);
-            // Never persist per-call status.
-            const { status: _status, ...toStore } = entry;
+            // Never persist per-call status. A binary value takes its stored form here, so
+            // nothing above this line holds base64 text.
+            const { status: _status, ...rest } = entry;
+            const toStore = encodeBinary(rest, getStorage());
             const promise = (async () => {
               try {
                 await Promise.all(
@@ -594,6 +600,57 @@ function isHTTPEvent(input: unknown): input is HTTPEvent {
 /** Clamps negative TTLs to zero and maps non-finite TTLs to `undefined`. */
 function clampTtl(value: number | undefined): number | undefined {
   return value == null || !Number.isFinite(value) ? undefined : Math.max(0, value);
+}
+
+// Binary values follow the same rule as a response body in `http/entry.ts`: the backend declares
+// whether a byte view survives a round trip, and that one declaration chooses the stored form.
+// The encoded form exists only between `encodeBinary` and `storage.set`, and between
+// `storage.get` and `decodeBinary`, so every hook and every caller sees a `Uint8Array`.
+
+/** Returns byte values as a `Uint8Array` over the same memory, and anything else unchanged. */
+function normalizeBinary(value: unknown): unknown {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  }
+  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+}
+
+/** Returns the entry to store, with a byte value in the form this backend can return. */
+function encodeBinary(entry: CacheEntry<any>, storage: StorageInterface): CacheEntry<any> {
+  const value = entry.value;
+  if (!(value instanceof Uint8Array)) {
+    return entry;
+  }
+  // A declaring backend hands one view to every hit and every deduplicated caller, so nothing
+  // may mutate a stored value. Everywhere else, base64 survives a backend that serializes.
+  return storage.binary
+    ? { ...entry, encoding: "bytes" }
+    : { ...entry, value: bytesToBase64(value), encoding: "base64" };
+}
+
+/** Restores a binary value in place, or drops one no reader can restore. */
+function decodeBinary(entry: CacheEntry<any>): void {
+  const encoding = entry.encoding;
+  if (encoding === undefined) {
+    return;
+  }
+  // The marker describes storage, not the value: it is written again from the backend in use.
+  entry.encoding = undefined;
+  if (encoding === "base64" && typeof entry.value === "string") {
+    entry.value = base64ToBytes(entry.value);
+    return;
+  }
+  if (encoding === "bytes" && ArrayBuffer.isView(entry.value)) {
+    entry.value = normalizeBinary(entry.value);
+    return;
+  }
+  // Neither stored form. A backend that declares `binary` without keeping views returns
+  // `{"0":255,...}` here, which nothing can turn back into bytes; a miss re-resolves the value
+  // instead of handing the caller an object where its bytes were.
+  entry.value = undefined;
 }
 
 function getKey(...args: unknown[]) {

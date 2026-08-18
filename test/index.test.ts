@@ -2172,6 +2172,245 @@ describe("serialize (write-time hook)", () => {
   });
 });
 
+// A cached function may resolve bytes, and most backends cannot hold a byte view: JSON renders
+// one as `{"0":255,...}`. `StorageInterface.binary` is the only signal that a backend keeps a
+// view intact, exactly as it is for a response body in `http/entry.ts`, and it decides the
+// stored form on the way in. Hooks and callers only ever see a `Uint8Array`.
+describe("binary values", () => {
+  const bytes = new Uint8Array([0xff, 0x00, 0x80, 0xfe]);
+
+  /** A backend that serializes entries, like most persistent ones. It declares no `binary`. */
+  function jsonStorage(raw: Map<string, string>, binary?: boolean): StorageInterface {
+    return {
+      ...(binary && { binary: true }),
+      get: (key) => {
+        const stored = raw.get(key);
+        return stored === undefined ? null : (JSON.parse(stored) as any);
+      },
+      set: (key, value) => {
+        if (value === null || value === undefined) {
+          raw.delete(key);
+        } else {
+          raw.set(key, JSON.stringify(value));
+        }
+      },
+    };
+  }
+
+  /** A Map backend that holds values by reference, as memory storage does. */
+  function mapStorage(map: Map<string, unknown>, binary?: boolean): StorageInterface {
+    return {
+      ...(binary && { binary: true }),
+      get: (key) => (map.get(key) ?? null) as any,
+      set: (key, value) => {
+        if (value === null || value === undefined) {
+          map.delete(key);
+        } else {
+          map.set(key, value);
+        }
+      },
+    };
+  }
+
+  it("round trips bytes through a backend that serializes entries", async () => {
+    const raw = new Map<string, string>();
+    useTestStorage(jsonStorage(raw));
+    let callCount = 0;
+    const fn = cachedFunction(
+      () => {
+        callCount++;
+        return bytes;
+      },
+      { maxAge: 10, name: "binJson" },
+    );
+
+    const miss = await fn();
+    const hit = await fn();
+
+    expect(callCount).toBe(1);
+    // A miss returns what a hit returns: the same type, over the same bytes.
+    expect(miss).toBeInstanceOf(Uint8Array);
+    expect(hit).toBeInstanceOf(Uint8Array);
+    expect([...miss]).toEqual([...bytes]);
+    expect([...hit]).toEqual([...bytes]);
+
+    // Base64 and the marker exist only in storage.
+    const stored = JSON.parse([...raw.values()][0]!);
+    expect(stored.value).toBe("/wCA/g==");
+    expect(stored.encoding).toBe("base64");
+  });
+
+  it("stores the view itself on a backend that declares binary", async () => {
+    const written: any[] = [];
+    const inner = mapStorage(new Map(), true);
+    useTestStorage({
+      binary: true,
+      get: (key) => inner.get(key),
+      set: (key, value, opts) => {
+        written.push(value);
+        return inner.set(key, value, opts);
+      },
+    });
+
+    const fn = cachedFunction(() => bytes, { maxAge: 10, name: "binBytes" });
+    await fn();
+    const hit = await fn();
+
+    expect(written[0].value).toBeInstanceOf(Uint8Array);
+    expect(written[0].encoding).toBe("bytes");
+    // No encode on the way in and no decode on the way out: one view serves every hit, which
+    // is why nothing may mutate a value such a backend hands back.
+    expect(hit).toBe(written[0].value);
+  });
+
+  it("normalizes every byte value to a Uint8Array", async () => {
+    for (const [label, value, expected] of [
+      ["ArrayBuffer", new Uint8Array([1, 2, 3]).buffer, [1, 2, 3]],
+      ["Int8Array", new Int8Array([-1, 2]), [255, 2]],
+      ["DataView", new DataView(new Uint8Array([9, 8]).buffer), [9, 8]],
+      // A window into a larger buffer stores its own bytes, not the buffer behind it.
+      ["subarray", new Uint8Array([1, 2, 3, 4]).subarray(1, 3), [2, 3]],
+    ] as const) {
+      useTestStorage(jsonStorage(new Map()));
+      const fn = cachedFunction(() => value, { maxAge: 10, name: `norm_${label}` });
+
+      const miss = await fn();
+      const hit = await fn();
+
+      expect(miss, label).toBeInstanceOf(Uint8Array);
+      expect(hit, label).toBeInstanceOf(Uint8Array);
+      expect([...(hit as Uint8Array)], label).toEqual([...expected]);
+    }
+  });
+
+  // An entry outlives a change to the declaration, and one persistent backend can hold entries
+  // written by a process that declared it and a process that did not.
+  it("reads both stored forms whatever the backend declares now", async () => {
+    for (const [writes, reads] of [
+      [true, false],
+      [false, true],
+    ] as const) {
+      const map = new Map<string, unknown>();
+      let callCount = 0;
+      const resolver = () => {
+        callCount++;
+        return bytes;
+      };
+
+      useTestStorage(mapStorage(map, writes));
+      await cachedFunction(resolver, { maxAge: 10, name: "shared" })();
+
+      // Same key, same entry — only the declaration the reader was given differs.
+      useTestStorage(mapStorage(map, reads));
+      const value = await cachedFunction(resolver, { maxAge: 10, name: "shared" })();
+
+      expect(callCount, `written binary=${writes}`).toBe(1);
+      expect([...value]).toEqual([...bytes]);
+    }
+  });
+
+  // A backend that declares `binary` and then serializes returns a value no reader can undo.
+  it("re-resolves a value the backend mangled after declaring binary", async () => {
+    const raw = new Map<string, string>();
+    useTestStorage(jsonStorage(raw, true));
+    let callCount = 0;
+    const fn = cachedFunction(
+      () => {
+        callCount++;
+        return bytes;
+      },
+      { maxAge: 10, name: "mangled" },
+    );
+
+    await fn();
+    const value = await fn();
+
+    // JSON turned the view into `{"0":255,...}`. That is a miss, not a value: the alternative
+    // is handing the caller an object where its bytes were, for the whole lifetime.
+    expect(callCount).toBe(2);
+    expect(value).toBeInstanceOf(Uint8Array);
+    expect([...value]).toEqual([...bytes]);
+  });
+
+  it("hands the hooks the decoded value on both writes and reads", async () => {
+    useTestStorage(jsonStorage(new Map()));
+    const validated: unknown[] = [];
+    const fn = cachedFunction(() => bytes, {
+      maxAge: 10,
+      name: "binHooks",
+      validate: (entry) => {
+        validated.push(entry.value);
+        return true;
+      },
+      transform: (entry) => entry.value,
+    });
+
+    const miss = await fn();
+    const hit = await fn();
+
+    expect([...miss]).toEqual([...bytes]);
+    expect([...hit]).toEqual([...bytes]);
+    // Every value `validate` saw is bytes — never the base64 text, on either side of storage.
+    expect(validated.length).toBeGreaterThan(1);
+    for (const value of validated) {
+      expect(value === undefined || value instanceof Uint8Array).toBe(true);
+    }
+  });
+
+  it("encodes what `serialize` returns, not what the resolver returned", async () => {
+    const raw = new Map<string, string>();
+    useTestStorage(jsonStorage(raw));
+    const fn = cachedFunction(() => "ignored", {
+      maxAge: 10,
+      name: "binSerialize",
+      serialize: () => bytes,
+    });
+
+    const value = (await fn()) as unknown as Uint8Array;
+
+    expect(value).toBeInstanceOf(Uint8Array);
+    expect([...value]).toEqual([...bytes]);
+    expect(JSON.parse([...raw.values()][0]!).encoding).toBe("base64");
+  });
+
+  it("leaves a value that is not bytes unmarked", async () => {
+    const raw = new Map<string, string>();
+    useTestStorage(jsonStorage(raw));
+    const fn = cachedFunction(() => ({ body: new Uint8Array([1, 2]) }), {
+      maxAge: 10,
+      name: "binNested",
+    });
+
+    await fn();
+    const stored = JSON.parse([...raw.values()][0]!);
+
+    // Only a value that *is* bytes takes this path. A view nested inside an object is the job
+    // of `serialize`/`transform`, and no marker claims otherwise.
+    expect("encoding" in stored).toBe(false);
+    expect(stored.value).toEqual({ body: { 0: 1, 1: 2 } });
+  });
+
+  it("keeps the stored form through expire()", async () => {
+    useTestStorage(jsonStorage(new Map()));
+    let callCount = 0;
+    const fn = cachedFunction(() => (callCount++ === 0 ? bytes : new Uint8Array([0x01])), {
+      maxAge: 10,
+      staleMaxAge: 100,
+      swr: true,
+      name: "binExpire",
+    });
+
+    await fn();
+    await fn.expire();
+    // `expireCache` rewrites the entry it read, so the stale value it serves next keeps the
+    // form it was stored in — the second resolution only replaces it in the background.
+    const stale = await fn();
+
+    expect(stale).toBeInstanceOf(Uint8Array);
+    expect([...stale]).toEqual([...bytes]);
+  });
+});
+
 describe("storage", () => {
   it("createMemoryStorage handles TTL expiry", async () => {
     const storage = createMemoryStorage();

@@ -52,6 +52,18 @@ import { rolldown } from "rolldown";
 // kB min / ~1.1 kB gzip of that back — but only for consumers who actually need it, which is
 // what the `#crypto` conditional import buys and what the two rows below measure.
 //
+// The ceilings then went unbumped through 43 commits of feature work (the body-size limit, the
+// 304 validator echo, the resolution deadline, native binary storage), and by the time the core
+// binary codec landed the neutral bundle sat at 125% of `min` and 122% of `minGzip`. A ceiling
+// nothing can pass says nothing about the next change, so both rows are re-based here on the
+// measured numbers — neutral 58_338 / 23_788 / 9_503, node 54_162 / 21_539 / 8_115 — with ~5%
+// of headroom: one small feature's worth of `min`, a few JSDoc paragraphs' worth of `raw`.
+//
+// The codec itself is ~1.8 kB raw, ~590 B min, ~185 B gzip of that. The consumer measured below
+// is a *handler*, which already pulled `src/base64.ts` in through `http/entry.ts`, so that delta
+// is the codec alone; a function-only consumer now reaches the same three encoders through
+// `cache.ts` and `hash.ts` and pays for them once.
+//
 // Both platforms are built, because the whole point of resolving the digest through a condition
 // is that the two answers differ, and a regression that inlined the portable sha256 everywhere
 // would be invisible in a single row. The gap between them *is* `lib/digest.mjs`.
@@ -67,8 +79,8 @@ type Platform = keyof typeof PLATFORMS;
 type SizeName = "raw" | "min" | "minGzip";
 
 const BUDGETS: Record<Platform, Record<SizeName, number>> = {
-  neutral: { raw: 52_000, min: 19_000, minGzip: 7800 },
-  node: { raw: 48_000, min: 17_000, minGzip: 6600 },
+  neutral: { raw: 61_000, min: 25_000, minGzip: 10_000 },
+  node: { raw: 57_000, min: 22_500, minGzip: 8500 },
 };
 
 // Absolute so the generated entry can live anywhere and still resolve ocache from source.

@@ -28,6 +28,8 @@ Reject an entry larger than the complete budget. Also remove any previous value 
 
 `binary` states that a value returns with its byte views intact, including views nested inside an entry — what actually reaches `set` is a `CacheEntry<ResponseCacheEntry>`, not a bare body. `createMemoryStorage` declares it because a `Map` holds the value by reference. `http/entry.ts` then stores a binary response body as a `Uint8Array` rather than base64 text, and derives a body ceiling of `maxEntryBytes / 2` instead of `maxEntryBytes / (8/3)`. See `.agents/http/response.md`.
 
+The flag has **two readers**, and they must stay one decision. `cache.ts` reads it for a cached function whose value is itself bytes, and stores base64 with a `CacheEntry.encoding` marker where the backend does not declare it. Neither reader may infer the capability from a value: a `Uint8Array` and the `{"0":255,...}` a serializing backend returns for one are both just values, and only the declaration says which the backend will hand back. See `.agents/cache.md`.
+
 A backend that serializes entries must leave it unset, and this cannot be inferred: JSON turns a view into `{"0":255,...}`, which is a plain object by the time anything could inspect it. Probing the backend with a test write was rejected — it writes to the consumer's store as a side effect and fails silently on exactly the backends it would need to catch. `validateEntry` is the safety net: a body that is neither a string nor a byte view is rejected on read, so a wrong declaration costs hits, never correctness.
 
 Holding values by reference is also why nothing may mutate a stored body. A declaring backend hands the same view to every hit, where base64 decoding allocated a fresh array each time.

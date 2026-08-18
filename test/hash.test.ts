@@ -343,13 +343,27 @@ b`,
     expect(serialize(new Uint8Array([1, 2]).buffer)).not.toBe(
       serialize(new Uint8Array([2, 1]).buffer),
     );
-    // A `DataView` has no `join`; it is read as the bytes it spans.
+    // A `DataView` has no elements; it is read as the bytes it spans.
     expect(serialize(new DataView(new Uint8Array([1, 2]).buffer))).toBe(
       serialize(new DataView(new Uint8Array([1, 2]).buffer)),
     );
     expect(serialize(new DataView(new Uint8Array([1, 2]).buffer))).not.toBe(
       serialize(new DataView(new Uint8Array([2, 1]).buffer)),
     );
+  });
+
+  it("renders bytes as base64 and multi-byte elements by value", () => {
+    // Decimal element values are about four characters and one string allocation per byte, and
+    // a byte-sized view has no element reading distinct from its bytes, so it renders compactly.
+    expect(serialize(new Uint8Array([255, 0, 128]))).toContain("/wCA");
+    expect(serialize(new Uint8Array([255, 0, 128]))).not.toContain("255,0,128");
+    expect(serialize(new Uint8Array([1, 2, 3]).buffer)).toContain("AQID");
+    expect(serialize(new DataView(new Uint8Array([1, 2, 3]).buffer))).toContain("AQID");
+    // A multi-byte view keeps its element rendering, which is what makes its hash independent
+    // of the machine's byte order. Base64 of its memory would not be.
+    expect(serialize(new Int32Array([1, 2]))).toContain("1,2");
+    // The length prefix still bounds the rendering, so no byte value can imitate a boundary.
+    expect(serialize({ a: new Uint8Array([255]) })).not.toBe(serialize({ a: new Uint8Array([]) }));
   });
 
   it("distinguishes class instances that share their own enumerable properties", () => {
