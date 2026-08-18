@@ -265,6 +265,16 @@ const keys = await resolveCacheKeys({
 
 ---
 
+### `resolveSignal`
+
+```ts
+function resolveSignal(event: HTTPEvent): AbortSignal | undefined;
+```
+
+The deadline signal of the resolution this event leads, if it leads one.
+
+---
+
 ### `StorageOption`
 
 ```ts
