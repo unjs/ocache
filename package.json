@@ -37,17 +37,17 @@
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
     "automd": "^0.4.3",
     "changelogen": "^0.6.2",
     "docs4ts": "^0.0.4",
     "mitata": "^1.0.34",
     "obuild": "^0.4.38",
-    "oxfmt": "^0.63.0",
-    "oxlint": "^1.78.0",
-    "rolldown": "^1.2.4",
+    "oxfmt": "^0.64.0",
+    "oxlint": "^1.79.0",
+    "rolldown": "^1.2.5",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
-  "packageManager": "pnpm@11.21.0"
+  "packageManager": "pnpm@11.22.0"
 }
