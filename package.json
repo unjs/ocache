@@ -37,7 +37,7 @@
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.0",
     "automd": "^0.4.3",
     "changelogen": "^0.6.2",
     "docs4ts": "^0.0.4",
@@ -47,7 +47,7 @@
     "oxlint": "^1.78.0",
     "rolldown": "^1.2.4",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.0"
   },
   "packageManager": "pnpm@11.21.0"
 }
