@@ -14,6 +14,12 @@ Use a running byte total. Recomputing the total would take O(cache) work for eve
 
 A leaked charge does not remove the budget. It makes the backend silently approach **evicting everything**. Tests must cover accounting for each removal path. The LRU update in `get` intentionally uses raw `map.delete` and `map.set`. It moves the same entry and its existing charge. It is not a charged deletion followed by insertion.
 
+## A TTL timer must survive the 32-bit limit
+
+Node holds a `setTimeout` delay in a signed 32-bit integer. A delay above `2**31 - 1` ms (~24.8 days) is clamped to **1 ms** with a `TimeoutOverflowWarning`, not rejected. `set(key, value, { ttl: 30 * 86_400 })` used to arm exactly that timer, so a 30-day `maxAge` deleted its entry 1 ms after every write and each call re-resolved. `get`'s lazy `expires` check was never wrong; the timer, which exists only to release the entry's bytes before something reads it, was the whole failure. Dropping the timer and relying on the lazy check alone was rejected: an expired entry would then hold its charge until a read or an LRU eviction found it.
+
+`scheduleTimer` is the only way to arm a timer in this file. It chains hops of at most `2**31 - 1` ms toward an absolute deadline and returns a cancel function, so `timers` holds cancels rather than handles, and `clearTimer` cancels whichever hop is armed. It also owns the `unref()` step. `withDeadline` in `cache.ts` imports it for the same reason, so a `maxResolveTime` above the limit no longer rejects after 1 ms. There is no maximum `maxAge`, `staleMaxAge`, or `ttl` beyond a double holding `Date.now() + ms`.
+
 ## An entry larger than the whole budget is refused
 
 Reject an entry larger than the complete budget. Also remove any previous value for its key. Storing the entry while permanently over budget is not valid. Evicting all other entries cannot make an oversized entry fit. It would instead create the single-request cache-flush denial of service from finding 14.2. Removing the previous value follows the requested `set`. Serving that old value afterward would falsely report what is cached. The next read misses and resolves again. The eviction loop checks for an empty map, so it always terminates.

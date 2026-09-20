@@ -67,6 +67,7 @@ Most findings in the deep dives came from violations of these rules.
 - **Never write an entry that has neither an expiry nor a storage TTL.** `storageTtl` is the only decision point. `remainingTtl` in `expireCache` derives from it.
 - **Storage must be per instance, never global.** Persistent backends also require deterministic keys across process restarts.
 - `cache.ts` and `storage.ts` export the shared internal functions `resolveName`, `definedOptions`, and `resolveStorage`. The function and handler paths must use these functions so they cannot differ. Both paths must resolve `name` **before** they merge defaults.
+- **Every timer goes through `scheduleTimer` in `storage.ts`.** Node clamps a `setTimeout` delay above `2**31 - 1` ms (~24.8 days) to 1 ms, so a raw `setTimeout(fn, seconds * 1000)` turns a 30-day `maxAge` or `maxResolveTime` into a 1 ms one. The helper chains hops toward the deadline and `unref`s each. The one exception is the `0` ms release in `error.ts`, which cannot overflow.
 - Pass every single segment of a `:`-joined key through `escapeKeySegment`. In `buildCacheKey` these are `group` and `name`. `base` keeps its raw `:` because that separates prefix tiers, and `key` is the terminal namespace whose producer escapes its own segments (`http/key.ts` escapes a custom key because the method component precedes it).
 
 ## Docs

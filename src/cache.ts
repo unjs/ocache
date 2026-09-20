@@ -3,7 +3,7 @@
 import { base64ToBytes, bytesToBase64 } from "./base64.ts";
 import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
 import { hash } from "./hash.ts";
-import { resolveStorage } from "./storage.ts";
+import { resolveStorage, scheduleTimer } from "./storage.ts";
 
 import type { StorageInterface, StorageOption } from "./storage.ts";
 import type { HTTPEvent, CacheEntry, CacheOptions, CacheStatus } from "./types.ts";
@@ -603,24 +603,20 @@ function withDeadline<T>(
   controller?: AbortController,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const cancel = scheduleTimer(() => {
       const error = timeoutError(seconds);
       // Reject before aborting, so the waiters' error is decided first: a resolver that
       // rejects on abort settles `work` one microtask too late to be seen here.
       reject(error);
       controller?.abort(error);
     }, seconds * 1000);
-    // Do not keep the process alive for a deadline timer.
-    if (timer && typeof timer === "object" && "unref" in timer) {
-      timer.unref();
-    }
     work.then(
       (value) => {
-        clearTimeout(timer);
+        cancel();
         resolve(value);
       },
       (error) => {
-        clearTimeout(timer);
+        cancel();
         reject(error);
       },
     );

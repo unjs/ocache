@@ -77,7 +77,7 @@ export function createMemoryStorage(opts: MemoryStorageOptions = {}): StorageInt
   const maxBytes = Number.isFinite(rawMaxBytes) && rawMaxBytes > 0 ? rawMaxBytes : undefined;
   const sizeOf = opts.sizeOf;
   const map = new Map<string, { value: unknown; expires?: number; bytes: number }>();
-  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  const timers = new Map<string, () => void>();
   // All removal paths must update this running byte total through `deleteEntry`.
   let totalBytes = 0;
 
@@ -137,14 +137,10 @@ export function createMemoryStorage(opts: MemoryStorageOptions = {}): StorageInt
       });
       totalBytes += bytes;
       if (ttlMs) {
-        const timer = setTimeout(() => {
-          deleteEntry(key);
-        }, ttlMs);
-        // Do not keep the process alive for cache timers.
-        if (timer && typeof timer === "object" && "unref" in timer) {
-          timer.unref();
-        }
-        timers.set(key, timer);
+        timers.set(
+          key,
+          scheduleTimer(() => deleteEntry(key), ttlMs),
+        );
       }
       // Map iteration returns the least-recently-used key first.
       if (maxSize || maxBytes) {
@@ -261,12 +257,36 @@ function isBuffer(value: object): value is ArrayBufferLike {
   );
 }
 
-function clearTimer(timers: Map<string, ReturnType<typeof setTimeout>>, key: string) {
-  const existing = timers.get(key);
-  if (existing !== undefined) {
-    clearTimeout(existing);
+function clearTimer(timers: Map<string, () => void>, key: string) {
+  const cancel = timers.get(key);
+  if (cancel !== undefined) {
+    cancel();
     timers.delete(key);
   }
+}
+
+// Node clamps a `setTimeout` delay above this to 1 ms (`TimeoutOverflowWarning`).
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * Schedules `fn` after `ms`, past the 32-bit timer limit, without keeping the process alive.
+ *
+ * A delay longer than {@link MAX_TIMER_MS} is chained: each hop re-arms for what remains,
+ * so a 30-day `maxAge` fires in 30 days rather than in 1 ms. Returns the cancel function.
+ * Shared with `withDeadline` in `cache.ts` so no timer in the cache can overflow.
+ */
+export function scheduleTimer(fn: () => void, ms: number): () => void {
+  const at = Date.now() + ms;
+  let timer: ReturnType<typeof setTimeout>;
+  const arm = (delay: number) => {
+    const chained = delay > MAX_TIMER_MS;
+    timer = setTimeout(chained ? () => arm(at - Date.now()) : fn, chained ? MAX_TIMER_MS : delay);
+    if (timer && typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+  };
+  arm(ms);
+  return () => clearTimeout(timer);
 }
 
 /**

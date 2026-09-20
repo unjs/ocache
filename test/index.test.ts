@@ -2520,6 +2520,105 @@ describe("storage", () => {
     expect(storage.get("key-1999")).toBe(1999);
   });
 
+  // Node clamps a `setTimeout` delay above 2**31 - 1 ms (~24.8 days) to 1 ms and emits a
+  // `TimeoutOverflowWarning`. A 30-day `maxAge` used to arm exactly that timer, so the entry
+  // was deleted 1 ms after it was written and every call re-resolved. `scheduleTimer` chains
+  // hops instead; `get`'s lazy expiry check was already correct and is not what these cover.
+  describe("lifetimes past the 32-bit timer limit", () => {
+    const THIRTY_DAYS = 30 * 86_400;
+    const byLength = (value: unknown) => (typeof value === "string" ? value.length : 1);
+
+    /** Collects the process warnings Node emits until `stop()` is called. */
+    function collectWarnings() {
+      const names: string[] = [];
+      const onWarning = (w: Error) => names.push(w.name);
+      process.on("warning", onWarning);
+      return {
+        names,
+        stop: () => process.off("warning", onWarning),
+      };
+    }
+
+    it("serves a 30-day maxAge entry after the first millisecond, without a warning", async () => {
+      const warnings = collectWarnings();
+      try {
+        let calls = 0;
+        const fn = _defineCachedFunction(async () => ++calls, {
+          name: "thirtyDays",
+          maxAge: THIRTY_DAYS,
+        });
+        expect(await fn()).toBe(1);
+        // Well past the 1 ms the clamped timer would have fired at; warnings arrive on a tick.
+        await new Promise((r) => setTimeout(r, 20));
+        expect(await fn()).toBe(1);
+        expect(calls).toBe(1);
+        expect(warnings.names).not.toContain("TimeoutOverflowWarning");
+      } finally {
+        warnings.stop();
+      }
+    });
+
+    it("keeps a 30-day storage TTL past the first millisecond", async () => {
+      const warnings = collectWarnings();
+      try {
+        const storage = createMemoryStorage();
+        storage.set("long", "value", { ttl: THIRTY_DAYS });
+        await new Promise((r) => setTimeout(r, 20));
+        expect(storage.get("long")).toBe("value");
+        expect(warnings.names).toEqual([]);
+      } finally {
+        warnings.stop();
+      }
+    });
+
+    it("still reclaims the entry when the chained timer reaches the TTL", () => {
+      vi.useFakeTimers();
+      try {
+        const storage = createMemoryStorage({ maxBytes: 10, sizeOf: byLength });
+        storage.set("a", "123456789", { ttl: THIRTY_DAYS });
+        // Past the first hop but short of the TTL: the timer must not have fired yet.
+        vi.advanceTimersByTime(25 * 86_400_000);
+        expect(storage.get("a")).toBe("123456789");
+        vi.advanceTimersByTime(5 * 86_400_000 + 1000);
+        // Fits only if the timer, not a read, released "a"'s 9 bytes.
+        storage.set("b", "123456789");
+        expect(storage.get("b")).toBe("123456789");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancels a chained timer that has already hopped once", () => {
+      vi.useFakeTimers();
+      try {
+        const storage = createMemoryStorage();
+        storage.set("a", "old", { ttl: THIRTY_DAYS });
+        vi.advanceTimersByTime(25 * 86_400_000);
+        // Overwriting clears the timer; a stale hop would otherwise delete the new entry.
+        storage.set("a", "new");
+        vi.advanceTimersByTime(10 * 86_400_000);
+        expect(storage.get("a")).toBe("new");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets a resolver finish under a maxResolveTime longer than the timer limit", async () => {
+      const warnings = collectWarnings();
+      try {
+        const fn = _defineCachedFunction(
+          () => new Promise<string>((r) => setTimeout(() => r("done"), 10)),
+          { name: "longDeadline", maxAge: 10, maxResolveTime: THIRTY_DAYS },
+        );
+        // Used to reject with a `TimeoutError` after 1 ms.
+        expect(await fn()).toBe("done");
+        expect(warnings.names).toEqual([]);
+      } finally {
+        warnings.stop();
+      }
+    });
+  });
+
   // Finding 14.1: `maxSize` bounds entry *count*, never bytes — measured, 10 000 × 1 MB
   // documents retained 10 GB of RSS, and because that is external/large-object memory the
   // process is OOM-killed rather than throwing a catchable RangeError. `maxBytes` is the
