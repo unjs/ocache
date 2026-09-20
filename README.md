@@ -359,6 +359,20 @@ The status of the foreground resolution this event leads, if it leads one.
 
 ---
 
+### `scheduleTimer`
+
+```ts
+function scheduleTimer(fn: () => void, ms: number): () => void;
+```
+
+Schedules `fn` after `ms`, past the 32-bit timer limit, without keeping the process alive.
+
+A delay longer than [`MAX_TIMER_MS`](#max_timer_ms) is chained: each hop re-arms for what remains,
+so a 30-day `maxAge` fires in 30 days rather than in 1 ms. Returns the cancel function.
+Shared with `withDeadline` in `cache.ts` so no timer in the cache can overflow.
+
+---
+
 ### `StorageOption`
 
 ```ts
