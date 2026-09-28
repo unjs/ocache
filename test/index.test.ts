@@ -253,6 +253,35 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(1);
   });
 
+  // nitrojs/nitro#4660: with a slow backend, a call that read storage before the leader's
+  // write landed found neither the new entry nor a pending resolution, and resolved again.
+  it("deduplicates a call that misses a write still landing", async () => {
+    const memory = createMemoryStorage();
+    let land!: () => void;
+    const landed = new Promise<void>((resolve) => {
+      land = resolve;
+    });
+    useTestStorage({
+      get: (key) => memory.get(key),
+      set: async (key, value, opts) => {
+        await landed;
+        await memory.set(key, value, opts);
+      },
+    });
+    let callCount = 0;
+    const fn = defineCachedFunction(() => ++callCount, { maxAge: 10 });
+
+    expect(await fn()).toBe(1);
+    // Storage has nothing yet, so this call misses it.
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+
+    land();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+  });
+
   // Regression: issue #3 — swr=false concurrent requests on expired entry should still dedup
   it("swr=false deduplicates concurrent requests on expired entry", async () => {
     let resolveCount = 0;
@@ -9085,6 +9114,24 @@ describe("maxResolveTime", () => {
     // Cached, not just resolved.
     expect(await fn()).toBe("healthy");
     expect(calls).toBe(2);
+  });
+
+  // A leader holds its slot until its write lands; the deadline bounds that wait too, so a
+  // `set` that never settles cannot pin the key to one resolution.
+  it("releases a slot whose storage write never lands", async () => {
+    useTestStorage({ get: () => null, set: () => new Promise<void>(() => {}) });
+    let calls = 0;
+    const fn = defineCachedFunction(() => ++calls, {
+      maxAge: 10,
+      name: "hangWrite",
+      maxResolveTime: 0.02,
+    });
+
+    expect(await fn()).toBe(1);
+    // Within the deadline the next call still follows the first resolution.
+    expect(await fn()).toBe(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await fn()).toBe(2);
   });
 
   // Also the unit guard: the deadline is **seconds**, so `1` is a full second and a resolver

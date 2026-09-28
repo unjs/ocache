@@ -67,6 +67,11 @@ Three decisions inside that:
 
 `pending` must be a **`Map`, never a plain object**. Keys are controlled by callers through documented code such as `getKey: (id) => id`. A plain object inherits from `Object.prototype`. Therefore, `pending["constructor"]`, `pending["toString"]`, and `pending["__proto__"]` can be truthy when no work is in progress. Earlier code treated such a call as a follower. It awaited the inherited member, which was not a thenable and resolved to itself. It did not call the resolver and cached `undefined`. `defineCachedFunction` failed silently. `defineCachedHandler` produced a permanent `TypeError` because `transform` read `undefined.headers`. A custom `getKey` was required to trigger this error. This was unsafe prototype-chain reading, not prototype pollution.
 
+**A leader holds its slot until its write lands**, not just until the write is decided. A call reads storage before it looks at `pending`, so a call whose read raced the write missed the new entry. When the slot was already free, it became a leader and ran the resolver again. With a slow backend and an instant resolver, nearly every call in that window did: nitrojs/nitro#4660 reported 307 handler runs in 12 s against the `fs` driver instead of 3, and a delayed in-memory backend (2 ms read, 10 ms write, 40 concurrent callers, `maxAge: 1`, `swr`) ran it 240 times in 3 s. Holding the slot makes those calls followers of the settled resolution, which brings that run to 4–6. A read that started before the write landed and finishes after the release still misses; that remainder needs the read to know it is outdated, which the storage interface cannot tell it.
+
+- The hold is bounded by `maxResolveTime`, recorded as `holdUntil` on the token and checked lazily by the next caller. A `set` that never settles therefore cannot pin the key to one value, and no timer is armed per resolution. A disabled deadline holds until the write lands, like a resolution without a deadline.
+- The release goes through `releasePending`, so it cannot remove a newer leader's slot, and a purge that fences the token during the write still drops it from `pending` at once.
+
 ## Resolution deadline
 
 **`maxResolveTime` uses seconds and defaults to `30`.** It limits one shared in-flight resolution. The limit covers the resolver and the `getMaxAge` and `serialize` hooks in the same `pending` promise through `withDeadline`. `Infinity`, `0`, and negative values disable the limit. This matches `createMemoryStorage` normalization. Hooks must be included because `serialize` can drain a body that never ends. A limit around only `resolver()` would miss the measured failure.
@@ -93,7 +98,7 @@ The returned function provides `.resolveKeys(...args)`, `.invalidate(...args)`, 
 
 ### In-flight fence
 
-A purge must also beat work that started **before** it. `pending` holds one token per key, `{ promise, fenced? }`. `.invalidate()` and `.expire()` set `fenced` on the current token and drop it from `pending` before they touch storage. `writes` holds the in-flight storage write per key, and the purge **awaits** it before it touches storage.
+A purge must also beat work that started **before** it. `pending` holds one token per key, `{ promise, fenced?, holdUntil? }`. `.invalidate()` and `.expire()` set `fenced` on the current token and drop it from `pending` before they touch storage. `writes` holds the in-flight storage write per key, and the purge **awaits** it before it touches storage.
 
 Without the fence, a resolver that started before the purge wrote its pre-purge value back to the key after `invalidateCache` had already removed it. The cache then served pre-purge data for a full `maxAge`. The default `maxResolveTime` makes that window up to 30 s wide. `expire` had the same defect: the late write cleared `stale`.
 
