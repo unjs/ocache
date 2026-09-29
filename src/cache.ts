@@ -327,8 +327,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         throw error;
       }
 
-      // Leaders and followers use the same serialized value.
-      entry.value = resolved.value;
+      // Leaders and followers use the same serialized value. A stale follower is served the
+      // stored value: a resolution that still holds the key after settling would otherwise
+      // replace it before the serve path returns.
+      if (!isPending || status !== "stale") {
+        entry.value = resolved.value;
+      }
 
       if (!isPending) {
         entry.mtime = Date.now();

@@ -282,6 +282,42 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(1);
   });
 
+  // A stale call that follows a settled refresh while its write lands is still served the
+  // stored value, like every other stale call.
+  it("serves the stored value to a stale call that follows a write still landing", async () => {
+    const memory = createMemoryStorage();
+    let gate: Promise<void> | undefined;
+    useTestStorage({
+      get: (key) => memory.get(key),
+      set: async (key, value, opts) => {
+        await gate;
+        await memory.set(key, value, opts);
+      },
+    });
+    let callCount = 0;
+    const fn = defineCachedFunction(() => ++callCount, { maxAge: 10, swr: true });
+
+    expect(await fn()).toBe(1);
+    await fn.expire();
+    let land!: () => void;
+    gate = new Promise<void>((resolve) => {
+      land = resolve;
+    });
+    // Served stale; the background refresh settles and its write waits for `land`.
+    expect(await fn()).toBe(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(callCount).toBe(2);
+
+    // Storage still holds the stale entry, so this call is stale too.
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(2);
+
+    land();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await fn()).toBe(2);
+    expect(callCount).toBe(2);
+  });
+
   // Regression: issue #3 — swr=false concurrent requests on expired entry should still dedup
   it("swr=false deduplicates concurrent requests on expired entry", async () => {
     let resolveCount = 0;

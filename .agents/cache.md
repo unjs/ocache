@@ -71,6 +71,7 @@ Three decisions inside that:
 
 - The hold is bounded by `maxResolveTime`, recorded as `holdUntil` on the token and checked lazily by the next caller. A `set` that never settles therefore cannot pin the key to one value, and no timer is armed per resolution. A disabled deadline holds until the write lands, like a resolution without a deadline.
 - The release goes through `releasePending`, so it cannot remove a newer leader's slot, and a purge that fences the token during the write still drops it from `pending` at once.
+- A follower of a held slot awaits a promise that has already settled, so it resumes within a microtask, before the serve path returns. A **stale** follower therefore does not take the resolved value: it is served the stored value, as every stale call is (see the synchronous SWR note under `maxResolveTime`). Its `status` is the gate, the same one `resolveStatuses` uses.
 
 ## Resolution deadline
 
