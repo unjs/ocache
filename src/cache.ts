@@ -26,6 +26,8 @@ type PendingResolution<T> = {
   promise: Promise<{ value: T; maxAge?: number; staleMaxAge?: number }>;
   /** Set when a purge ran while this resolution was in flight. */
   fenced?: boolean;
+  /** Set while a settled resolution waits for its write to land: when it stops holding the key. */
+  holdUntil?: number;
 };
 
 // A purge must reach the in-flight resolutions of the instance it targets.
@@ -113,11 +115,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const earlier = writes.get(key);
     const tracked = earlier ? earlier.then(() => write) : write;
     writes.set(key, tracked);
-    void tracked.then(() => {
+    const forget = () => {
       if (writes.get(key) === tracked) {
         writes.delete(key);
       }
-    });
+    };
+    void tracked.then(forget, forget);
     return tracked;
   };
 
@@ -245,6 +248,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
 
     const resolveEntry = async () => {
       let current = pending.get(key);
+      // A write that has not landed within the deadline no longer holds the key.
+      if (current?.holdUntil !== undefined && Date.now() > current.holdUntil) {
+        releasePending(key, current);
+        current = undefined;
+      }
       const isPending = current !== undefined;
       if (!current) {
         if (entry.value !== undefined && (opts.staleMaxAge || 0) >= 0 && opts.swr === false) {
@@ -320,8 +328,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         throw error;
       }
 
-      // Leaders and followers use the same serialized value.
-      entry.value = resolved.value;
+      // Leaders and followers use the same serialized value. A stale follower is served the
+      // stored value: a resolution that still holds the key after settling would otherwise
+      // replace it before the serve path returns.
+      if (!isPending || status !== "stale") {
+        entry.value = resolved.value;
+      }
 
       if (!isPending) {
         entry.mtime = Date.now();
@@ -337,6 +349,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           entry.staleMaxAge ?? opts.staleMaxAge,
           opts.swr,
         );
+        let landing: Promise<void> | undefined;
         try {
           const isValid = (await validate(entry, validateCtx)) !== false;
           // A purge that ran during this resolution wins. Check it as late as possible.
@@ -370,6 +383,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             // Register before the next await so no purge can slip in unnoticed.
             trackWrite(key, promise);
             waitUntil(promise);
+            landing = promise;
           } else if (hitIndex >= 0) {
             // Remove an old entry when its replacement cannot be stored.
             const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
@@ -381,7 +395,19 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           }
         } finally {
           // Hold the slot until the write is decided so a purge can still fence it.
-          releasePending(key, current);
+          if (landing) {
+            // A call whose read raced this write missed it; it follows this resolution until
+            // the write lands, bounded like the resolution so a stalled `set` cannot pin the key.
+            if (maxResolveTime) {
+              current.holdUntil = Date.now() + maxResolveTime * 1000;
+            }
+            const held = current;
+            const release = () => releasePending(key, held);
+            // A write that fails (and an `onError` that rethrows) still releases the slot.
+            void landing.then(release, release);
+          } else {
+            releasePending(key, current);
+          }
         }
       }
     };
