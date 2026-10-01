@@ -115,11 +115,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const earlier = writes.get(key);
     const tracked = earlier ? earlier.then(() => write) : write;
     writes.set(key, tracked);
-    void tracked.then(() => {
+    const forget = () => {
       if (writes.get(key) === tracked) {
         writes.delete(key);
       }
-    });
+    };
+    void tracked.then(forget, forget);
     return tracked;
   };
 
@@ -401,7 +402,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
               current.holdUntil = Date.now() + maxResolveTime * 1000;
             }
             const held = current;
-            void landing.then(() => releasePending(key, held));
+            const release = () => releasePending(key, held);
+            // A write that fails (and an `onError` that rethrows) still releases the slot.
+            void landing.then(release, release);
           } else {
             releasePending(key, current);
           }

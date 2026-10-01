@@ -9170,6 +9170,25 @@ describe("maxResolveTime", () => {
     expect(await fn()).toBe(2);
   });
 
+  // A failed write releases the slot too, even when `onError` rethrows and no deadline is set.
+  it("releases a slot whose storage write fails and onError throws", async () => {
+    useTestStorage({ get: () => null, set: () => Promise.reject(new Error("set failed")) });
+    let calls = 0;
+    const fn = defineCachedFunction(() => ++calls, {
+      maxAge: 10,
+      name: "failWrite",
+      maxResolveTime: 0,
+      onError: (error) => {
+        throw error;
+      },
+    });
+
+    expect(await fn()).toBe(1);
+    await new Promise((r) => setTimeout(r, 0));
+    // Nothing was stored, so the next call resolves again instead of following the first.
+    expect(await fn()).toBe(2);
+  });
+
   // Also the unit guard: the deadline is **seconds**, so `1` is a full second and a resolver
   // that takes 10ms is nowhere near it. Read as milliseconds it would fire at ~1ms — before
   // the resolver settles — and this test would fail. (The tests where a timeout *does* fire
