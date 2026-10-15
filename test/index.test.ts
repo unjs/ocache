@@ -253,6 +253,71 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(1);
   });
 
+  // nitrojs/nitro#4660: with a slow backend, a call that read storage before the leader's
+  // write landed found neither the new entry nor a pending resolution, and resolved again.
+  it("deduplicates a call that misses a write still landing", async () => {
+    const memory = createMemoryStorage();
+    let land!: () => void;
+    const landed = new Promise<void>((resolve) => {
+      land = resolve;
+    });
+    useTestStorage({
+      get: (key) => memory.get(key),
+      set: async (key, value, opts) => {
+        await landed;
+        await memory.set(key, value, opts);
+      },
+    });
+    let callCount = 0;
+    const fn = defineCachedFunction(() => ++callCount, { maxAge: 10 });
+
+    expect(await fn()).toBe(1);
+    // Storage has nothing yet, so this call misses it.
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+
+    land();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(1);
+  });
+
+  // A stale call that follows a settled refresh while its write lands is still served the
+  // stored value, like every other stale call.
+  it("serves the stored value to a stale call that follows a write still landing", async () => {
+    const memory = createMemoryStorage();
+    let gate: Promise<void> | undefined;
+    useTestStorage({
+      get: (key) => memory.get(key),
+      set: async (key, value, opts) => {
+        await gate;
+        await memory.set(key, value, opts);
+      },
+    });
+    let callCount = 0;
+    const fn = defineCachedFunction(() => ++callCount, { maxAge: 10, swr: true });
+
+    expect(await fn()).toBe(1);
+    await fn.expire();
+    let land!: () => void;
+    gate = new Promise<void>((resolve) => {
+      land = resolve;
+    });
+    // Served stale; the background refresh settles and its write waits for `land`.
+    expect(await fn()).toBe(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(callCount).toBe(2);
+
+    // Storage still holds the stale entry, so this call is stale too.
+    expect(await fn()).toBe(1);
+    expect(callCount).toBe(2);
+
+    land();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await fn()).toBe(2);
+    expect(callCount).toBe(2);
+  });
+
   // Regression: issue #3 — swr=false concurrent requests on expired entry should still dedup
   it("swr=false deduplicates concurrent requests on expired entry", async () => {
     let resolveCount = 0;
@@ -9085,6 +9150,43 @@ describe("maxResolveTime", () => {
     // Cached, not just resolved.
     expect(await fn()).toBe("healthy");
     expect(calls).toBe(2);
+  });
+
+  // A leader holds its slot until its write lands; the deadline bounds that wait too, so a
+  // `set` that never settles cannot pin the key to one resolution.
+  it("releases a slot whose storage write never lands", async () => {
+    useTestStorage({ get: () => null, set: () => new Promise<void>(() => {}) });
+    let calls = 0;
+    const fn = defineCachedFunction(() => ++calls, {
+      maxAge: 10,
+      name: "hangWrite",
+      maxResolveTime: 0.02,
+    });
+
+    expect(await fn()).toBe(1);
+    // Within the deadline the next call still follows the first resolution.
+    expect(await fn()).toBe(1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await fn()).toBe(2);
+  });
+
+  // A failed write releases the slot too, even when `onError` rethrows and no deadline is set.
+  it("releases a slot whose storage write fails and onError throws", async () => {
+    useTestStorage({ get: () => null, set: () => Promise.reject(new Error("set failed")) });
+    let calls = 0;
+    const fn = defineCachedFunction(() => ++calls, {
+      maxAge: 10,
+      name: "failWrite",
+      maxResolveTime: 0,
+      onError: (error) => {
+        throw error;
+      },
+    });
+
+    expect(await fn()).toBe(1);
+    await new Promise((r) => setTimeout(r, 0));
+    // Nothing was stored, so the next call resolves again instead of following the first.
+    expect(await fn()).toBe(2);
   });
 
   // Also the unit guard: the deadline is **seconds**, so `1` is a full second and a resolver
