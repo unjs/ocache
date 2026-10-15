@@ -268,7 +268,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
     // Only a handler sets `last-modified`, so a stored entry often has none.
     const modifiedTime = response.headers["last-modified"] as string | undefined;
+    // A MISS hands back the serialized entry even when `validate` refused to store it, and
+    // a status outside the allowlist has no representation a 304 could stand in for.
     if (
+      isCacheableStatus(response.status) &&
       handleCacheHeaders(event, {
         ...requestConditions,
         modifiedTime: modifiedTime ? new Date(modifiedTime) : undefined,

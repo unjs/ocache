@@ -76,8 +76,13 @@ function buildEntry<E extends HTTPEvent>(
 
   // Text and base64 share one value space: the text `/w==` and the byte 0xff hash alike.
   // The binary tag digests the bytes rather than a storage form, so one representation keeps
-  // one validator whichever backend holds it.
-  const etag = text === undefined ? `W/"b${hashBytes(bytes)}"` : `W/"${hash(text)}"`;
+  // one validator whichever backend holds it. A status that is never stored has no
+  // representation to validate, so it gets no tag.
+  const etag = !isCacheableStatus(res.status)
+    ? undefined
+    : text === undefined
+      ? `W/"b${hashBytes(bytes)}"`
+      : `W/"${hash(text)}"`;
   const headers = buildHeaders(config, entry, res, etag);
 
   const cacheEntry: ResponseCacheEntry = {
@@ -164,7 +169,8 @@ async function streamBody<E extends HTTPEvent>(
   return buildEntry(config, entry, res, concatChunks(chunks, size), storage);
 }
 
-// Synthesize the stored and served headers. The etag is absent for a body still being read.
+// Synthesize the stored and served headers. The etag is absent for a body still being read
+// and for a status that is never stored.
 function buildHeaders<E extends HTTPEvent>(
   config: HandlerConfig<E>,
   entry: CacheEntry<Response>,
