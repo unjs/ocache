@@ -8254,6 +8254,135 @@ describe("defineCachedHandler", () => {
       expect(callCount).toBe(2);
     });
   }
+
+  // https://github.com/unjs/ocache/issues/37
+  describe("cacheableStatusCodes", () => {
+    for (const status of [404, 410]) {
+      it(`stores, serves and advertises a listed ${status}`, async () => {
+        let callCount = 0;
+        const path = uniquePath();
+        const handler = defineCachedHandler(
+          () => {
+            callCount++;
+            return new Response("missing", { status });
+          },
+          { maxAge: 60, cacheableStatusCodes: [404, 410] },
+        );
+
+        const r1 = (await handler(makeEvent(path))) as Response;
+        expect(r1.status).toBe(status);
+        expect(r1.headers.get("cache-control")).toBe("max-age=60");
+        expect(r1.headers.get("etag")).toBeTruthy();
+
+        const r2 = (await handler(makeEvent(path))) as Response;
+        expect(r2.status).toBe(status);
+        expect(await r2.text()).toBe("missing");
+        expect(r2.headers.get("x-cache")).toBe("HIT");
+        expect(callCount).toBe(1);
+
+        // Preconditions do not apply to an error response (RFC 9110 §13.2.1): a matching
+        // validator still gets the stored error, never a 304.
+        const r3 = (await handler(
+          makeEvent(path, { headers: { "if-none-match": r1.headers.get("etag")! } }),
+        )) as Response;
+        expect(r3.status).toBe(status);
+        expect(await r3.text()).toBe("missing");
+      });
+    }
+
+    it("widens the built-in set instead of replacing it", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("", { status: 301, headers: { location: "/new" } });
+        },
+        { maxAge: 60, cacheableStatusCodes: [404] },
+      );
+
+      await handler(makeEvent(path));
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(res.status).toBe(301);
+      expect(res.headers.get("x-cache")).toBe("HIT");
+      expect(callCount).toBe(1);
+    });
+
+    it("leaves unlisted statuses uncached", async () => {
+      let callCount = 0;
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          callCount++;
+          return new Response("boom", { status: 500 });
+        },
+        { maxAge: 60, cacheableStatusCodes: [404] },
+      );
+
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(res.headers.get("cache-control")).toBeNull();
+      await handler(makeEvent(path));
+      expect(callCount).toBe(2);
+    });
+
+    it("keeps every other check for a listed status", async () => {
+      let optedOut = 0;
+      const noStore = defineCachedHandler(
+        () => {
+          optedOut++;
+          return new Response("missing", { status: 404, headers: { "cache-control": "no-store" } });
+        },
+        { maxAge: 60, cacheableStatusCodes: [404] },
+      );
+      const noStorePath = uniquePath();
+      await noStore(makeEvent(noStorePath));
+      await noStore(makeEvent(noStorePath));
+      expect(optedOut).toBe(2);
+
+      let rejected = 0;
+      const refused = defineCachedHandler(
+        () => {
+          rejected++;
+          return new Response("missing", { status: 404 });
+        },
+        { maxAge: 60, cacheableStatusCodes: [404], shouldCache: (entry) => entry.status < 400 },
+      );
+      const refusedPath = uniquePath();
+      await refused(makeEvent(refusedPath));
+      await refused(makeEvent(refusedPath));
+      expect(rejected).toBe(2);
+    });
+
+    it("never turns a listed error status into a 304 in headersOnly mode", async () => {
+      const handler = defineCachedHandler(
+        () => new Response("missing", { status: 404, headers: { etag: '"v1"' } }),
+        { maxAge: 60, headersOnly: true, cacheableStatusCodes: [404] },
+      );
+      const res = (await handler(
+        makeEvent(uniquePath(), { headers: { "if-none-match": '"v1"' } }),
+      )) as Response;
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe("missing");
+    });
+
+    for (const status of [0, 99, 199, 600, 404.5, Number.NaN]) {
+      it(`refuses ${status}, which no Response can carry`, () => {
+        expect(() =>
+          defineCachedHandler(() => new Response("ok"), { cacheableStatusCodes: [status] }),
+        ).toThrow(`\`cacheableStatusCodes\` cannot include ${status}.`);
+      });
+    }
+
+    for (const status of [204, 205, 206, 304]) {
+      it(`refuses ${status}, which has no complete representation`, () => {
+        expect(() =>
+          defineCachedHandler(() => new Response(null, { status: 204 }), {
+            cacheableStatusCodes: [404, status],
+          }),
+        ).toThrow(`\`cacheableStatusCodes\` cannot include ${status}`);
+      });
+    }
+  });
 });
 
 describe("resolveCacheKeys", () => {

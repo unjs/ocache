@@ -18,7 +18,7 @@ import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
 import { isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
 import { closeStreamChannel, openStreamChannel } from "./stream.ts";
-import { isCacheableStatus, validateEntry } from "./validate.ts";
+import { isConditionalStatus, validateEntry } from "./validate.ts";
 
 import type {
   HTTPEvent,
@@ -72,7 +72,7 @@ function defaultToResponse(value: unknown): Response {
  * Wraps an HTTP handler with response caching and conditional response support.
  *
  * Only GET and HEAD requests without Range are cacheable.
- * Only 200, 203, 301, and 308 responses are stored.
+ * Only 200, 203, 301, and 308 responses are stored, plus any listed in `cacheableStatusCodes`.
  * Response Cache-Control and Vary headers can prevent storage.
  *
  * @param handler - Handler to cache.
@@ -172,7 +172,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // there are: run it first, then answer a matching conditional request with 304.
       const live = await toResponse(await handler(event), event);
       // A 304 needs a cacheable method and a representation to be current.
-      if (isBypassedMethod(event) || !isCacheableStatus(live.status)) {
+      if (isBypassedMethod(event) || !isConditionalStatus(live.status)) {
         return live;
       }
       const lastModified = live.headers.get("last-modified");
@@ -269,9 +269,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // Only a handler sets `last-modified`, so a stored entry often has none.
     const modifiedTime = response.headers["last-modified"] as string | undefined;
     // A MISS hands back the serialized entry even when `validate` refused to store it, and
-    // a status outside the allowlist has no representation a 304 could stand in for.
+    // a 304 stands in only for a built-in status, never a stored error such as a 404.
     if (
-      isCacheableStatus(response.status) &&
+      isConditionalStatus(response.status) &&
       handleCacheHeaders(event, {
         ...requestConditions,
         modifiedTime: modifiedTime ? new Date(modifiedTime) : undefined,

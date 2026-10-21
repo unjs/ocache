@@ -401,4 +401,18 @@ export interface CachedEventHandlerOptions<E extends HTTPEvent = HTTPEvent> exte
    * ```
    */
   shouldCache?: (entry: ResponseCacheEntry) => boolean | Promise<boolean>;
+
+  /**
+   * Additional response statuses to store and advertise, such as `404` or `410`.
+   *
+   * Widens the built-in set (`200`, `203`, `301`, `308`) and never replaces it;
+   * `shouldCache` narrows. Every other check still applies.
+   * `204`, `205`, `206` and `304` have no complete representation to replay and throw.
+   *
+   * @example
+   * ```ts
+   * cacheableStatusCodes: [404, 410],
+   * ```
+   */
+  cacheableStatusCodes?: number[];
 }
