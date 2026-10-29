@@ -125,6 +125,7 @@ async function streamBody<E extends HTTPEvent>(
   listener({
     body: sink.body,
     init: { status: res.status, statusText: res.statusText, headers },
+    status,
   });
 
   const reader = res.body!.getReader();

@@ -22,6 +22,7 @@ src/
 │   ├── cache-control.ts # RFC 9111 directive parser (no policy, just syntax)
 │   ├── vary.ts          # Vary merging and the two response-`Vary` predicates
 │   ├── conditional.ts   # 304 decisions and the headers a 304 must echo
+│   ├── status.ts        # `getCacheStatus`: how the last cached handler served an event
 │   └── stream.ts        # Opt-in `stream`: the fill's body, served while it is still read
 ├── error.ts        # Every error class and user-visible error message
 ├── hash.ts         # `hash`/`serialize`: cache keys + integrity, digest via `#crypto`
@@ -39,21 +40,21 @@ bench/              # Two layers: what a hit costs, and what a hit buys
 └── scenarios/      # 5 handler + 2 function workloads
 ```
 
-Each mechanism belongs in the module whose name describes it. `http/index.ts` contains only the connection to `cachedFunction`, the `CacheOptions` hooks, the resolver, the serve path, and the revalidation helpers. The `http/` dependency graph is a DAG. `cache-control.ts`, `vary.ts`, `conditional.ts`, `stream.ts`, and `config.ts` do not import from the directory.
+Each mechanism belongs in the module whose name describes it. `http/index.ts` contains only the connection to `cachedFunction`, the `CacheOptions` hooks, the resolver, the serve path, and the revalidation helpers. The `http/` dependency graph is a DAG. `cache-control.ts`, `vary.ts`, `conditional.ts`, `stream.ts`, `status.ts`, and `config.ts` do not import from the directory.
 
 ## Deep dives (`.agents/`)
 
 The `.agents/` layout matches `src/`. Before you edit an area, read the file that covers it. These files record measured symptoms, rejected alternatives, and reasons for the current design. Code comments only refer to these details.
 
-| File                       | Covers                                                                                                   |
-| -------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `.agents/cache.md`         | `cache.ts`: `name`, option merging, lifetimes/storage TTL, dedup + deadline, hooks, purge, `waitUntil`   |
-| `.agents/http/key.md`      | `http/key.ts`: key shape (name, method, authority) + the revalidation helpers                            |
-| `.agents/http/request.md`  | `http/request.ts` (+ `config.ts`, `filters.ts`): bypass, narrowing, cookies/credentials                  |
-| `.agents/http/response.md` | `http/entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`, `base64.ts`             |
-| `.agents/http/stream.md`   | `http/stream.ts`: opt-in streamed fills, the foreground gate, what a streamed response gives up          |
-| `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`, the blob frame, layered stacks |
-| `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable               |
+| File                       | Covers                                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `.agents/cache.md`         | `cache.ts`: `name`, option merging, lifetimes/storage TTL, dedup + deadline, hooks, purge, `waitUntil`    |
+| `.agents/http/key.md`      | `http/key.ts`: key shape (name, method, authority) + the revalidation helpers                             |
+| `.agents/http/request.md`  | `http/request.ts` (+ `config.ts`, `filters.ts`): bypass, narrowing, cookies/credentials                   |
+| `.agents/http/response.md` | `http/entry.ts`, `validate.ts`, `vary.ts`, `cache-control.ts`, `conditional.ts`, `status.ts`, `base64.ts` |
+| `.agents/http/stream.md`   | `http/stream.ts`: opt-in streamed fills, the foreground gate, what a streamed response gives up           |
+| `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`, the blob frame, layered stacks  |
+| `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable                |
 
 ## Cross-module invariants
 
