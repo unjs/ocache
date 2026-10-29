@@ -5561,6 +5561,81 @@ describe("defineCachedHandler", () => {
     expect(m1.headers.getSetCookie()).toEqual([]);
   });
 
+  it("keeps Server-Timing on the response that ran the handler, never on hits", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`, {
+          headers: { "server-timing": `db;dur=${callCount}` },
+        });
+      },
+      { maxAge: 10, swr: false },
+    );
+
+    const miss = (await handler(makeEvent(path))) as Response;
+    const hit = (await handler(makeEvent(path))) as Response;
+
+    // The metrics describe the request that filled the entry: they reach that caller only.
+    expect(callCount).toBe(1);
+    expect(miss.headers.get("x-cache")).toBe("MISS");
+    expect(miss.headers.get("server-timing")).toBe("db;dur=1");
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+    expect(hit.headers.get("server-timing")).toBeNull();
+    expect(await hit.text()).toBe("call-1");
+  });
+
+  it("does not share Server-Timing across concurrent (coalesced) callers", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "server-timing": "db;dur=1" } }),
+      { maxAge: 10 },
+    );
+
+    const [leader, follower] = (await Promise.all([
+      handler(makeEvent(path)),
+      handler(makeEvent(path)),
+    ])) as [Response, Response];
+
+    expect(leader.headers.get("server-timing")).toBe("db;dur=1");
+    expect(follower.headers.get("server-timing")).toBeNull();
+  });
+
+  it("does not add a background refresh's Server-Timing to the stale response", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`, {
+          headers: { "server-timing": `db;dur=${callCount}` },
+        });
+      },
+      { maxAge: 0.05, swr: true },
+    );
+
+    await handler(makeEvent(path));
+    await new Promise((r) => setTimeout(r, 80));
+
+    const stale = (await handler(makeEvent(path))) as Response;
+    expect(stale.headers.get("x-cache")).toBe("STALE");
+    // The refresh runs behind this response, for no caller of its own.
+    expect(stale.headers.get("server-timing")).toBeNull();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(callCount).toBe(2);
+  });
+
+  it("passes Server-Timing through on bypassed requests", async () => {
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "server-timing": "db;dur=1" } }),
+      { maxAge: 10 },
+    );
+
+    const res = (await handler(makeEvent(uniquePath(), { method: "POST" }))) as Response;
+
+    expect(res.headers.get("server-timing")).toBe("db;dur=1");
+  });
   it("never replays an allowlisted Set-Cookie to a later caller (h3#1524 audit, #15c)", async () => {
     // The session-fixation repro. The handler mints a session id on every call and
     // `sid` is allowlisted, so it used to be stored on the entry: the first visitor
@@ -9698,6 +9773,27 @@ describe("streaming responses (opt-in)", () => {
     const { value } = await reader.read();
     return new TextDecoder().decode(value);
   }
+
+  it("keeps Server-Timing on the streamed response only", async () => {
+    const path = uniquePath();
+    const origin = controlledStream();
+    const tasks = backgroundTasks();
+    const handler = defineCachedHandler(
+      () => new Response(origin.stream, { headers: { "server-timing": "db;dur=1" } }),
+      { maxAge: 10, stream: true, waitUntil: tasks.waitUntil },
+    );
+
+    const streamed = (await handler(makeEvent(path))) as Response;
+    expect(streamed.headers.get("server-timing")).toBe("db;dur=1");
+    origin.push("ok");
+    origin.close();
+    expect(await streamed.text()).toBe("ok");
+    await tasks.settle();
+
+    const hit = (await handler(makeEvent(path))) as Response;
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+    expect(hit.headers.get("server-timing")).toBeNull();
+  });
 
   it("returns the response before the handler's body ends", async () => {
     const path = uniquePath();

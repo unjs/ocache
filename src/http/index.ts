@@ -14,7 +14,7 @@ import { resolveStorage } from "../storage.ts";
 import { requiresRevalidation } from "./cache-control.ts";
 import { integrityOpts, resolveHandlerConfig } from "./config.ts";
 import { defaultHandleCacheHeaders, notModifiedHeaders, readConditions } from "./conditional.ts";
-import { deserializeEntry, serializeResponse } from "./entry.ts";
+import { deserializeEntry, serializeResponse, takeServerTiming } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
 import { isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
 import { closeStreamChannel, openStreamChannel } from "./stream.ts";
@@ -200,6 +200,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     }
 
     let response: ResponseCacheEntry;
+    let timing: string | undefined;
     // Register interest before the resolution starts. `serialize` hands the live body back
     // through this channel when this request is the one waiting on that resolution.
     const streaming = opts.stream ? openStreamChannel(event) : undefined;
@@ -229,7 +230,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
             event.req.waitUntil?.(fill);
           }
           // No conditional handling: a streamed response has no validator to compare.
-          return createResponse(streamed.body, streamed.init);
+          return createResponse(
+            streamed.body,
+            withServerTiming(streamed.init, takeServerTiming(event)),
+          );
         }
       }
       response = (await settled)!;
@@ -258,6 +262,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
       return toResponse(await handler(event), event);
     } finally {
+      timing = takeServerTiming(event);
       // Stop listening once this request is served another way. A published stream nothing
       // reads would queue the whole body. Taking the listener already closed the channel,
       // so this is a no-op on the streamed path.
@@ -279,14 +284,17 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         maxAge: opts.maxAge,
       })
     ) {
-      return createResponse(null, {
-        status: 304,
-        headers: notModifiedHeaders(response.headers, statusHeader),
-      });
+      return createResponse(
+        null,
+        withServerTiming(
+          { status: 304, headers: notModifiedHeaders(response.headers, statusHeader) },
+          timing,
+        ),
+      );
     }
 
     const { body, init } = deserializeEntry(response);
-    return createResponse(body, init);
+    return createResponse(body, withServerTiming(init, timing));
   };
 
   // Resource-level operations include every cacheable method variant.
@@ -330,4 +338,14 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   };
 
   return revalidate;
+}
+
+// Copy the headers: `init` can share the stored entry's headers.
+function withServerTiming(init: ResponseInit, timing: string | undefined): ResponseInit {
+  if (timing === undefined) {
+    return init;
+  }
+  const headers = new Headers(init.headers);
+  headers.append("server-timing", timing);
+  return { ...init, headers };
 }
