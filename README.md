@@ -127,6 +127,18 @@ Result of one cache call.
 
 ---
 
+### `CacheTraceContext`
+
+```ts
+type CacheTraceContext = CachedFunctionTraceContext | CachedHandlerTraceContext;
+```
+
+Context of the `ocache.get` channel.
+
+Narrow on `type` to get the matching `result`.
+
+---
+
 ### `composeStorage`
 
 ```ts

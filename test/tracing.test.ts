@@ -1,5 +1,5 @@
 import { tracingChannel } from "node:diagnostics_channel";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   GET_CHANNEL,
   createMemoryStorage,
@@ -7,6 +7,7 @@ import {
   defineCachedHandler,
   type CacheTraceContext,
   type HTTPEvent,
+  type ResponseCacheEntry,
   type StorageInterface,
 } from "../src/index.ts";
 
@@ -188,6 +189,18 @@ describe("ocache.get", () => {
 
     expect(await traced()).toBe(1);
     expect(settled()[0]!.status).toBe("hit");
+  });
+});
+
+describe("CacheTraceContext", () => {
+  it("narrows `result` and `event` on `type`", () => {
+    const context = {} as CacheTraceContext;
+    if (context.type === "handler") {
+      expectTypeOf(context.result).toEqualTypeOf<ResponseCacheEntry | undefined>();
+      expectTypeOf(context.event).toEqualTypeOf<HTTPEvent>();
+    } else {
+      expectTypeOf(context.result).toEqualTypeOf<unknown>();
+    }
   });
 });
 

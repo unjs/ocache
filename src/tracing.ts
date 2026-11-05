@@ -1,6 +1,6 @@
 // Docs: @docs/13.tracing.md
 
-import type { CacheStatus, HTTPEvent } from "./types.ts";
+import type { CacheStatus, HTTPEvent, ResponseCacheEntry } from "./types.ts";
 
 /**
  * Name of the tracing channel cached calls are traced on.
@@ -10,28 +10,44 @@ import type { CacheStatus, HTTPEvent } from "./types.ts";
  */
 export const GET_CHANNEL = "ocache.get";
 
-/** Context of the `ocache.get` channel. */
-export interface CacheTraceContext {
-  /** What was called: a cached function, or a cached handler. Decides the shape of `result`. */
-  type: "function" | "handler";
+/** Fields of the `ocache.get` context shared by functions and handlers. */
+interface BaseCacheTraceContext {
   /** Resolved cache name. */
   name: string;
   /** Cache key group, e.g. `"functions"` or `"handlers"`. */
   group: string;
-  /** The request event, when the first argument is one. */
-  event?: HTTPEvent;
   /** Cache key from `getKey`. Unset for a bypassed call. */
   key?: string;
   /** How the call was served, or `"bypass"` when `shouldBypassCache` skipped the cache. */
   status?: CacheStatus | "bypass";
-  /**
-   * Value the call resolved with. For a `"function"`, the value returned to the caller.
-   * For a `"handler"`, the stored `ResponseCacheEntry` the response is built from.
-   */
-  result?: unknown;
   /** Error the call rejected with. */
   error?: unknown;
 }
+
+/** Context of an `ocache.get` event published by a cached function. */
+export interface CachedFunctionTraceContext extends BaseCacheTraceContext {
+  type: "function";
+  /** The request event, when the first argument is one. */
+  event?: HTTPEvent;
+  /** Value returned to the caller. */
+  result?: unknown;
+}
+
+/** Context of an `ocache.get` event published by a cached handler. */
+export interface CachedHandlerTraceContext extends BaseCacheTraceContext {
+  type: "handler";
+  /** The request event. */
+  event: HTTPEvent;
+  /** Stored entry the response is built from. */
+  result?: ResponseCacheEntry;
+}
+
+/**
+ * Context of the `ocache.get` channel.
+ *
+ * Narrow on `type` to get the matching `result`.
+ */
+export type CacheTraceContext = CachedFunctionTraceContext | CachedHandlerTraceContext;
 
 interface SubChannel {
   readonly hasSubscribers: boolean;

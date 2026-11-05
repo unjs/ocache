@@ -482,12 +482,14 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const cachedFn = (...args: ArgsT) =>
     opts.tracing
       ? traceGet(
-          () => ({
-            type: traceType(cachedFn),
-            name,
-            group,
-            event: isHTTPEvent(args[0]) ? args[0] : undefined,
-          }),
+          // A handler's inner function is always called with its event.
+          () =>
+            ({
+              type: traceType(cachedFn),
+              name,
+              group,
+              event: isHTTPEvent(args[0]) ? args[0] : undefined,
+            }) as CacheTraceContext,
           (trace) => call(args, trace),
         )
       : call(args);
