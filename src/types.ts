@@ -230,6 +230,18 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   waitUntil?: (promise: Promise<any>) => void;
   /** Receives handled cache, hook, and background errors. */
   onError?: (error: unknown) => void;
+  /**
+   * Traces every call on the `ocache.get` tracing channel of `node:diagnostics_channel`.
+   *
+   * Defaults to `false`. A no-op on runtimes without tracing channels, and a call costs
+   * nothing extra while nothing subscribes. Enabling it does not invalidate entries.
+   *
+   * @example
+   * ```ts
+   * const cached = cachedFunction(fn, { maxAge: 60, tracing: true });
+   * ```
+   */
+  tracing?: boolean;
 }
 
 /** Stored HTTP response data. */

@@ -127,6 +127,18 @@ Result of one cache call.
 
 ---
 
+### `CacheTraceContext`
+
+```ts
+type CacheTraceContext = CachedFunctionTraceContext | CachedHandlerTraceContext;
+```
+
+Context of the `ocache.get` channel.
+
+Narrow on `type` to get the matching `result`.
+
+---
+
 ### `composeStorage`
 
 ```ts
@@ -279,6 +291,19 @@ await expireCache({
   args: ["user-123"],
 });
 ```
+
+---
+
+### `GET_CHANNEL`
+
+```ts
+const GET_CHANNEL = "ocache.get";
+```
+
+Name of the tracing channel cached calls are traced on.
+
+Subscribers can use it instead of hardcoding the string:
+`tracingChannel<CacheTraceContext>(GET_CHANNEL)`.
 
 ---
 

@@ -93,9 +93,14 @@ type SizeName = "raw" | "min" | "minGzip";
 // streaming arm of `http/entry.ts` are reached through a runtime flag, so they stay in the
 // graph of a handler that never sets `stream`. `raw` carries the rest — the option's JSDoc and
 // the comments on the fill/serve split. Same ~5% headroom on all six rows.
+//
+// Re-based again at the opt-in `tracing` option: +1.58 kB raw, +0.61 kB min, +0.27 kB gzip on
+// both platforms (67_479 / 27_065 / 10_462 neutral and 63_303 / 24_703 / 9_038 node became
+// 69_060 / 27_672 / 10_729 and 64_884 / 25_309 / 9_303). Like `stream`, the option is read at
+// runtime, so `tracing.ts` stays in the graph of a handler that never sets it. Same ~5% headroom.
 const BUDGETS: Record<Platform, Record<SizeName, number>> = {
-  neutral: { raw: 69_500, min: 27_500, minGzip: 10_800 },
-  node: { raw: 65_000, min: 25_200, minGzip: 9300 },
+  neutral: { raw: 72_500, min: 29_000, minGzip: 11_300 },
+  node: { raw: 68_000, min: 26_600, minGzip: 9800 },
 };
 
 // Absolute so the generated entry can live anywhere and still resolve ocache from source.
