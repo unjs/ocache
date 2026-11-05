@@ -282,6 +282,19 @@ await expireCache({
 
 ---
 
+### `GET_CHANNEL`
+
+```ts
+const GET_CHANNEL = "ocache.get";
+```
+
+Name of the tracing channel cached calls are traced on.
+
+Subscribers can use it instead of hardcoding the string:
+`tracingChannel<CacheTraceContext>(GET_CHANNEL)`.
+
+---
+
 ### `invalidateCache`
 
 ```ts

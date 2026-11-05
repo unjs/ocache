@@ -4,8 +4,10 @@ import { base64ToBytes, bytesToBase64 } from "./base64.ts";
 import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage, scheduleTimer } from "./storage.ts";
+import { traceGet } from "./tracing.ts";
 
 import type { StorageInterface, StorageOption } from "./storage.ts";
+import type { CacheTraceContext } from "./tracing.ts";
 import type { HTTPEvent, CacheEntry, CacheOptions, CacheStatus } from "./types.ts";
 
 function defaultCacheOptions() {
@@ -146,6 +148,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     args: ArgsT,
     shouldInvalidateCache?: boolean,
     event?: HTTPEvent,
+    trace?: CacheTraceContext,
   ): Promise<ResolvedCacheEntry<T>> {
     const validateCtx = { args };
     // One owner for background work: the explicit hook, else the event's host hook.
@@ -245,6 +248,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           : swr && _isValid && isMatched
             ? "stale"
             : "revalidated";
+    if (trace) {
+      trace.status = status;
+    }
 
     const resolveEntry = async () => {
       let current = pending.get(key);
@@ -443,12 +449,18 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     return _resolvePromise.then(() => entry) as Promise<ResolvedCacheEntry<T>>;
   }
 
-  const cachedFn = async (...args: ArgsT) => {
+  const call = async (args: ArgsT, trace?: CacheTraceContext) => {
     const shouldBypassCache = await opts.shouldBypassCache?.(...args);
     if (shouldBypassCache) {
+      if (trace) {
+        trace.status = "bypass";
+      }
       return fn(...args);
     }
     const key = await (opts.getKey || getKey)(...args);
+    if (trace) {
+      trace.key = key;
+    }
     const shouldInvalidateCache = await opts.shouldInvalidateCache?.(...args);
     const entry = await get(
       key,
@@ -456,6 +468,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       args,
       shouldInvalidateCache,
       isHTTPEvent(args[0]) ? args[0] : undefined,
+      trace,
     );
     let value = entry.value;
     if (opts.transform) {
@@ -464,6 +477,15 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     }
     return value;
   };
+
+  // Untraced functions call `call` directly; see `.agents/tracing.md`.
+  const cachedFn = (...args: ArgsT) =>
+    opts.tracing
+      ? traceGet(
+          () => ({ name, group, event: isHTTPEvent(args[0]) ? args[0] : undefined }),
+          (trace) => call(args, trace),
+        )
+      : call(args);
 
   // Cancel the storage write of every resolution that started before the purge.
   (fences ??= new WeakMap()).set(cachedFn, (key: string) => {
@@ -796,11 +818,11 @@ function remainingTtl(
  * A backend change does not change the cached computation.
  * Hashing storage objects is also expensive and cannot capture closed-over configuration.
  * `waitUntil` only decides who owns background work, so adopting it or moving between
- * runtimes must not invalidate entries.
+ * runtimes must not invalidate entries. `tracing` only observes, so enabling it must not either.
  */
 function integrityOpts(
   opts: CacheOptions<any, any>,
-): Omit<CacheOptions, "base" | "group" | "name" | "storage" | "waitUntil"> {
-  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, ...rest } = opts;
+): Omit<CacheOptions, "base" | "group" | "name" | "storage" | "waitUntil" | "tracing"> {
+  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, tracing: _t, ...rest } = opts;
   return rest;
 }

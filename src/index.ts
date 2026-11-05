@@ -24,6 +24,8 @@ export {
   composeStorage,
 } from "./storage.ts";
 
+export { GET_CHANNEL, type CacheTraceContext } from "./tracing.ts";
+
 export type {
   HTTPEvent,
   ServerRequest,
