@@ -18,8 +18,17 @@ interface BaseCacheTraceContext {
   group: string;
   /** Cache key from `getKey`. Unset for a bypassed call. */
   key?: string;
+  /** Full storage keys, one per `base` prefix in read order. Unset for a bypassed call. */
+  keys?: string[];
   /** How the call was served, or `"bypass"` when `shouldBypassCache` skipped the cache. */
   status?: CacheStatus | "bypass";
+  /**
+   * Fresh lifetime of the served entry in seconds: its own `maxAge`, else the option.
+   * After a foreground resolution, the lifetime `getMaxAge` gave the new value.
+   */
+  maxAge?: number;
+  /** Write time of the served entry in Unix milliseconds. Set for `"hit"` and `"stale"` only. */
+  mtime?: number;
   /** Error the call rejected with. */
   error?: unknown;
 }

@@ -67,8 +67,12 @@ describe("ocache.get", () => {
       status: "miss",
     });
     expect(miss!.key).toBeTypeOf("string");
+    expect(miss!.keys).toEqual([`/cache:functions:getUser:${miss!.key}.json`]);
+    expect(miss!.maxAge).toBe(60);
+    expect(miss!.mtime).toBeUndefined();
     expect(miss!.result).toEqual({ id: "1" });
-    expect(hit).toMatchObject({ name: "getUser", key: miss!.key, status: "hit" });
+    expect(hit).toMatchObject({ name: "getUser", key: miss!.key, status: "hit", maxAge: 60 });
+    expect(hit!.mtime).toBeTypeOf("number");
     expect(events.map((e) => e.type)).toEqual([
       "start",
       "end",
@@ -117,6 +121,62 @@ describe("ocache.get", () => {
     await cached();
 
     expect(settled().map((c) => c.status)).toEqual(["miss", "revalidated"]);
+  });
+
+  it("reports one storage key per base", async () => {
+    const cached = defineCachedFunction(async () => "value", {
+      name: "tiered",
+      storage,
+      base: ["/l1", "/l2"],
+      getKey: () => "k",
+      tracing: true,
+    });
+
+    await cached();
+
+    expect(settled()[0]!.keys).toEqual([
+      "/l1:functions:tiered:k.json",
+      "/l2:functions:tiered:k.json",
+    ]);
+  });
+
+  it("reports the `getMaxAge` lifetime after a miss and the stored one on a hit", async () => {
+    const cached = defineCachedFunction(async () => "value", {
+      storage,
+      maxAge: 60,
+      getMaxAge: () => 300,
+      tracing: true,
+    });
+
+    await cached();
+    await cached();
+
+    expect(settled().map((c) => c.maxAge)).toEqual([300, 300]);
+  });
+
+  it("reports the age of a stale entry", async () => {
+    let now = 1_000_000;
+    const dateNow = Date.now;
+    Date.now = () => now;
+    try {
+      const cached = defineCachedFunction(async () => "value", {
+        storage,
+        maxAge: 1,
+        swr: true,
+        tracing: true,
+      });
+
+      await cached();
+      now += 5000;
+      await cached();
+
+      const stale = settled()[1]!;
+      expect(stale.status).toBe("stale");
+      expect(stale.maxAge).toBe(1);
+      expect(now - stale.mtime!).toBe(5000);
+    } finally {
+      Date.now = dateNow;
+    }
   });
 
   it("traces a bypassed call without a key", async () => {

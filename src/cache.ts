@@ -162,6 +162,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     };
     // The extension separates a key from a parent namespace with the same prefix.
     const bases = normalizeBases(opts.base);
+    if (trace) {
+      trace.keys = bases.map((b) => buildCacheKey(key, { group, name }, b));
+    }
 
     let entry: CacheEntry<T> = {} as CacheEntry<T>;
     // A negative index means that all storage tiers missed.
@@ -250,6 +253,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             : "revalidated";
     if (trace) {
       trace.status = status;
+      // Describes the served entry. A foreground resolution replaces `maxAge` once it settles.
+      trace.maxAge = readMaxAge;
+      if (status === "hit" || status === "stale") {
+        trace.mtime = entry.mtime;
+      }
     }
 
     const resolveEntry = async () => {
@@ -342,6 +350,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       // replace it before the serve path returns.
       if (!isPending || status !== "stale") {
         entry.value = resolved.value;
+      }
+      if (trace && status !== "stale") {
+        trace.maxAge = opts.getMaxAge ? (resolved.maxAge ?? opts.maxAge) : opts.maxAge;
       }
 
       if (!isPending) {
