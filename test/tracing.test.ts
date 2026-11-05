@@ -59,7 +59,12 @@ describe("ocache.get", () => {
     await getUser("1");
 
     const [miss, hit] = settled();
-    expect(miss).toMatchObject({ name: "getUser", group: "functions", status: "miss" });
+    expect(miss).toMatchObject({
+      type: "function",
+      name: "getUser",
+      group: "functions",
+      status: "miss",
+    });
     expect(miss!.key).toBeTypeOf("string");
     expect(miss!.result).toEqual({ id: "1" });
     expect(hit).toMatchObject({ name: "getUser", key: miss!.key, status: "hit" });
@@ -155,8 +160,14 @@ describe("ocache.get", () => {
     await handler(createEvent("http://localhost/page"));
 
     const [miss, hit] = settled();
-    expect(miss).toMatchObject({ name: "page", group: "handlers", status: "miss" });
+    expect(miss).toMatchObject({
+      type: "handler",
+      name: "page",
+      group: "handlers",
+      status: "miss",
+    });
     expect(miss!.event).toBe(event);
+    expect(miss!.result).toMatchObject({ status: 200, body: "ok" });
     expect(hit!.status).toBe("hit");
   });
 

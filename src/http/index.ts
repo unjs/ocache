@@ -10,6 +10,7 @@ import {
 } from "../cache.ts";
 import { NarrowRequestError, ResponseTooLargeError, UnsupportedValueError } from "../error.ts";
 import { resolveStorage } from "../storage.ts";
+import { markHandlerFunction } from "../tracing.ts";
 
 import { requiresRevalidation } from "./cache-control.ts";
 import { integrityOpts, resolveHandlerConfig } from "./config.ts";
@@ -161,6 +162,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     const rawValue = await handler(event as E);
     return toResponse(rawValue, event as E);
   }, _opts);
+  if (opts.tracing) {
+    markHandlerFunction(cachedFn);
+  }
 
   const cachedHandler: EventHandler<E> = async (event) => {
     // Read the request validators before the handler runs, because narrowing keeps

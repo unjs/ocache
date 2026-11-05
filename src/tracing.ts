@@ -12,6 +12,8 @@ export const GET_CHANNEL = "ocache.get";
 
 /** Context of the `ocache.get` channel. */
 export interface CacheTraceContext {
+  /** What was called: a cached function, or a cached handler. Decides the shape of `result`. */
+  type: "function" | "handler";
   /** Resolved cache name. */
   name: string;
   /** Cache key group, e.g. `"functions"` or `"handlers"`. */
@@ -22,7 +24,10 @@ export interface CacheTraceContext {
   key?: string;
   /** How the call was served, or `"bypass"` when `shouldBypassCache` skipped the cache. */
   status?: CacheStatus | "bypass";
-  /** Value returned to the caller. */
+  /**
+   * Value the call resolved with. For a `"function"`, the value returned to the caller.
+   * For a `"handler"`, the stored `ResponseCacheEntry` the response is built from.
+   */
   result?: unknown;
   /** Error the call rejected with. */
   error?: unknown;
@@ -42,6 +47,18 @@ interface TracingChannel<C extends object> {
   readonly asyncEnd: SubChannel;
   readonly error: SubChannel;
   tracePromise<T>(fn: () => Promise<T>, context: C): Promise<T>;
+}
+
+// The inner cached functions of traced handlers. Allocated on the first one, like `fences`.
+let handlerFunctions: WeakSet<object> | undefined;
+
+// Marks a handler's inner cached function, so its calls are traced as `type: "handler"`.
+export function markHandlerFunction(cachedFn: object): void {
+  (handlerFunctions ??= new WeakSet()).add(cachedFn);
+}
+
+export function traceType(cachedFn: object): CacheTraceContext["type"] {
+  return handlerFunctions?.has(cachedFn) ? "handler" : "function";
 }
 
 // `undefined` until the first lookup, `null` when the runtime has no tracing channels.

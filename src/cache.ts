@@ -4,7 +4,7 @@ import { base64ToBytes, bytesToBase64 } from "./base64.ts";
 import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage, scheduleTimer } from "./storage.ts";
-import { traceGet } from "./tracing.ts";
+import { traceGet, traceType } from "./tracing.ts";
 
 import type { StorageInterface, StorageOption } from "./storage.ts";
 import type { CacheTraceContext } from "./tracing.ts";
@@ -482,7 +482,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
   const cachedFn = (...args: ArgsT) =>
     opts.tracing
       ? traceGet(
-          () => ({ name, group, event: isHTTPEvent(args[0]) ? args[0] : undefined }),
+          () => ({
+            type: traceType(cachedFn),
+            name,
+            group,
+            event: isHTTPEvent(args[0]) ? args[0] : undefined,
+          }),
           (trace) => call(args, trace),
         )
       : call(args);

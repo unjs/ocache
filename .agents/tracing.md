@@ -12,6 +12,7 @@ One `TracingChannel`, `ocache.get`, named like `unstorage.<op>`, `db0.query`, an
 ## Context
 
 - `name`, `group`, and `event` exist at `start`; `key` after `getKey`; `status` as soon as the read decides it, before the resolution runs, so a failed miss still reports `"miss"`.
+- `type` comes from a `WeakSet` of handler inner functions, filled by `defineCachedHandler`, like `fences`. A handler's `result` is the stored `ResponseCacheEntry`, since the `Response` is built after the span ends; `type` is what tells subscribers so, because `group` is user-set and `event` also appears on plain functions called with an event.
 - Arguments are not published: they routinely carry user data.
 - `tracing` is excluded from integrity in both `integrityOpts`, so enabling it keeps existing entries warm.
 - A handler is traced through its inner cached function, so requests it bypasses before reaching the cache publish nothing.
