@@ -70,9 +70,10 @@ function defaultToResponse(value: unknown): Response {
 }
 
 /**
- * Keeps a stale response only through a transient failure: no HTTP status (outage, timeout)
- * or a 5xx. A thrown 4xx, such as h3's `createError({ status: 404 })`, says the resource is
- * gone (nitro#4060). The cache's own errors report a refresh it can never store.
+ * Keeps a stale response only through a transient failure: no HTTP status (outage, timeout),
+ * a 5xx, or a 408/429. Any other thrown 4xx, such as h3's `createError({ status: 404 })`,
+ * says the resource is gone (nitro#4060). The cache's own errors report a refresh it can
+ * never store.
  */
 function keepStale(error: unknown): boolean {
   if (
@@ -84,7 +85,7 @@ function keepStale(error: unknown): boolean {
   }
   const { status, statusCode } = (error ?? {}) as { status?: unknown; statusCode?: unknown };
   const code = status ?? statusCode;
-  return typeof code !== "number" || code >= 500;
+  return typeof code !== "number" || code >= 500 || code === 408 || code === 429;
 }
 
 /**

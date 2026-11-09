@@ -8355,9 +8355,11 @@ describe("defineCachedHandler", () => {
   });
 
   // nitro#4060: frameworks signal "gone" by throwing, e.g. h3's `createError({ status: 404 })`.
-  // Only a transient failure (no status, or a 5xx) keeps the stale response.
+  // Only a transient failure (no status, a 5xx, or a 408/429) keeps the stale response.
   const thrownRefreshes: [label: string, fail: () => unknown, kept: boolean][] = [
     ["a 5xx `status`", () => Object.assign(new Error("down"), { status: 503 }), true],
+    ["a 429 `statusCode`", () => Object.assign(new Error("slow down"), { statusCode: 429 }), true],
+    ["a 408 `status`", () => Object.assign(new Error("timeout"), { status: 408 }), true],
     ["a 4xx `status`", () => Object.assign(new Error("gone"), { status: 404 }), false],
     ["a 4xx `statusCode`", () => Object.assign(new Error("gone"), { statusCode: 410 }), false],
     ["a value `toResponse` cannot convert", () => ({}), false],
@@ -9556,6 +9558,7 @@ describe("maxResolveTime", () => {
   // throws, a hung one keeps the last good entry for SWR (unjs/ocache#112).
   it("keeps the entry a timed-out background refresh was refreshing", async () => {
     let hang = false;
+    const errors: unknown[] = [];
     const fn = defineCachedFunction(
       () => (hang ? new Promise<string>(() => {}) : Promise.resolve("v1")),
       {
@@ -9564,7 +9567,7 @@ describe("maxResolveTime", () => {
         staleMaxAge: 60,
         name: "hangSwr",
         maxResolveTime: 0.02,
-        onError: () => {},
+        onError: (error) => errors.push(error),
       },
     );
 
@@ -9575,7 +9578,10 @@ describe("maxResolveTime", () => {
     hang = true;
     expect(await fn()).toBe("v1");
     // Past the deadline the refresh has failed; the stale entry is still stored and served.
-    await new Promise((r) => setTimeout(r, 40));
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
+    expect(errors[0]).toMatchObject({ name: "TimeoutError" });
+    // Give an eviction, had one started, time to land.
+    await new Promise((r) => setTimeout(r, 10));
     const keys = await fn.resolveKeys();
     expect(await testStorage.get(keys[0]!)).toMatchObject({ value: "v1" });
     expect(await fn()).toBe("v1");
