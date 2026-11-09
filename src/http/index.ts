@@ -17,6 +17,7 @@ import { defaultHandleCacheHeaders, notModifiedHeaders, readConditions } from ".
 import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
 import { isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
+import { setCacheStatus } from "./status.ts";
 import { closeStreamChannel, openStreamChannel } from "./stream.ts";
 import { isCacheableStatus, validateEntry } from "./validate.ts";
 
@@ -25,9 +26,16 @@ import type {
   EventHandler,
   CachedEventHandler,
   CacheOptions,
+  CacheStatus,
   CachedEventHandlerOptions,
   ResponseCacheEntry,
 } from "../types.ts";
+
+/** What a resolution hands the serve path: the entry, and how this call was served. */
+interface ServedEntry {
+  value: ResponseCacheEntry;
+  status: CacheStatus;
+}
 
 /** Body types `Response` carries as-is. It stringifies everything else. */
 function isBodyInit(value: object): boolean {
@@ -100,22 +108,24 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   // Stored values use `ResponseCacheEntry`, although the resolver returns Response.
   const _opts: CacheOptions<Response> = {
     ...opts,
-    // Add cache status to a clone, not the stored entry.
-    transform: statusHeader
-      ? (entry) => {
-          const value = entry.value as unknown as ResponseCacheEntry | undefined;
-          if (!value) {
-            return;
-          }
-          return {
-            ...value,
-            headers: {
-              ...value.headers,
-              [statusHeader]: String(entry.status).toUpperCase(),
-            },
-          };
-        }
-      : undefined,
+    // Carry the status to the serve path, which reports it whatever `statusHeader` is.
+    // The header goes on a clone, not the stored entry.
+    transform: (entry): ServedEntry | undefined => {
+      const value = entry.value as unknown as ResponseCacheEntry | undefined;
+      if (!value) {
+        return;
+      }
+      const status = entry.status!;
+      return {
+        value: statusHeader
+          ? {
+              ...value,
+              headers: { ...value.headers, [statusHeader]: status.toUpperCase() },
+            }
+          : value,
+        status,
+      };
+    },
     // `must-revalidate` permits storage but sets the stale window to zero.
     getMaxAge: async (entry) => {
       const res = entry.value;
@@ -171,6 +181,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       // Nothing is stored, so the handler's own validators are the only conditions
       // there are: run it first, then answer a matching conditional request with 304.
       const live = await toResponse(await handler(event), event);
+      setCacheStatus(event, undefined);
       // A 304 needs a cacheable method and a representation to be current.
       if (isBypassedMethod(event) || !isCacheableStatus(live.status)) {
         return live;
@@ -196,14 +207,14 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // Bypassed requests keep their credentials and complete query, and their live
     // response passes through unserialized: no buffering, no synthesized headers.
     if (await resolveBypass(config, event)) {
-      return toResponse(await handler(event), event);
+      return serveLive(event);
     }
 
-    let response: ResponseCacheEntry;
+    let served: ServedEntry;
     // Register interest before the resolution starts. `serialize` hands the live body back
     // through this channel when this request is the one waiting on that resolution.
     const streaming = opts.stream ? openStreamChannel(event) : undefined;
-    const settled = cachedFn(event) as Promise<unknown> as Promise<ResponseCacheEntry>;
+    const settled = cachedFn(event) as Promise<unknown> as Promise<ServedEntry>;
     try {
       if (streaming) {
         // Whichever comes first: the live body, or a resolution that never offered one.
@@ -229,10 +240,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
             event.req.waitUntil?.(fill);
           }
           // No conditional handling: a streamed response has no validator to compare.
+          setCacheStatus(event, streamed.status);
           return createResponse(streamed.body, streamed.init);
         }
       }
-      response = (await settled)!;
+      served = (await settled)!;
     } catch (error) {
       if (error instanceof ResponseTooLargeError) {
         // Claim before any await: the leader and its followers all see this one error.
@@ -244,7 +256,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         }
         // The body was never stored, so serve it live. A follower cannot read the
         // leader's one-use stream and runs the handler for its own request instead.
-        return live ?? toResponse(await handler(event), event);
+        if (live) {
+          setCacheStatus(event, undefined);
+          return live;
+        }
+        return serveLive(event);
       }
       if (!(error instanceof NarrowRequestError)) {
         throw error;
@@ -256,7 +272,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       } else {
         console.error("[cache] Bypassing cache.", error);
       }
-      return toResponse(await handler(event), event);
+      return serveLive(event);
     } finally {
       // Stop listening once this request is served another way. A published stream nothing
       // reads would queue the whole body. Taking the listener already closed the channel,
@@ -265,6 +281,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         closeStreamChannel(event);
       }
     }
+
+    const { value: response, status } = served;
+    setCacheStatus(event, status);
 
     // Only a handler sets `last-modified`, so a stored entry often has none.
     const modifiedTime = response.headers["last-modified"] as string | undefined;
@@ -303,6 +322,14 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       return { key: _key, options: { ..._opts, getKey: () => _key } };
     });
   };
+
+  // Run the handler without the cache. Clear the status after it ran, so an inner cached
+  // handler on the same event cannot report for this response.
+  async function serveLive(event: E): Promise<Response> {
+    const live = await toResponse(await handler(event), event);
+    setCacheStatus(event, undefined);
+    return live;
+  }
 
   const revalidate = cachedHandler as CachedEventHandler<E>;
   revalidate.resolveKeys = async (event: E) => {

@@ -282,6 +282,37 @@ await expireCache({
 
 ---
 
+### `getCacheStatus`
+
+```ts
+function getCacheStatus(event: HTTPEvent): CacheStatus | undefined;
+```
+
+Returns how a cached handler served the response for this event.
+
+Unlike the cache-status header, this is set whatever `cacheStatusHeader` is, and a
+handler cannot forge it by setting that header on a response the cache never saw.
+
+Returns `undefined` when no cached handler answered the event, or when the last one to
+answer it served the live response without the cache: a bypassed request, `headersOnly`,
+or the fallback for a body over `maxBodySize` or an event that cannot be narrowed.
+When cached handlers nest on one event, the outermost one answers last and wins.
+
+**Parameters:**
+
+- **`event`** — The event passed to a handler from `defineCachedHandler`.
+
+**Returns:** — The cache status of the served response, or `undefined` without the cache.
+
+**Example:**
+
+```ts
+const res = await cachedHandler(event);
+const status = getCacheStatus(event); // "hit" | "stale" | "revalidated" | "miss" | undefined
+```
+
+---
+
 ### `invalidateCache`
 
 ```ts

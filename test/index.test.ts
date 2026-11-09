@@ -3,6 +3,7 @@ import {
   cachedFunction as _cachedFunction,
   defineCachedFunction as _defineCachedFunction,
   defineCachedHandler as _defineCachedHandler,
+  getCacheStatus,
   resolveCacheKeys,
   invalidateCache,
   expireCache,
@@ -9944,5 +9945,262 @@ describe("streaming responses (opt-in)", () => {
     // A buffered fill still synthesizes the validator.
     expect(res.headers.get("etag")).toMatch(/^W\/"/);
     await tasks.settle();
+  });
+});
+
+describe("getCacheStatus", () => {
+  let testId = 0;
+  function uniquePath() {
+    return `/status-${++testId}-${Date.now()}`;
+  }
+  function makeEvent(path: string, opts?: RequestInit & { headers?: Record<string, string> }) {
+    return { req: new Request(`http://localhost${path}`, opts) } as HTTPEvent;
+  }
+  /** Serves the event and reports what the response header and `getCacheStatus` say. */
+  async function serve(handler: (event: HTTPEvent) => unknown, event: HTTPEvent) {
+    const res = (await handler(event)) as Response;
+    return { res, header: res.headers.get("x-cache"), status: getCacheStatus(event) };
+  }
+
+  it("is undefined for an event no cached handler answered", () => {
+    expect(getCacheStatus(makeEvent("/"))).toBeUndefined();
+  });
+
+  it("reports a miss, then a hit", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+    expect(await serve(handler, makeEvent(path))).toMatchObject({ status: "miss" });
+    expect(await serve(handler, makeEvent(path))).toMatchObject({ status: "hit" });
+  });
+
+  it("reports stale while the refresh runs in the background", async () => {
+    const path = uniquePath();
+    let calls = 0;
+    const handler = defineCachedHandler(() => new Response(`v${++calls}`), {
+      maxAge: 10,
+      swr: true,
+      staleMaxAge: 60,
+    });
+
+    await handler(makeEvent(path));
+    await handler.expire(makeEvent(path));
+    const stale = await serve(handler, makeEvent(path));
+    expect(stale).toMatchObject({ header: "STALE", status: "stale" });
+    expect(await stale.res.text()).toBe("v1");
+  });
+
+  it("reports revalidated when an expired entry is replaced in the foreground", async () => {
+    const path = uniquePath();
+    let calls = 0;
+    const handler = defineCachedHandler(() => new Response(`v${++calls}`), { maxAge: 10 });
+
+    await handler(makeEvent(path));
+    await handler.expire(makeEvent(path));
+    const revalidated = await serve(handler, makeEvent(path));
+    expect(revalidated).toMatchObject({ header: "REVALIDATED", status: "revalidated" });
+    expect(await revalidated.res.text()).toBe("v2");
+  });
+
+  it("reports the status a coalesced follower was served", async () => {
+    const path = uniquePath();
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const handler = defineCachedHandler(
+      async () => {
+        calls++;
+        await gate;
+        return new Response("ok");
+      },
+      { maxAge: 10 },
+    );
+
+    const leaderEvent = makeEvent(path);
+    const followerEvent = makeEvent(path);
+    const leader = handler(leaderEvent);
+    const follower = handler(followerEvent);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await Promise.all([leader, follower]);
+
+    expect(calls).toBe(1);
+    expect(getCacheStatus(leaderEvent)).toBe("miss");
+    expect(getCacheStatus(followerEvent)).toBe("miss");
+  });
+
+  it("reports the entry's status on a 304 to a conditional request", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+    const { res } = await serve(handler, makeEvent(path));
+    const etag = res.headers.get("etag")!;
+    const notModified = await serve(
+      handler,
+      makeEvent(path, { headers: { "if-none-match": etag } }),
+    );
+    expect(notModified.res.status).toBe(304);
+    expect(notModified).toMatchObject({ header: "HIT", status: "hit" });
+  });
+
+  it("reports a streamed miss before the body ends", async () => {
+    const path = uniquePath();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c;
+      },
+    });
+    const tasks: Promise<unknown>[] = [];
+    const handler = defineCachedHandler(() => new Response(body), {
+      maxAge: 10,
+      stream: true,
+      cacheStatusHeader: false,
+      waitUntil: (promise) => tasks.push(promise),
+    });
+
+    const event = makeEvent(path);
+    const res = (await handler(event)) as Response;
+    expect(getCacheStatus(event)).toBe("miss");
+
+    controller.enqueue(new TextEncoder().encode("body"));
+    controller.close();
+    expect(await res.text()).toBe("body");
+    await Promise.all(tasks);
+    expect(getCacheStatus(event)).toBe("miss");
+  });
+
+  it("is undefined for an explicit bypass, whatever header the handler sets", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => new Response("upstream", { headers: { "x-cache": "HIT" } }),
+      { maxAge: 10, shouldBypassCache: () => true },
+    );
+
+    const bypassed = await serve(handler, makeEvent(path));
+    expect(bypassed.header).toBe("HIT");
+    expect(bypassed.status).toBeUndefined();
+  });
+
+  it("is undefined for a non-cacheable method or a range request", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), { maxAge: 10 });
+
+    await handler(makeEvent(path));
+    expect((await serve(handler, makeEvent(path, { method: "POST" }))).status).toBeUndefined();
+    const range = makeEvent(path, { headers: { range: "bytes=0-1" } });
+    expect((await serve(handler, range)).status).toBeUndefined();
+  });
+
+  it("is undefined in headersOnly mode, 304 or not", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok", { headers: { etag: '"v1"' } }), {
+      maxAge: 10,
+      headersOnly: true,
+    });
+
+    expect((await serve(handler, makeEvent(path))).status).toBeUndefined();
+    const conditional = makeEvent(path, { headers: { "if-none-match": '"v1"' } });
+    const notModified = await serve(handler, conditional);
+    expect(notModified.res.status).toBe(304);
+    expect(notModified.status).toBeUndefined();
+  });
+
+  it("is undefined for the over-limit fallback, even under a nested cache hit", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const path = uniquePath();
+    const body = "x".repeat(8192);
+    const inner = defineCachedHandler(() => new Response(body), { maxAge: 10 });
+    await inner(makeEvent(path));
+    // The inner handler serves its hit inside the outer resolution, which then refuses it.
+    const outer = defineCachedHandler((event) => inner(event) as Promise<Response>, {
+      maxAge: 10,
+      maxBodySize: 4096,
+    });
+
+    const event = makeEvent(path);
+    const res = (await outer(event)) as Response;
+    expect(await res.text()).toBe(body);
+    expect(res.headers.get("x-cache")).toBe("HIT");
+    expect(getCacheStatus(event)).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith("[cache] Bypassing cache.", expect.any(Error));
+    errorSpy.mockRestore();
+  });
+
+  it("is undefined for an over-limit follower that runs the handler itself", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const path = uniquePath();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const handler = defineCachedHandler(
+      async () => {
+        await gate;
+        return new Response("q".repeat(8192));
+      },
+      { maxAge: 10, maxBodySize: 4096 },
+    );
+
+    const leaderEvent = makeEvent(path);
+    const followerEvent = makeEvent(path);
+    const leader = handler(leaderEvent);
+    const follower = handler(followerEvent);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await Promise.all([leader, follower]);
+
+    expect(getCacheStatus(leaderEvent)).toBeUndefined();
+    expect(getCacheStatus(followerEvent)).toBeUndefined();
+    errorSpy.mockRestore();
+  });
+
+  it("is undefined for the narrowing fallback, even after an earlier cache hit", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const path = uniquePath();
+    const warm = defineCachedHandler(() => new Response("warm"), { maxAge: 10 });
+    await warm(makeEvent(path));
+
+    // Assigning to a getter-only `req` throws in strict mode, so narrowing fails.
+    const req = new Request(`http://localhost${path}`);
+    const event = Object.defineProperty({} as HTTPEvent, "req", { get: () => req });
+    await warm(event);
+    expect(getCacheStatus(event)).toBe("hit");
+
+    const handler = defineCachedHandler(() => new Response("live"), { maxAge: 10 });
+    const res = (await handler(event)) as Response;
+    expect(await res.text()).toBe("live");
+    expect(getCacheStatus(event)).toBeUndefined();
+    expect(errorSpy.mock.calls[0]![1]).toMatchObject({ name: "NarrowRequestError" });
+    errorSpy.mockRestore();
+  });
+
+  it("reports without a cache-status header", async () => {
+    const path = uniquePath();
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      cacheStatusHeader: false,
+    });
+
+    expect(await serve(handler, makeEvent(path))).toMatchObject({ header: null, status: "miss" });
+    expect(await serve(handler, makeEvent(path))).toMatchObject({ header: null, status: "hit" });
+  });
+
+  it("reports the outermost of two nested cached handlers", async () => {
+    const path = uniquePath();
+    const inner = defineCachedHandler(() => new Response("inner"), { maxAge: 10 });
+    await inner(makeEvent(path));
+    const outer = defineCachedHandler((event) => inner(event) as Promise<Response>, {
+      maxAge: 10,
+      cacheStatusHeader: "x-outer-cache",
+    });
+
+    const event = makeEvent(path);
+    const { res } = await serve(outer, event);
+    expect(res.headers.get("x-cache")).toBe("HIT");
+    expect(res.headers.get("x-outer-cache")).toBe("MISS");
+    expect(getCacheStatus(event)).toBe("miss");
   });
 });

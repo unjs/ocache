@@ -42,7 +42,8 @@ next to `resolveSignals` and from the same `if (!current)` leader branch, using 
 was computed **before** the resolver started and that already "must match the serve decision
 below". Anything but `"stale"` means this caller is waiting on this resolution. `resolveStatus`
 returns that status, so `entry.ts` gets the gate and the `x-cache` value from one lookup —
-`transform` never runs for a streamed caller, so the status header is stamped in `streamBody`.
+`transform` never runs for a streamed caller, so the status header is stamped in `streamBody`,
+and the same status travels to the serve path in `StreamedResponse.status` for `getCacheStatus`.
 
 Followers never register, so they never stream: they cannot read the leader's one-use stream, and
 they wait for the complete entry exactly as they do today. Serving a follower from the same fill

@@ -10,6 +10,7 @@ export {
 } from "./cache.ts";
 
 export { defineCachedHandler } from "./http/index.ts";
+export { getCacheStatus } from "./http/status.ts";
 
 export {
   type StorageInterface,
