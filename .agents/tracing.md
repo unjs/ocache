@@ -7,7 +7,7 @@ Two `TracingChannel`s, named like `unstorage.<op>`, `db0.query`, and `h3.request
 - `ocache.get` spans one cached call, lookup to serve. `ocache.resolve` spans one run of the resolution (function + `getMaxAge` + `serialize`), leader only. One channel could not show dedup (N waiters looked like N runs), could not separate lookup latency from origin latency, and left a stale refresh with no event at all.
 - `ocache.resolve` wraps the resolution, not `withDeadline`: a timeout rejects the waiters' `ocache.get`, while the run's own event ends when the run does. It ends before the storage write.
 - Started inside `get`, so it inherits the `ocache.get` store: a foreground run nests, a background one is a child that outlives its parent.
-- `result` is set by `tracePromise` from what the traced function resolves, so the resolution resolves a `CacheEntry` (`value`, `mtime`, `maxAge`, `staleMaxAge`) rather than an internal shape. The stored entry takes that same `mtime`, so every waiter's `ocache.get` and the next hit report one write time.
+- `result` is set by `tracePromise` from what the traced function resolves, so the resolution resolves a `CacheEntry` (`value`, `mtime`, `maxAge`, `staleMaxAge`) rather than an internal shape. That `mtime` is stamped after `serialize` (which reads a handler's body), exactly when the old `entry.mtime = Date.now()` ran, and the stored entry takes it, so waiters and the next hit report one write time. Stamping it before `serialize` was tried and rejected: it aged every handler entry by its body-read time, so a body slower than `maxAge` was never fresh.
 
 ## Zero cost when unobserved
 
@@ -23,6 +23,7 @@ Two `TracingChannel`s, named like `unstorage.<op>`, `db0.query`, and `h3.request
 - `name`, `group`, and `event` exist at `start`; `key` after `getKey`; `status` as soon as the read decides it, before the resolution runs, so a failed miss still reports `"miss"`.
 - `maxAge` and `mtime` describe the served value: the stored entry for `"hit"`/`"stale"`, set with `status`; the resolution's entry for `"miss"`/`"revalidated"`, set once it settles. Never one of each.
 - Bypassed calls publish nothing, on functions and handlers alike: a handler answers them before its inner cached function runs, so a function-only `"bypass"` status was a value handlers could never send.
+- A handler that cannot store (`ResponseTooLargeError`, `NarrowRequestError`) rejects its inner call, so both channels publish `error` although the request is served live. Documented rather than hidden: the cache did fail.
 - `type` comes from a `WeakSet` of handler inner functions, filled by `defineCachedHandler`, like `fences`. A handler's `result` is the stored `ResponseCacheEntry`, since the `Response` is built after the span ends; `type` is what tells subscribers so, because `group` is user-set and `event` also appears on plain functions called with an event.
 - Arguments are not published, since they are not what the cache stores. `result` is unavoidable with `tracePromise`; `tracing: false` is the opt-out for sensitive values.
 - `tracing` is excluded from integrity in both `integrityOpts`, so toggling it keeps existing entries warm.

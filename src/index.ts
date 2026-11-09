@@ -31,8 +31,8 @@ export {
   type CachedFunctionTraceContext,
   type CachedHandlerTraceContext,
   type CacheResolveTraceContext,
-  type CachedFunctionResolveTraceContext,
-  type CachedHandlerResolveTraceContext,
+  type CachedFunctionResolveContext,
+  type CachedHandlerResolveContext,
 } from "./tracing.ts";
 
 export type {

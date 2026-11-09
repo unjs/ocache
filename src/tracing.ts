@@ -55,7 +55,7 @@ export interface CachedHandlerTraceContext extends BaseCacheTraceContext {
   type: "handler";
   /** The request event. */
   event: HTTPEvent;
-  /** Stored entry the response is built from. */
+  /** Entry the response is built from, with the `cacheStatusHeader` when one is set. */
   result?: ResponseCacheEntry;
 }
 
@@ -81,7 +81,7 @@ interface BaseCacheResolveTraceContext {
 }
 
 /** Context of an `ocache.resolve` event published by a cached function. */
-export interface CachedFunctionResolveTraceContext extends BaseCacheResolveTraceContext {
+export interface CachedFunctionResolveContext extends BaseCacheResolveTraceContext {
   type: "function";
   /** The request event, when the first argument is one. */
   event?: HTTPEvent;
@@ -90,7 +90,7 @@ export interface CachedFunctionResolveTraceContext extends BaseCacheResolveTrace
 }
 
 /** Context of an `ocache.resolve` event published by a cached handler. */
-export interface CachedHandlerResolveTraceContext extends BaseCacheResolveTraceContext {
+export interface CachedHandlerResolveContext extends BaseCacheResolveTraceContext {
   type: "handler";
   /** The request event. */
   event: HTTPEvent;
@@ -103,9 +103,7 @@ export interface CachedHandlerResolveTraceContext extends BaseCacheResolveTraceC
  *
  * Narrow on `type` to get the matching `result`.
  */
-export type CacheResolveTraceContext =
-  | CachedFunctionResolveTraceContext
-  | CachedHandlerResolveTraceContext;
+export type CacheResolveTraceContext = CachedFunctionResolveContext | CachedHandlerResolveContext;
 
 interface SubChannel {
   readonly hasSubscribers: boolean;
@@ -154,7 +152,7 @@ function loadFactory(): ((name: string) => TracingChannel) | null {
     : null;
 }
 
-// The channel, while something subscribes to it.
+// The channel, while something subscribes to it. Never throws: `cachedFn` is not `async`.
 export function observed(name: string): TracingChannel | undefined {
   if (factory === undefined) {
     factory = loadFactory();
@@ -162,16 +160,20 @@ export function observed(name: string): TracingChannel | undefined {
   if (!factory) {
     return;
   }
-  const channel = (channels[name] ??= factory(name));
-  // Some runtimes (e.g. Bun) lack the aggregate getter, so ask the sub-channels.
-  const subscribed =
-    channel.hasSubscribers ??
-    (channel.start.hasSubscribers ||
-      channel.end.hasSubscribers ||
-      channel.asyncStart.hasSubscribers ||
-      channel.asyncEnd.hasSubscribers ||
-      channel.error.hasSubscribers);
-  return subscribed ? channel : undefined;
+  try {
+    const channel = (channels[name] ??= factory(name));
+    // Some runtimes (e.g. Bun) lack the aggregate getter, so ask the sub-channels.
+    const subscribed =
+      channel.hasSubscribers ??
+      (channel.start.hasSubscribers ||
+        channel.end.hasSubscribers ||
+        channel.asyncStart.hasSubscribers ||
+        channel.asyncEnd.hasSubscribers ||
+        channel.error.hasSubscribers);
+    return subscribed ? channel : undefined;
+  } catch {
+    factory = null;
+  }
 }
 
 // Runs `call`, traced on `name` while something subscribes. Unobserved, it returns `call()`

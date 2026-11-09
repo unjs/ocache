@@ -402,6 +402,58 @@ describe("ocache.resolve", () => {
     }
   });
 
+  it("stamps the entry after `serialize`, as the stored entry is", async () => {
+    let now = 1_000_000;
+    const dateNow = Date.now;
+    Date.now = () => now;
+    try {
+      const cached = defineCachedFunction(async () => "value", {
+        storage,
+        maxAge: 1,
+        // A slow serialize, like reading a handler's body, must not age the entry.
+        serialize: (entry) => {
+          now += 800;
+          return entry.value;
+        },
+      });
+
+      await cached();
+      now += 300;
+      await cached();
+
+      expect(settled().map((c) => c.status)).toEqual(["miss", "hit"]);
+      expect(resolves[0]!.result!.mtime).toBe(1_000_800);
+      expect(settled()[1]!.mtime).toBe(1_000_800);
+    } finally {
+      Date.now = dateNow;
+    }
+  });
+
+  it("keeps running past a `maxResolveTime` timeout that rejects the call", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const ended = new Promise<CacheResolveTraceContext>((resolve) => {
+      const asyncEnd = (context: CacheResolveTraceContext) => {
+        resolveChannel.unsubscribe({ asyncEnd } as any);
+        resolve(context);
+      };
+      resolveChannel.subscribe({ asyncEnd } as any);
+    });
+    const cached = defineCachedFunction(
+      async () => {
+        await gate;
+        return "late";
+      },
+      { storage, maxResolveTime: 0.01, onError: () => {} },
+    );
+
+    await expect(cached()).rejects.toThrow();
+    expect(events.some((e) => e.type === "error")).toBe(true);
+
+    release();
+    expect((await ended).result!.value).toBe("late");
+  });
+
   it("publishes the error of a failed resolution", async () => {
     const error = new Error("boom");
     const errors: CacheResolveTraceContext[] = [];

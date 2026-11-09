@@ -115,7 +115,7 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 ### `CacheResolveTraceContext`
 
 ```ts
-type CacheResolveTraceContext =
+type CacheResolveTraceContext = CachedFunctionResolveContext | CachedHandlerResolveContext;
 ```
 
 Context of the `ocache.resolve` channel.

@@ -297,8 +297,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         const run = async (): Promise<CacheEntry<T> & { value: T }> => {
           const value = await resolver();
           // Hooks inspect this entry before storage.
-          const mtime = Date.now();
-          const resolvedEntry: CacheEntry<T> = { value, mtime, integrity };
+          const resolvedEntry: CacheEntry<T> = { value, mtime: Date.now(), integrity };
           let maxAge: number | undefined;
           let staleMaxAge: number | undefined;
           if (opts.getMaxAge) {
@@ -317,7 +316,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           // Run `serialize` after `getMaxAge` so the lifetime hook sees the live value.
           const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
           // Every byte value becomes a `Uint8Array` here, so a miss returns what a hit returns.
-          return { value: normalizeBinary(stored) as T, mtime, maxAge, staleMaxAge };
+          // Stamped after `serialize`, which reads a handler's body, as the stored entry is.
+          return { value: normalizeBinary(stored) as T, mtime: Date.now(), maxAge, staleMaxAge };
         };
         const resolution =
           opts.tracing === false
@@ -376,7 +376,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       }
 
       if (!isPending) {
-        // The time `getMaxAge` saw, so the entry, the hook and its waiters share one mtime.
+        // The run's own stamp, so its waiters' events and later hits report one mtime.
         entry.mtime = resolved.mtime;
         entry.integrity = integrity;
         entry.stale = undefined;
