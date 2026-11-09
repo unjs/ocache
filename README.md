@@ -112,6 +112,18 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 
 ---
 
+### `CacheResolveTraceContext`
+
+```ts
+type CacheResolveTraceContext = CachedFunctionResolveContext | CachedHandlerResolveContext;
+```
+
+Context of the `ocache.resolve` channel.
+
+Narrow on `type` to get the matching `result`.
+
+---
+
 ### `CacheStatus`
 
 ```ts
@@ -124,6 +136,18 @@ Result of one cache call.
 - `"stale"`: returned stale data and started background revalidation.
 - `"revalidated"`: replaced an old value before returning.
 - `"miss"`: resolved a value when none existed.
+
+---
+
+### `CacheTraceContext`
+
+```ts
+type CacheTraceContext = CachedFunctionTraceContext | CachedHandlerTraceContext;
+```
+
+Context of the `ocache.get` channel.
+
+Narrow on `type` to get the matching `result`.
 
 ---
 
@@ -282,6 +306,19 @@ await expireCache({
 
 ---
 
+### `GET_CHANNEL`
+
+```ts
+const GET_CHANNEL = "ocache.get";
+```
+
+Name of the tracing channel cached calls are traced on.
+
+Subscribers can use it instead of hardcoding the string:
+`tracingChannel<CacheTraceContext>(GET_CHANNEL)`.
+
+---
+
 ### `invalidateCache`
 
 ```ts
@@ -307,6 +344,19 @@ await invalidateCache({
   args: ["user-123"],
 });
 ```
+
+---
+
+### `RESOLVE_CHANNEL`
+
+```ts
+const RESOLVE_CHANNEL = "ocache.resolve";
+```
+
+Name of the tracing channel resolutions are traced on: one event per run of the cached
+function, in the foreground or in the background.
+
+`tracingChannel<CacheResolveTraceContext>(RESOLVE_CHANNEL)`.
 
 ---
 

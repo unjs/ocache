@@ -103,14 +103,23 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
  *
  * `stream` joins them because it decides only when a caller is handed the body, never what
  * is stored: a streamed and a buffered fill write the same entry, so turning it on must not
- * make every existing entry cold.
+ * make every existing entry cold. `tracing` only observes, so it joins them too.
  */
 export function integrityOpts<E extends HTTPEvent>(
   opts: CachedEventHandlerOptions<E>,
 ): Omit<
   CachedEventHandlerOptions<E>,
-  "base" | "group" | "name" | "storage" | "waitUntil" | "stream"
+  "base" | "group" | "name" | "storage" | "waitUntil" | "stream" | "tracing"
 > {
-  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, stream: _st, ...rest } = opts;
+  const {
+    base: _,
+    group: _g,
+    name: _n,
+    storage: _s,
+    waitUntil: _w,
+    stream: _st,
+    tracing: _t,
+    ...rest
+  } = opts;
   return rest;
 }

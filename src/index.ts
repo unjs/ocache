@@ -24,6 +24,17 @@ export {
   composeStorage,
 } from "./storage.ts";
 
+export {
+  GET_CHANNEL,
+  RESOLVE_CHANNEL,
+  type CacheTraceContext,
+  type CachedFunctionTraceContext,
+  type CachedHandlerTraceContext,
+  type CacheResolveTraceContext,
+  type CachedFunctionResolveContext,
+  type CachedHandlerResolveContext,
+} from "./tracing.ts";
+
 export type {
   HTTPEvent,
   ServerRequest,

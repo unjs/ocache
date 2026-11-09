@@ -231,6 +231,15 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
   waitUntil?: (promise: Promise<any>) => void;
   /** Receives handled cache, hook, and background errors. */
   onError?: (error: unknown) => void;
+  /**
+   * Traces calls on the `ocache.get` and `ocache.resolve` channels of
+   * `node:diagnostics_channel`.
+   *
+   * Defaults to `true`. A no-op on runtimes without tracing channels, and a call costs
+   * nothing extra while nothing subscribes. Set `false` to keep this cache's values away
+   * from subscribers. Changing it does not invalidate entries.
+   */
+  tracing?: boolean;
 }
 
 /** Stored HTTP response data. */
