@@ -26,7 +26,7 @@ src/
 ├── error.ts        # Every error class and user-visible error message
 ├── hash.ts         # `hash`/`serialize`: cache keys + integrity, digest via `#crypto`
 ├── base64.ts       # Binary-body codec: one implementation picked per runtime
-├── tracing.ts      # Opt-in `ocache.get` tracing channel and its context type
+├── tracing.ts      # `ocache.get` + `ocache.resolve` tracing channels and their context types
 └── storage.ts      # Storage interface, memory storage, `createBlobStorage` frame, `composeStorage` layers
 
 lib/                # Shipped as-is (not built): the two arms of the `#crypto` import
@@ -55,7 +55,7 @@ The `.agents/` layout matches `src/`. Before you edit an area, read the file tha
 | `.agents/http/stream.md`   | `http/stream.ts`: opt-in streamed fills, the foreground gate, what a streamed response gives up          |
 | `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`, the blob frame, layered stacks |
 | `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable               |
-| `.agents/tracing.md`       | `tracing.ts`: zero-cost gating, unchanged timing when unobserved, context fields                         |
+| `.agents/tracing.md`       | `tracing.ts`: the two channels, zero-cost gating, unchanged timing when unobserved, context fields       |
 
 ## Cross-module invariants
 

@@ -2,9 +2,11 @@ import { tracingChannel } from "node:diagnostics_channel";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   GET_CHANNEL,
+  RESOLVE_CHANNEL,
   createMemoryStorage,
   defineCachedFunction,
   defineCachedHandler,
+  type CacheResolveTraceContext,
   type CacheTraceContext,
   type HTTPEvent,
   type ResponseCacheEntry,
@@ -13,9 +15,11 @@ import {
 
 type TraceEvent = { type: string; context: CacheTraceContext };
 
-const channel = tracingChannel<object, CacheTraceContext>(GET_CHANNEL);
+const channel = tracingChannel<CacheTraceContext>(GET_CHANNEL);
+const resolveChannel = tracingChannel<CacheResolveTraceContext>(RESOLVE_CHANNEL);
 
 let events: TraceEvent[];
+let resolves: CacheResolveTraceContext[];
 let storage: StorageInterface;
 
 const handlers = {
@@ -26,14 +30,21 @@ const handlers = {
   error: (context: CacheTraceContext) => events.push({ type: "error", context }),
 };
 
+const resolveHandlers = {
+  start: (context: CacheResolveTraceContext) => resolves.push(context),
+};
+
 beforeEach(() => {
   events = [];
+  resolves = [];
   storage = createMemoryStorage();
   channel.subscribe(handlers as any);
+  resolveChannel.subscribe(resolveHandlers as any);
 });
 
 afterEach(() => {
   channel.unsubscribe(handlers as any);
+  resolveChannel.unsubscribe(resolveHandlers as any);
 });
 
 /**
@@ -53,7 +64,6 @@ describe("ocache.get", () => {
       name: "getUser",
       storage,
       maxAge: 60,
-      tracing: true,
     });
 
     await getUser("1");
@@ -69,10 +79,11 @@ describe("ocache.get", () => {
     expect(miss!.key).toBeTypeOf("string");
     expect(miss!.keys).toEqual([`/cache:functions:getUser:${miss!.key}.json`]);
     expect(miss!.maxAge).toBe(60);
-    expect(miss!.mtime).toBeUndefined();
+    expect(miss!.mtime).toBeTypeOf("number");
     expect(miss!.result).toEqual({ id: "1" });
     expect(hit).toMatchObject({ name: "getUser", key: miss!.key, status: "hit", maxAge: 60 });
-    expect(hit!.mtime).toBeTypeOf("number");
+    // Both events describe the value served, so they agree on its write time.
+    expect(hit!.mtime).toBe(miss!.mtime);
     expect(events.map((e) => e.type)).toEqual([
       "start",
       "end",
@@ -94,7 +105,6 @@ describe("ocache.get", () => {
         storage,
         maxAge: 1,
         swr: true,
-        tracing: true,
       });
 
       await cached();
@@ -113,7 +123,6 @@ describe("ocache.get", () => {
       storage,
       maxAge: 60,
       shouldInvalidateCache: () => force,
-      tracing: true,
     });
 
     await cached();
@@ -129,7 +138,6 @@ describe("ocache.get", () => {
       storage,
       base: ["/l1", "/l2"],
       getKey: () => "k",
-      tracing: true,
     });
 
     await cached();
@@ -145,7 +153,6 @@ describe("ocache.get", () => {
       storage,
       maxAge: 60,
       getMaxAge: () => 300,
-      tracing: true,
     });
 
     await cached();
@@ -163,7 +170,6 @@ describe("ocache.get", () => {
         storage,
         maxAge: 1,
         swr: true,
-        tracing: true,
       });
 
       await cached();
@@ -179,18 +185,65 @@ describe("ocache.get", () => {
     }
   });
 
-  it("traces a bypassed call without a key", async () => {
+  it("reports the new value on a revalidation, not the replaced entry", async () => {
+    let now = 1_000_000;
+    const dateNow = Date.now;
+    Date.now = () => now;
+    try {
+      let lifetime = 60;
+      let force = false;
+      const cached = defineCachedFunction(async () => "value", {
+        storage,
+        maxAge: 60,
+        getMaxAge: () => lifetime,
+        shouldInvalidateCache: () => force,
+      });
+
+      await cached();
+      now += 1000;
+      lifetime = 120;
+      force = true;
+      await cached();
+
+      const revalidated = settled()[1]!;
+      expect(revalidated.status).toBe("revalidated");
+      expect(revalidated.maxAge).toBe(120);
+      expect(revalidated.mtime).toBe(now);
+    } finally {
+      Date.now = dateNow;
+    }
+  });
+
+  it("does not trace a bypassed call", async () => {
+    let calls = 0;
     const cached = defineCachedFunction(async () => "value", {
       storage,
-      shouldBypassCache: () => true,
-      tracing: true,
+      shouldBypassCache: () => {
+        calls++;
+        return true;
+      },
+    });
+
+    expect(await cached()).toBe("value");
+    expect(events).toEqual([]);
+    expect(resolves).toEqual([]);
+    expect(calls).toBe(1);
+  });
+
+  it("runs the bypass hook once for a traced call", async () => {
+    let calls = 0;
+    const cached = defineCachedFunction(async () => "value", {
+      storage,
+      shouldBypassCache: () => {
+        calls++;
+        return false;
+      },
     });
 
     await cached();
 
-    const [bypass] = settled();
-    expect(bypass!.status).toBe("bypass");
-    expect(bypass!.key).toBeUndefined();
+    expect(calls).toBe(1);
+    expect(settled()).toHaveLength(1);
   });
 
   it("publishes the error and the status of a failed resolution", async () => {
@@ -199,7 +252,7 @@ describe("ocache.get", () => {
       async () => {
         throw error;
       },
-      { name: "failing", storage, tracing: true },
+      { name: "failing", storage },
     );
 
     await expect(cached()).rejects.toBe(error);
@@ -213,7 +266,6 @@ describe("ocache.get", () => {
       name: "page",
       storage,
       maxAge: 60,
-      tracing: true,
     });
 
     const event = createEvent("http://localhost/page");
@@ -232,23 +284,166 @@ describe("ocache.get", () => {
     expect(hit!.status).toBe("hit");
   });
 
-  it("publishes nothing without the `tracing` option", async () => {
+  it("traces by default", async () => {
+    const cached = defineCachedFunction(async () => "value", { storage });
+
+    await cached();
+
+    expect(settled()).toHaveLength(1);
+    expect(resolves).toHaveLength(1);
+  });
+
+  it("publishes nothing with `tracing: false`", async () => {
+    const cached = defineCachedFunction(async () => "value", { storage, tracing: false });
+    const handler = defineCachedHandler(() => new Response("ok"), { storage, tracing: false });
+
+    await cached();
+    await handler(createEvent("http://localhost/"));
+
+    expect(events).toEqual([]);
+    expect(resolves).toEqual([]);
+  });
+
+  it("does not change integrity, so toggling it keeps existing entries", async () => {
+    let calls = 0;
+    const fn = async () => ++calls;
+
+    await defineCachedFunction(fn, { name: "same", storage, maxAge: 60, tracing: false })();
+    const traced = defineCachedFunction(fn, { name: "same", storage, maxAge: 60 });
+
+    expect(await traced()).toBe(1);
+    expect(settled()[0]!.status).toBe("hit");
+  });
+});
+
+describe("ocache.resolve", () => {
+  it("publishes once per run of the function", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const cached = defineCachedFunction(
+      async () => {
+        await gate;
+        return "value";
+      },
+      { name: "shared", storage, maxAge: 60, getKey: () => "k" },
+    );
+
+    const calls = [cached(), cached(), cached()];
+    release();
+    await Promise.all(calls);
+
+    expect(settled().map((c) => c.status)).toEqual(["miss", "miss", "miss"]);
+    expect(resolves).toHaveLength(1);
+    expect(resolves[0]).toMatchObject({
+      type: "function",
+      name: "shared",
+      group: "functions",
+      key: "k",
+      status: "miss",
+    });
+    expect(resolves[0]!.result).toMatchObject({ value: "value", maxAge: undefined });
+    // Every waiter reports the write time of the one run it was served from.
+    expect(settled().map((c) => c.mtime)).toEqual(Array(3).fill(resolves[0]!.result!.mtime));
+  });
+
+  it("starts inside the call that ran it", async () => {
+    const { AsyncLocalStorage } = await import("node:async_hooks");
+    const store = new AsyncLocalStorage<string>();
+    const start = tracingChannel<CacheTraceContext, string>(GET_CHANNEL).start;
+    start.bindStore(store, (context) => `get:${context.key ?? "?"}`);
+    let parent: string | undefined;
+    const onStart = () => (parent = store.getStore());
+    resolveChannel.subscribe({ start: onStart } as any);
+    try {
+      await defineCachedFunction(async () => "value", { storage })();
+      expect(parent).toBe("get:?");
+    } finally {
+      start.unbindStore(store);
+      resolveChannel.unsubscribe({ start: onStart } as any);
+    }
+  });
+
+  it("traces a background refresh after the stale call ends", async () => {
+    let now = 1_000_000;
+    const dateNow = Date.now;
+    Date.now = () => now;
+    try {
+      let release!: () => void;
+      let gate: Promise<void> = Promise.resolve();
+      const cached = defineCachedFunction(
+        async () => {
+          await gate;
+          return "value";
+        },
+        { storage, maxAge: 1, swr: true },
+      );
+
+      await cached();
+      now += 2000;
+      gate = new Promise<void>((resolve) => (release = resolve));
+      const settledResolve = new Promise<CacheResolveTraceContext>((resolve) => {
+        const asyncEnd = (context: CacheResolveTraceContext) => {
+          resolveChannel.unsubscribe({ asyncEnd } as any);
+          resolve(context);
+        };
+        resolveChannel.subscribe({ asyncEnd } as any);
+      });
+
+      expect(await cached()).toBe("value");
+      expect(settled().map((c) => c.status)).toEqual(["miss", "stale"]);
+      expect(resolves.map((c) => c.status)).toEqual(["miss", "stale"]);
+
+      release();
+      const refresh = await settledResolve;
+      expect(refresh.status).toBe("stale");
+      expect(refresh.result!.value).toBe("value");
+    } finally {
+      Date.now = dateNow;
+    }
+  });
+
+  it("publishes the error of a failed resolution", async () => {
+    const error = new Error("boom");
+    const errors: CacheResolveTraceContext[] = [];
+    const onError = (context: CacheResolveTraceContext) => errors.push(context);
+    resolveChannel.subscribe({ error: onError } as any);
+    try {
+      const cached = defineCachedFunction(
+        async () => {
+          throw error;
+        },
+        { storage },
+      );
+
+      await expect(cached()).rejects.toBe(error);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatchObject({ status: "miss", error });
+    } finally {
+      resolveChannel.unsubscribe({ error: onError } as any);
+    }
+  });
+
+  it("publishes the stored response entry for a handler", async () => {
+    const handler = defineCachedHandler(() => new Response("ok"), { storage, maxAge: 60 });
+    const event = createEvent("http://localhost/page");
+
+    await handler(event);
+
+    expect(resolves).toHaveLength(1);
+    expect(resolves[0]!.type).toBe("handler");
+    expect(resolves[0]!.event).toBe(event);
+    expect(resolves[0]!.result!.value).toMatchObject({ status: 200, body: "ok" });
+  });
+
+  it("traces without an `ocache.get` subscriber", async () => {
+    channel.unsubscribe(handlers as any);
     const cached = defineCachedFunction(async () => "value", { storage });
 
     await cached();
 
     expect(events).toEqual([]);
-  });
-
-  it("does not change integrity, so enabling it keeps existing entries", async () => {
-    let calls = 0;
-    const fn = async () => ++calls;
-
-    await defineCachedFunction(fn, { name: "same", storage, maxAge: 60 })();
-    const traced = defineCachedFunction(fn, { name: "same", storage, maxAge: 60, tracing: true });
-
-    expect(await traced()).toBe(1);
-    expect(settled()[0]!.status).toBe("hit");
+    expect(resolves).toHaveLength(1);
   });
 });
 
@@ -262,17 +457,26 @@ describe("CacheTraceContext", () => {
       expectTypeOf(context.result).toEqualTypeOf<unknown>();
     }
   });
+
+  it("narrows the `ocache.resolve` `result` on `type`", () => {
+    const context = {} as CacheResolveTraceContext;
+    if (context.type === "handler") {
+      expectTypeOf(context.result?.value).toEqualTypeOf<ResponseCacheEntry | undefined>();
+    }
+  });
 });
 
-describe("ocache.get without subscribers", () => {
+describe("without subscribers", () => {
   beforeEach(() => {
     channel.unsubscribe(handlers as any);
+    resolveChannel.unsubscribe(resolveHandlers as any);
   });
 
   it("runs the call untraced", async () => {
-    const cached = defineCachedFunction(async () => "value", { storage, tracing: true });
+    const cached = defineCachedFunction(async () => "value", { storage });
 
     expect(await cached()).toBe("value");
     expect(events).toEqual([]);
+    expect(resolves).toEqual([]);
   });
 });

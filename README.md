@@ -112,6 +112,18 @@ Alias for [`defineCachedFunction`](#definecachedfunction).
 
 ---
 
+### `CacheResolveTraceContext`
+
+```ts
+type CacheResolveTraceContext =
+```
+
+Context of the `ocache.resolve` channel.
+
+Narrow on `type` to get the matching `result`.
+
+---
+
 ### `CacheStatus`
 
 ```ts
@@ -332,6 +344,19 @@ await invalidateCache({
   args: ["user-123"],
 });
 ```
+
+---
+
+### `RESOLVE_CHANNEL`
+
+```ts
+const RESOLVE_CHANNEL = "ocache.resolve";
+```
+
+Name of the tracing channel resolutions are traced on: one event per run of the cached
+function, in the foreground or in the background.
+
+`tracingChannel<CacheResolveTraceContext>(RESOLVE_CHANNEL)`.
 
 ---
 

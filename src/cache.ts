@@ -4,10 +4,10 @@ import { base64ToBytes, bytesToBase64 } from "./base64.ts";
 import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage, scheduleTimer } from "./storage.ts";
-import { traceGet, traceType } from "./tracing.ts";
+import { GET_CHANNEL, RESOLVE_CHANNEL, observed, trace, traceType } from "./tracing.ts";
 
 import type { StorageInterface, StorageOption } from "./storage.ts";
-import type { CacheTraceContext } from "./tracing.ts";
+import type { CacheResolveTraceContext, CacheTraceContext } from "./tracing.ts";
 import type { HTTPEvent, CacheEntry, CacheOptions, CacheStatus } from "./types.ts";
 
 function defaultCacheOptions() {
@@ -25,7 +25,8 @@ const DEFAULT_MAX_RESOLVE_TIME = 30;
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
 type PendingResolution<T> = {
-  promise: Promise<{ value: T; maxAge?: number; staleMaxAge?: number }>;
+  /** The new entry, before storage. */
+  promise: Promise<CacheEntry<T> & { value: T }>;
   /** Set when a purge ran while this resolution was in flight. */
   fenced?: boolean;
   /** Set while a settled resolution waits for its write to land: when it stops holding the key. */
@@ -148,7 +149,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     args: ArgsT,
     shouldInvalidateCache?: boolean,
     event?: HTTPEvent,
-    trace?: CacheTraceContext,
+    context?: CacheTraceContext,
   ): Promise<ResolvedCacheEntry<T>> {
     const validateCtx = { args };
     // One owner for background work: the explicit hook, else the event's host hook.
@@ -162,8 +163,8 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     };
     // The extension separates a key from a parent namespace with the same prefix.
     const bases = normalizeBases(opts.base);
-    if (trace) {
-      trace.keys = bases.map((b) => buildCacheKey(key, { group, name }, b));
+    if (context) {
+      context.keys = bases.map((b) => buildCacheKey(key, { group, name }, b));
     }
 
     let entry: CacheEntry<T> = {} as CacheEntry<T>;
@@ -251,12 +252,12 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           : swr && _isValid && isMatched
             ? "stale"
             : "revalidated";
-    if (trace) {
-      trace.status = status;
-      // Describes the served entry. A foreground resolution replaces `maxAge` once it settles.
-      trace.maxAge = readMaxAge;
+    if (context) {
+      context.status = status;
+      // A foreground resolution describes the value it serves once it settles.
       if (status === "hit" || status === "stale") {
-        trace.mtime = entry.mtime;
+        context.maxAge = readMaxAge;
+        context.mtime = entry.mtime;
       }
     }
 
@@ -291,11 +292,13 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (event && status !== "stale") {
           (resolveStatuses ??= new WeakMap()).set(event, status);
         }
-        // Share serialization because it may consume a one-use stream.
-        const resolution = (async () => {
+        // Share serialization because it may consume a one-use stream. Traced for the
+        // leader only, so one event marks one run of the function.
+        const run = async (): Promise<CacheEntry<T> & { value: T }> => {
           const value = await resolver();
           // Hooks inspect this entry before storage.
-          const resolvedEntry: CacheEntry<T> = { value, mtime: Date.now(), integrity };
+          const mtime = Date.now();
+          const resolvedEntry: CacheEntry<T> = { value, mtime, integrity };
           let maxAge: number | undefined;
           let staleMaxAge: number | undefined;
           if (opts.getMaxAge) {
@@ -314,8 +317,24 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
           // Run `serialize` after `getMaxAge` so the lifetime hook sees the live value.
           const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
           // Every byte value becomes a `Uint8Array` here, so a miss returns what a hit returns.
-          return { value: normalizeBinary(stored) as T, maxAge, staleMaxAge };
-        })();
+          return { value: normalizeBinary(stored) as T, mtime, maxAge, staleMaxAge };
+        };
+        const resolution =
+          opts.tracing === false
+            ? run()
+            : trace(
+                RESOLVE_CHANNEL,
+                () =>
+                  ({
+                    type: traceType(cachedFn),
+                    name,
+                    group,
+                    key,
+                    status,
+                    event,
+                  }) as CacheResolveTraceContext,
+                run,
+              );
         // Reject all waiters on timeout and prevent a late result from reaching storage.
         current = {
           promise: maxResolveTime
@@ -325,7 +344,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         pending.set(key, current);
       }
 
-      let resolved: { value: T; maxAge?: number; staleMaxAge?: number };
+      let resolved: CacheEntry<T> & { value: T };
       try {
         resolved = await current.promise;
       } catch (error) {
@@ -351,12 +370,14 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       if (!isPending || status !== "stale") {
         entry.value = resolved.value;
       }
-      if (trace && status !== "stale") {
-        trace.maxAge = opts.getMaxAge ? (resolved.maxAge ?? opts.maxAge) : opts.maxAge;
+      if (context && status !== "stale") {
+        context.maxAge = resolved.maxAge ?? opts.maxAge;
+        context.mtime = resolved.mtime;
       }
 
       if (!isPending) {
-        entry.mtime = Date.now();
+        // The time `getMaxAge` saw, so the entry, the hook and its waiters share one mtime.
+        entry.mtime = resolved.mtime;
         entry.integrity = integrity;
         entry.stale = undefined;
         // Store dynamic lifetimes with the entry.
@@ -460,17 +481,14 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     return _resolvePromise.then(() => entry) as Promise<ResolvedCacheEntry<T>>;
   }
 
-  const call = async (args: ArgsT, trace?: CacheTraceContext) => {
-    const shouldBypassCache = await opts.shouldBypassCache?.(...args);
-    if (shouldBypassCache) {
-      if (trace) {
-        trace.status = "bypass";
-      }
+  // `checked` skips the bypass hook a traced call has already run.
+  const call = async (args: ArgsT, context?: CacheTraceContext, checked?: boolean) => {
+    if (!checked && (await opts.shouldBypassCache?.(...args))) {
       return fn(...args);
     }
     const key = await (opts.getKey || getKey)(...args);
-    if (trace) {
-      trace.key = key;
+    if (context) {
+      context.key = key;
     }
     const shouldInvalidateCache = await opts.shouldInvalidateCache?.(...args);
     const entry = await get(
@@ -479,7 +497,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       args,
       shouldInvalidateCache,
       isHTTPEvent(args[0]) ? args[0] : undefined,
-      trace,
+      context,
     );
     let value = entry.value;
     if (opts.transform) {
@@ -489,21 +507,28 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     return value;
   };
 
-  // Untraced functions call `call` directly; see `.agents/tracing.md`.
+  // A bypassed call is not a cache operation, so it is decided before the event starts.
+  const traced = async (args: ArgsT) => {
+    if (await opts.shouldBypassCache?.(...args)) {
+      return fn(...args);
+    }
+    return trace(
+      GET_CHANNEL,
+      // A handler's inner function is always called with its event.
+      () =>
+        ({
+          type: traceType(cachedFn),
+          name,
+          group,
+          event: isHTTPEvent(args[0]) ? args[0] : undefined,
+        }) as CacheTraceContext,
+      (context) => call(args, context, true),
+    );
+  };
+
+  // Unobserved calls run `call` directly, with untraced timing; see `.agents/tracing.md`.
   const cachedFn = (...args: ArgsT) =>
-    opts.tracing
-      ? traceGet(
-          // A handler's inner function is always called with its event.
-          () =>
-            ({
-              type: traceType(cachedFn),
-              name,
-              group,
-              event: isHTTPEvent(args[0]) ? args[0] : undefined,
-            }) as CacheTraceContext,
-          (trace) => call(args, trace),
-        )
-      : call(args);
+    opts.tracing !== false && observed(GET_CHANNEL) ? traced(args) : call(args);
 
   // Cancel the storage write of every resolution that started before the purge.
   (fences ??= new WeakMap()).set(cachedFn, (key: string) => {
@@ -836,7 +861,7 @@ function remainingTtl(
  * A backend change does not change the cached computation.
  * Hashing storage objects is also expensive and cannot capture closed-over configuration.
  * `waitUntil` only decides who owns background work, so adopting it or moving between
- * runtimes must not invalidate entries. `tracing` only observes, so enabling it must not either.
+ * runtimes must not invalidate entries. `tracing` only observes, so toggling it must not either.
  */
 function integrityOpts(
   opts: CacheOptions<any, any>,

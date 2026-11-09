@@ -26,9 +26,13 @@ export {
 
 export {
   GET_CHANNEL,
+  RESOLVE_CHANNEL,
   type CacheTraceContext,
   type CachedFunctionTraceContext,
   type CachedHandlerTraceContext,
+  type CacheResolveTraceContext,
+  type CachedFunctionResolveTraceContext,
+  type CachedHandlerResolveTraceContext,
 } from "./tracing.ts";
 
 export type {

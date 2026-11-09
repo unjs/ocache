@@ -162,7 +162,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     const rawValue = await handler(event as E);
     return toResponse(rawValue, event as E);
   }, _opts);
-  if (opts.tracing) {
+  if (opts.tracing !== false) {
     markHandlerFunction(cachedFn);
   }
 
