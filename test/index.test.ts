@@ -825,6 +825,7 @@ describe("cachedFunction", () => {
         return base.set(k, v, o);
       },
     });
+    const errors: unknown[] = [];
     let shouldThrow = false;
     const fn = defineCachedFunction(
       async () => {
@@ -833,7 +834,13 @@ describe("cachedFunction", () => {
         }
         return "v1";
       },
-      { maxAge: 0.01, swr: true, staleMaxAge: 0.04, name: "swrThrowTtl", onError: () => {} },
+      {
+        maxAge: 0.01,
+        swr: true,
+        staleMaxAge: 0.04,
+        name: "swrThrowTtl",
+        onError: (error) => errors.push(error),
+      },
     );
 
     expect(await fn()).toBe("v1");
@@ -843,7 +850,8 @@ describe("cachedFunction", () => {
     await new Promise((r) => setTimeout(r, 20));
     shouldThrow = true;
     expect(await fn()).toBe("v1");
-    await new Promise((r) => setTimeout(r, 5));
+    // The refresh has failed before the assertion, so it cannot pass vacuously.
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
     // Neither a write nor an eviction: the original TTL still governs the entry.
     expect(setSpy).toHaveBeenCalledTimes(1);
 
@@ -8313,6 +8321,7 @@ describe("defineCachedHandler", () => {
   it("keeps the stale response when a background revalidation throws", async () => {
     let mode: "ok" | "throw" | "404" = "ok";
     let callCount = 0;
+    const errors: unknown[] = [];
     const path = uniquePath();
     const handler = defineCachedHandler(
       () => {
@@ -8322,7 +8331,7 @@ describe("defineCachedHandler", () => {
         }
         return mode === "404" ? new Response("gone", { status: 404 }) : new Response("page");
       },
-      { maxAge: 60, swr: true, staleMaxAge: 600, onError: () => {} },
+      { maxAge: 60, swr: true, staleMaxAge: 600, onError: (error) => errors.push(error) },
     );
 
     expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("page");
@@ -8330,10 +8339,10 @@ describe("defineCachedHandler", () => {
 
     mode = "throw";
     await handler.expire(makeEvent(path));
-    for (let i = 0; i < 2; i++) {
+    for (let i = 1; i <= 2; i++) {
       const res = (await handler(makeEvent(path))) as Response;
       expect(await res.text()).toBe("page");
-      await new Promise((r) => setTimeout(r, 5));
+      await vi.waitFor(() => expect(errors).toHaveLength(i));
     }
     expect(callCount).toBe(3);
     expect(await testStorage.get(key!)).toBeTruthy();
@@ -8344,6 +8353,52 @@ describe("defineCachedHandler", () => {
       expect(await testStorage.get(key!)).toBeFalsy();
     });
   });
+
+  // nitro#4060: frameworks signal "gone" by throwing, e.g. h3's `createError({ status: 404 })`.
+  // Only a transient failure (no status, or a 5xx) keeps the stale response.
+  const thrownRefreshes: [label: string, fail: () => unknown, kept: boolean][] = [
+    ["a 5xx `status`", () => Object.assign(new Error("down"), { status: 503 }), true],
+    ["a 4xx `status`", () => Object.assign(new Error("gone"), { status: 404 }), false],
+    ["a 4xx `statusCode`", () => Object.assign(new Error("gone"), { statusCode: 410 }), false],
+    ["a value `toResponse` cannot convert", () => ({}), false],
+  ];
+  for (const [label, fail, kept] of thrownRefreshes) {
+    it(`${kept ? "keeps" : "evicts"} the stale response when a refresh fails with ${label}`, async () => {
+      let failing = false;
+      const errors: unknown[] = [];
+      const path = uniquePath();
+      const handler = defineCachedHandler(
+        () => {
+          if (!failing) {
+            return new Response("page");
+          }
+          const result = fail();
+          if (result instanceof Error) {
+            throw result;
+          }
+          return result as Response;
+        },
+        { maxAge: 60, swr: true, onError: (error) => errors.push(error) },
+      );
+
+      expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("page");
+      const [key] = await handler.resolveKeys(makeEvent(path));
+
+      failing = true;
+      await handler.expire(makeEvent(path));
+      expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("page");
+      await vi.waitFor(() => expect(errors).toHaveLength(1));
+      if (kept) {
+        // Give an eviction, had one started, time to land.
+        await new Promise((r) => setTimeout(r, 10));
+        expect(await testStorage.get(key!)).toBeTruthy();
+      } else {
+        await vi.waitFor(async () => {
+          expect(await testStorage.get(key!)).toBeFalsy();
+        });
+      }
+    });
+  }
 
   for (const status of [404, 500]) {
     it(`returns a ${status} to the caller but neither stores nor advertises it`, async () => {

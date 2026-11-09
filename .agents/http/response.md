@@ -10,7 +10,7 @@ The default conversion (`http/index.ts`) refuses any value a `Response` cannot c
 
 The old default was `new Response(String(value))` for every non-`Response`. An h3-style handler returning a plain object stored the body `[object Object]` as a 200 with `content-type: text/plain`, a synthesized `cache-control`, and a valid weak `etag` for that text. Nothing on the storage path rejects it: the status is cacheable and the body is a non-empty string. The handler then did not run again for the rest of the lifetime, so the corruption was invisible at the origin and served from cache to every client, and `swr` extended it past `maxAge`. A byte view failed the same way through `String(bytes)` — the comma-joined digits, which is also why the accepted set includes body types rather than only primitives.
 
-Throwing is the fail-safe because the cache cannot serialize an object without inventing a content type, and a framework that has one connects it through `toResponse`. The throw happens inside the resolver, before `serialize`, so no entry is written; `cache.ts` evicts the key as it does for any failed resolution, and the request fails once instead of the cache replaying a wrong body. `undefined` throws for the same reason: a handler that stages its result on `event.res` needs the framework's `toResponse`, and "empty body" would be a guess.
+Throwing is the fail-safe because the cache cannot serialize an object without inventing a content type, and a framework that has one connects it through `toResponse`. The throw happens inside the resolver, before `serialize`, so no entry is written; the key is evicted, a background SWR refresh included (`keepStale` in `http/index.ts` treats this error as permanent), and the request fails once instead of the cache replaying a wrong body. `undefined` throws for the same reason: a handler that stages its result on `event.res` needs the framework's `toResponse`, and "empty body" would be a guess.
 
 Keep the accepted set aligned with what `new Response(body)` treats as a body. Adding a type here means the cache stores it; a type left out fails loudly rather than silently stringifying.
 
@@ -167,7 +167,7 @@ What remains is on the store path, and it is no longer the encoder. A 64 KiB bin
 
 **An unclaimed response releases its stream.** A background SWR revalidation has no caller: its rejection reaches `onError` and stops. The error therefore schedules a `setTimeout(…, 0)` that cancels the body when nothing claimed it. The delay must be a **macrotask**: the rejection travels from `serialize` to the serve path through microtasks only, so a `queueMicrotask` release would cancel the stream before the leader could claim it. The timer is `unref`ed, like every other timer in this codebase.
 
-An existing entry is evicted when its replacement is over the limit. That follows `cache.ts`, which evicts on any failed resolution, and it is correct here: the resource no longer has a representation this cache may serve.
+An existing entry is evicted when its replacement is over the limit, even by a background SWR refresh, which otherwise keeps the stale entry through a failure (`keepStale` in `http/index.ts`). The refresh succeeded and the resource no longer has a representation this cache may serve, so this is not a transient failure.
 
 ## `304 Not Modified`
 

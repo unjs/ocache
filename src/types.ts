@@ -187,7 +187,8 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    *
    * Defaults to `30`.
    * Set `Infinity` or `0` to disable the deadline.
-   * On timeout, all waiters reject with `TimeoutError` and the old entry is evicted.
+   * On timeout, all waiters reject with `TimeoutError` and the old entry is evicted,
+   * unless the resolution was a background SWR refresh, which keeps it.
    * A handler's `event.req.signal` aborts with that error; a plain resolver receives no
    * signal, so it continues but cannot write its late result.
    */

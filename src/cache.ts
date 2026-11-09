@@ -1,12 +1,7 @@
 // Docs: @docs/2.functions.md, @docs/4.invalidation.md, @docs/9.isr.md
 
 import { base64ToBytes, bytesToBase64 } from "./base64.ts";
-import {
-  ResponseTooLargeError,
-  malformedEntryError,
-  storageRequiredError,
-  timeoutError,
-} from "./error.ts";
+import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage, scheduleTimer } from "./storage.ts";
 
@@ -26,6 +21,15 @@ function defaultCacheOptions() {
 const DEFAULT_MAX_RESOLVE_TIME = 30;
 
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
+
+/** Options only `defineCachedHandler` passes; not part of the public `CacheOptions`. */
+export interface InternalCacheOptions {
+  /**
+   * Whether a failed background SWR refresh keeps the stale entry. Unset keeps it for every
+   * error; the handler path evicts for failures that mean the resource is gone.
+   */
+  keepStale?: (error: unknown) => boolean;
+}
 
 type PendingResolution<T> = {
   promise: Promise<{ value: T; maxAge?: number; staleMaxAge?: number }>;
@@ -324,9 +328,9 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (!isPending) {
           releasePending(key, current);
           // A purge already removed the entry, and a newer resolution may own the key.
-          // A thrown SWR refresh keeps the last good entry; its stale window still bounds it.
-          // An over-limit body is a successful refresh that cannot be stored, so it evicts.
-          const keepStale = status === "stale" && !(error instanceof ResponseTooLargeError);
+          // A failed SWR refresh keeps the last good entry; its stale window still bounds it.
+          const keepStale =
+            status === "stale" && (opts as InternalCacheOptions).keepStale?.(error) !== false;
           if (!current.fenced && !keepStale) {
             const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
               (error) => {
