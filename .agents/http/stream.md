@@ -61,7 +61,7 @@ chunk array `streamBody` already keeps is the buffer such a design would replay 
   already sent. `streamBody` calls `sink.error()` and never `close()` on a failed read, so the
   consumer's stream errors and the chunked framing terminates incompletely rather than looking
   like a complete representation. Nothing partial is ever stored: the entry is built only after a
-  clean end of stream, and a thrown `serialize` evicts, as any failed resolution does.
+  clean end of stream, and a thrown `serialize` evicts, as any failed foreground resolution does.
 
 Everything that is decidable from headers alone still happens before the response goes out, which
 is what keeps the "storage decision and advertisement use the same predicates" invariant true:

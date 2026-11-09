@@ -22,6 +22,16 @@ const DEFAULT_MAX_RESOLVE_TIME = 30;
 
 type ResolvedCacheEntry<T> = CacheEntry<T> & { value: T; status: CacheStatus };
 
+// Whether a failed background SWR refresh keeps the stale entry. Unset keeps it for every
+// error; the handler path evicts for failures that mean the resource is gone. A symbol (not
+// re-exported) so no caller option can set it.
+export const kKeepStale: unique symbol = Symbol("keepStale");
+
+/** Options only `defineCachedHandler` passes; not part of the public `CacheOptions`. */
+export interface InternalCacheOptions {
+  [kKeepStale]?: (error: unknown) => boolean;
+}
+
 type PendingResolution<T> = {
   promise: Promise<{ value: T; maxAge?: number; staleMaxAge?: number }>;
   /** Set when a purge ran while this resolution was in flight. */
@@ -319,7 +329,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (!isPending) {
           releasePending(key, current);
           // A purge already removed the entry, and a newer resolution may own the key.
-          if (!current.fenced) {
+          // A failed SWR refresh keeps the last good entry; its stale window still bounds it.
+          const keepStale =
+            status === "stale" && (opts as InternalCacheOptions)[kKeepStale]?.(error) !== false;
+          if (!current.fenced && !keepStale) {
             const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
               (error) => {
                 onError("[cache] Cache eviction error.", error);

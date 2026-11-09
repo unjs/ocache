@@ -6,6 +6,7 @@ import {
   expireCache,
   fencePending,
   invalidateCache,
+  kKeepStale,
   resolveCacheKeys,
 } from "../cache.ts";
 import { NarrowRequestError, ResponseTooLargeError, UnsupportedValueError } from "../error.ts";
@@ -20,6 +21,7 @@ import { isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
 import { closeStreamChannel, openStreamChannel } from "./stream.ts";
 import { isCacheableStatus, validateEntry } from "./validate.ts";
 
+import type { InternalCacheOptions } from "../cache.ts";
 import type {
   HTTPEvent,
   EventHandler,
@@ -69,6 +71,25 @@ function defaultToResponse(value: unknown): Response {
 }
 
 /**
+ * Keeps a stale response only through a transient failure: no HTTP status (outage, timeout),
+ * a 5xx, or a 408/429. Any other thrown 4xx, such as h3's `createError({ status: 404 })`,
+ * says the resource is gone (nitro#4060). The cache's own errors report a refresh it can
+ * never store.
+ */
+function keepStale(error: unknown): boolean {
+  if (
+    error instanceof ResponseTooLargeError ||
+    error instanceof NarrowRequestError ||
+    error instanceof UnsupportedValueError
+  ) {
+    return false;
+  }
+  const { status, statusCode } = (error ?? {}) as { status?: unknown; statusCode?: unknown };
+  const code = status ?? statusCode;
+  return typeof code !== "number" || code >= 500 || code === 408 || code === 429;
+}
+
+/**
  * Wraps an HTTP handler with response caching and conditional response support.
  *
  * Only GET and HEAD requests without Range are cacheable.
@@ -98,8 +119,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   const handleCacheHeaders = opts.handleCacheHeaders || defaultHandleCacheHeaders;
 
   // Stored values use `ResponseCacheEntry`, although the resolver returns Response.
-  const _opts: CacheOptions<Response> = {
+  const _opts: CacheOptions<Response> & InternalCacheOptions = {
     ...opts,
+    [kKeepStale]: keepStale,
     // Add cache status to a clone, not the stored entry.
     transform: statusHeader
       ? (entry) => {
