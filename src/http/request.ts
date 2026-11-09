@@ -41,11 +41,9 @@ export function narrowRequest<E extends HTTPEvent>(
   const _url = event.url ?? new URL(event.req.url);
   const _hostIsKeyed = keyHeaderNames.includes("host");
 
-  // Keep only the headers the key covers, looked up by name: iterating would read
-  // every request header, which a `Headers` proxy records as "read all headers".
-  // There are no exemptions: a header no key covers is a header no handler may
-  // render. Conditional headers reach `handleCacheHeaders` through
-  // `CacheConditions`, captured before narrowing.
+  // Keep only the headers the key covers, looked up by name. There are no exemptions:
+  // a header no key covers is a header no handler may render. Conditional headers
+  // reach `handleCacheHeaders` through `CacheConditions`, captured before narrowing.
   const filteredHeaders: [string, string][] = [];
   for (const name of keyHeaderNames) {
     // `cookie` needs the three-way handling below, not a plain header lookup.
