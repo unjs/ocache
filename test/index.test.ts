@@ -902,6 +902,38 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(3);
   });
 
+  it("ignores a caller-supplied `keepStale` option", async () => {
+    const errors: unknown[] = [];
+    let shouldThrow = false;
+    // Not an inline literal, so it reaches runtime as an untyped JS caller's option would.
+    const extra = { keepStale: () => false };
+    const fn = defineCachedFunction(
+      async () => {
+        if (shouldThrow) {
+          throw new Error("upstream down");
+        }
+        return "v1";
+      },
+      {
+        maxAge: 0.01,
+        swr: true,
+        name: "swrKeepStaleOption",
+        onError: (error) => errors.push(error),
+        ...extra,
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 20));
+    shouldThrow = true;
+    expect(await fn()).toBe("v1");
+    await vi.waitFor(() => expect(errors).toHaveLength(1));
+    // Give an eviction, had one started, time to land.
+    await new Promise((r) => setTimeout(r, 10));
+    const keys = await fn.resolveKeys();
+    expect(await testStorage.get(keys[0]!)).toMatchObject({ value: "v1" });
+  });
+
   it("evicts the entry when a foreground (non-SWR) revalidation throws", async () => {
     let shouldThrow = false;
     const fn = defineCachedFunction(

@@ -6,6 +6,7 @@ import {
   expireCache,
   fencePending,
   invalidateCache,
+  kKeepStale,
   resolveCacheKeys,
 } from "../cache.ts";
 import { NarrowRequestError, ResponseTooLargeError, UnsupportedValueError } from "../error.ts";
@@ -120,7 +121,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
   // Stored values use `ResponseCacheEntry`, although the resolver returns Response.
   const _opts: CacheOptions<Response> & InternalCacheOptions = {
     ...opts,
-    keepStale,
+    [kKeepStale]: keepStale,
     // Add cache status to a clone, not the stored entry.
     transform: statusHeader
       ? (entry) => {
