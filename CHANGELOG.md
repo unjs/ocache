@@ -1,6 +1,28 @@
 # Changelog
 
 
+## v0.3.2
+
+[compare changes](https://github.com/unjs/ocache/compare/v0.3.1...v0.3.2)
+
+### 🔥 Performance
+
+- Look up narrowed request headers by name ([#114](https://github.com/unjs/ocache/pull/114))
+
+### 🩹 Fixes
+
+- Preserve stale entry when swr refresh throws ([#113](https://github.com/unjs/ocache/pull/113))
+
+### 🏡 Chore
+
+- Update release script ([5b59bb9](https://github.com/unjs/ocache/commit/5b59bb9))
+
+### ❤️ Contributors
+
+- Sanja Malovic ([@unjica](https://github.com/unjica))
+- Daniel Roe ([@danielroe](https://github.com/danielroe))
+- Pooya Parsa ([@pi0](https://github.com/pi0))
+
 ## v0.3.1
 
 [compare changes](https://github.com/unjs/ocache/compare/v0.3.0...v0.3.1)
