@@ -4794,6 +4794,9 @@ describe("defineCachedHandler", () => {
     await handler({ req });
 
     expect([...reads].filter((read) => read.startsWith("iterate"))).toEqual([]);
+    // The unkeyed `cookie` is present on the request but must never be read.
+    expect([...reads].filter((read) => read.endsWith(":cookie"))).toEqual([]);
+    expect(reads).toContain("get:accept-language");
   });
 
   it("emits a Vary response header for configured varies", async () => {

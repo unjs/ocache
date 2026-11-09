@@ -20,7 +20,7 @@ Return bypassed responses without changes. A bypassed call never enters `cachedF
 
 The header filter is an **allowlist**. A header reaches the handler only when it appears in `keyHeaderNames` or is `cookie` under the three-way rule below. Remove every other header on cacheable calls. `host` is the one rewritten name: narrowing replaces its value with the keyed URL authority. There is no exemption list.
 
-Narrowing builds the filtered list by `get()` on the kept names rather than iterating `event.req.headers`. `Headers` lookups are case-insensitive and `get()` joins repeated values the same way iteration does, so the rebuilt request is unchanged. Iteration is avoided because a `Headers` proxy (Nuxt's render variance tracking) records it as reading every header, and a render that calls a cached handler in process must not be marked that way on pages that declare no `varies`.
+Narrowing builds the filtered list by `get()` on the kept names rather than iterating `event.req.headers`. Lookups are case-insensitive and `get()` joins repeated values as iteration does (`set-cookie` aside, which is not a request header), so the rebuilt request is unchanged. Iteration reads every header, so anything that observes header access would see the cached call depend on headers no key covers.
 
 Forward `varies` headers. Their values are part of the key, so the handler can safely read them. Reading them is the reason to declare them. Earlier code removed declared `varies` headers instead of forwarding them. For example, `varies: ["accept-language"]` produced separate keys and correct `Vary`, but every entry contained the default rendering. Correct forwarding was therefore a breaking behavior change.
 
