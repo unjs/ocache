@@ -761,11 +761,10 @@ describe("cachedFunction", () => {
     expect(callCount).toBe(3);
   });
 
-  // Regression: nitro#1992 / nitro#4060 — SWR should stop serving stale when background
-  // revalidation throws (e.g. handler returns 404 error).
-  // After a bg revalidation error, the stale cache entry should be removed from storage
-  // so that the NEXT request does not serve the old stale value again.
-  it("SWR evicts stale entry from storage when background revalidation throws", async () => {
+  // unjs/ocache#112: a background refresh that throws (outage, timeout, network error) keeps
+  // the last successful entry, as Nitro 2 did. A refresh whose *result* fails validation still
+  // evicts (nitro#1992), see the next test. The stale window and storage TTL still bound it.
+  it("SWR keeps the stale entry in storage when background revalidation throws", async () => {
     const errors: unknown[] = [];
     let callCount = 0;
     let shouldThrow = false;
@@ -774,7 +773,7 @@ describe("cachedFunction", () => {
         callCount++;
         await new Promise((r) => setTimeout(r, 5));
         if (shouldThrow) {
-          throw new Error("handler 404");
+          throw new Error("upstream down");
         }
         return `v${callCount}`;
       },
@@ -787,29 +786,134 @@ describe("cachedFunction", () => {
       },
     );
 
-    // Prime cache
     expect(await fn()).toBe("v1");
-    expect(callCount).toBe(1);
-
-    // Wait for maxAge to expire
     await new Promise((r) => setTimeout(r, 10));
-
-    // Now make the resolver throw
     shouldThrow = true;
 
-    // SWR returns stale "v1" while revalidation runs in background
-    const r2 = await fn();
-    expect(r2).toBe("v1");
-
-    // Wait for background revalidation to complete (and throw)
+    // Served stale while the background refresh runs and throws.
+    expect(await fn()).toBe("v1");
     await new Promise((r) => setTimeout(r, 20));
     expect(callCount).toBe(2);
+    expect(errors).toHaveLength(1);
 
-    // The stale entry should have been removed from storage after the bg error.
     const keys = await fn.resolveKeys();
-    const staleEntry = await testStorage.get(keys[0]!);
-    // BUG: stale entry persists in storage — it should be null after failed revalidation
-    expect(staleEntry).toBeNull();
+    expect(await testStorage.get(keys[0]!)).toMatchObject({ value: "v1" });
+
+    // Every later stale read keeps serving the last success and retries the refresh.
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(callCount).toBe(4);
+    expect(errors).toHaveLength(3);
+    expect(await testStorage.get(keys[0]!)).toMatchObject({ value: "v1" });
+
+    // Once the upstream recovers, the next refresh replaces the entry.
+    shouldThrow = false;
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await testStorage.get(keys[0]!)).toMatchObject({ value: "v5" });
+  });
+
+  it("SWR does not rewrite the stale entry or extend its storage TTL after a failed refresh", async () => {
+    const setSpy = vi.fn();
+    const base = createMemoryStorage();
+    useTestStorage({
+      get: (k) => base.get(k),
+      set: (k, v, o) => {
+        setSpy(k, v, o);
+        return base.set(k, v, o);
+      },
+    });
+    let shouldThrow = false;
+    const fn = defineCachedFunction(
+      async () => {
+        if (shouldThrow) {
+          throw new Error("upstream down");
+        }
+        return "v1";
+      },
+      { maxAge: 0.01, swr: true, staleMaxAge: 0.04, name: "swrThrowTtl", onError: () => {} },
+    );
+
+    expect(await fn()).toBe("v1");
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    expect(setSpy.mock.calls[0]![2]).toEqual({ ttl: 0.05 });
+
+    await new Promise((r) => setTimeout(r, 20));
+    shouldThrow = true;
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 5));
+    // Neither a write nor an eviction: the original TTL still governs the entry.
+    expect(setSpy).toHaveBeenCalledTimes(1);
+
+    // Past maxAge + staleMaxAge the backend's own TTL has dropped the entry.
+    await new Promise((r) => setTimeout(r, 50));
+    const keys = await fn.resolveKeys();
+    expect(await testStorage.get(keys[0]!)).toBeNull();
+  });
+
+  it("SWR does not serve an entry past staleMaxAge after failed refreshes", async () => {
+    let callCount = 0;
+    let shouldThrow = false;
+    const fn = defineCachedFunction(
+      async () => {
+        callCount++;
+        if (shouldThrow) {
+          throw new Error("upstream down");
+        }
+        return `v${callCount}`;
+      },
+      // No storage TTL here (memory TTL would hide the boundary), so `staleMaxAge` alone decides.
+      {
+        maxAge: 0.01,
+        swr: true,
+        staleMaxAge: 0.03,
+        name: "swrThrowBoundary",
+        storage: () => {
+          const base = createMemoryStorage();
+          return { get: (k) => base.get(k), set: (k, v) => base.set(k, v) };
+        },
+        onError: () => {},
+      },
+    );
+
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 15));
+    shouldThrow = true;
+
+    // Inside the stale window: served stale, the failed refresh keeps the entry.
+    expect(await fn()).toBe("v1");
+    await new Promise((r) => setTimeout(r, 5));
+    expect(callCount).toBe(2);
+
+    // Past maxAge + staleMaxAge the entry is fully expired: the call waits for the resolver
+    // and receives its error instead of the old value.
+    await new Promise((r) => setTimeout(r, 30));
+    await expect(fn()).rejects.toThrow("upstream down");
+    expect(callCount).toBe(3);
+  });
+
+  it("evicts the entry when a foreground (non-SWR) revalidation throws", async () => {
+    let shouldThrow = false;
+    const fn = defineCachedFunction(
+      async () => {
+        if (shouldThrow) {
+          throw new Error("upstream down");
+        }
+        return "v1";
+      },
+      { maxAge: 0.01, name: "fgThrowEvicts" },
+    );
+
+    expect(await fn()).toBe("v1");
+    const keys = await fn.resolveKeys();
+    await new Promise((r) => setTimeout(r, 20));
+    shouldThrow = true;
+    await expect(fn()).rejects.toThrow("upstream down");
+    await vi.waitFor(async () => {
+      expect(await testStorage.get(keys[0]!)).toBeFalsy();
+    });
   });
 
   // Regression: nitro#1992 — SWR should stop serving stale when background
@@ -6496,6 +6600,30 @@ describe("defineCachedHandler", () => {
       errorSpy.mockRestore();
     });
 
+    // A background refresh that produced an over-limit body succeeded; it is not a transient
+    // failure, so unlike a thrown refresh (#112) it still removes the stale entry.
+    it("removes the stale entry an over-limit background revalidation replaces", async () => {
+      let big = false;
+      const path = uniquePath();
+      const handler = defineCachedHandler(() => new Response(big ? "b".repeat(8192) : "small"), {
+        maxAge: 10,
+        swr: true,
+        staleMaxAge: 60,
+        maxBodySize: 4096,
+        onError: () => {},
+      });
+
+      expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("small");
+      const [key] = await handler.resolveKeys(makeEvent(path));
+
+      big = true;
+      await handler.expire(makeEvent(path));
+      expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("small");
+      await vi.waitFor(async () => {
+        expect(await testStorage.get(key!)).toBeFalsy();
+      });
+    });
+
     it("removes a stored entry that an over-limit response replaces", async () => {
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       let big = false;
@@ -8180,6 +8308,43 @@ describe("defineCachedHandler", () => {
     expect(callCount).toBe(2);
   });
 
+  // unjs/ocache#112: a handler that throws during a background refresh keeps the stale 200,
+  // while a refresh that returns an uncacheable response (validation) still evicts it.
+  it("keeps the stale response when a background revalidation throws", async () => {
+    let mode: "ok" | "throw" | "404" = "ok";
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        if (mode === "throw") {
+          throw new Error("upstream down");
+        }
+        return mode === "404" ? new Response("gone", { status: 404 }) : new Response("page");
+      },
+      { maxAge: 60, swr: true, staleMaxAge: 600, onError: () => {} },
+    );
+
+    expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("page");
+    const [key] = await handler.resolveKeys(makeEvent(path));
+
+    mode = "throw";
+    await handler.expire(makeEvent(path));
+    for (let i = 0; i < 2; i++) {
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(await res.text()).toBe("page");
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(callCount).toBe(3);
+    expect(await testStorage.get(key!)).toBeTruthy();
+
+    mode = "404";
+    expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("page");
+    await vi.waitFor(async () => {
+      expect(await testStorage.get(key!)).toBeFalsy();
+    });
+  });
+
   for (const status of [404, 500]) {
     it(`returns a ${status} to the caller but neither stores nor advertises it`, async () => {
       let callCount = 0;
@@ -9332,9 +9497,9 @@ describe("maxResolveTime", () => {
     expect(await call).toBe("late");
   });
 
-  // A timed-out resolution is a failed one in every respect, the eviction included: a hung
-  // background refresh must not leave a dead entry behind for SWR to keep serving.
-  it("evicts the entry a timed-out background refresh was refreshing", async () => {
+  // A timed-out resolution is a failed one in every respect: like a background refresh that
+  // throws, a hung one keeps the last good entry for SWR (unjs/ocache#112).
+  it("keeps the entry a timed-out background refresh was refreshing", async () => {
     let hang = false;
     const fn = defineCachedFunction(
       () => (hang ? new Promise<string>(() => {}) : Promise.resolve("v1")),
@@ -9354,10 +9519,11 @@ describe("maxResolveTime", () => {
     // Expired: served stale while the background refresh runs — and hangs.
     hang = true;
     expect(await fn()).toBe("v1");
-    await vi.waitFor(async () => {
-      const keys = await fn.resolveKeys();
-      expect(await testStorage.get(keys[0]!)).toBeNull();
-    });
+    // Past the deadline the refresh has failed; the stale entry is still stored and served.
+    await new Promise((r) => setTimeout(r, 40));
+    const keys = await fn.resolveKeys();
+    expect(await testStorage.get(keys[0]!)).toMatchObject({ value: "v1" });
+    expect(await fn()).toBe("v1");
   });
 
   // Every armed deadline must be cleared when the resolution settles, or a long-lived process

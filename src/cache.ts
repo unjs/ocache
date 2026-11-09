@@ -1,7 +1,12 @@
 // Docs: @docs/2.functions.md, @docs/4.invalidation.md, @docs/9.isr.md
 
 import { base64ToBytes, bytesToBase64 } from "./base64.ts";
-import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
+import {
+  ResponseTooLargeError,
+  malformedEntryError,
+  storageRequiredError,
+  timeoutError,
+} from "./error.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage, scheduleTimer } from "./storage.ts";
 
@@ -319,7 +324,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (!isPending) {
           releasePending(key, current);
           // A purge already removed the entry, and a newer resolution may own the key.
-          if (!current.fenced) {
+          // A thrown SWR refresh keeps the last good entry; its stale window still bounds it.
+          // An over-limit body is a successful refresh that cannot be stored, so it evicts.
+          const keepStale = status === "stale" && !(error instanceof ResponseTooLargeError);
+          if (!current.fenced && !keepStale) {
             const evictPromise = evictFromStorage(getStorage(), key, bases, group, name).catch(
               (error) => {
                 onError("[cache] Cache eviction error.", error);
