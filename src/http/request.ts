@@ -41,26 +41,35 @@ export function narrowRequest<E extends HTTPEvent>(
   const _url = event.url ?? new URL(event.req.url);
   const _hostIsKeyed = keyHeaderNames.includes("host");
 
-  // Remove every header the key does not cover. There are no exemptions: a header
-  // no key covers is a header no handler may render. Conditional headers reach
-  // `handleCacheHeaders` through `CacheConditions`, captured before narrowing.
-  const filteredHeaders = [...event.req.headers.entries()].flatMap(([key, value]) => {
-    const name = key.toLowerCase();
-    if (name !== "cookie") {
-      // Undeclared `host` is covered by the keyed authority, not by its raw value,
-      // which the adapter may never have resolved from; replace it below.
-      if (name === "host" && !_hostIsKeyed) {
-        return [];
+  // Keep only the headers the key covers, looked up by name. There are no exemptions:
+  // a header no key covers is a header no handler may render. Conditional headers
+  // reach `handleCacheHeaders` through `CacheConditions`, captured before narrowing.
+  const filteredHeaders: [string, string][] = [];
+  for (const name of keyHeaderNames) {
+    // `cookie` needs the three-way handling below, not a plain header lookup.
+    if (name === "cookie") {
+      continue;
+    }
+    const value = event.req.headers.get(name);
+    if (value !== null) {
+      filteredHeaders.push([name, value]);
+    }
+  }
+  // Forward the keyed cookie subset, the keyed raw header, or no cookies.
+  if (allowedCookieNames) {
+    const rawCookie = event.req.headers.get("cookie");
+    if (rawCookie !== null) {
+      const cookie = filterCookie(rawCookie, allowedCookieNames);
+      if (cookie) {
+        filteredHeaders.push(["cookie", cookie]);
       }
-      return keyHeaderNames.includes(name) ? [[key, value] as [string, string]] : [];
     }
-    // Forward the keyed cookie subset, the keyed raw header, or no cookies.
-    if (!allowedCookieNames) {
-      return keyHeaderNames.includes("cookie") ? [[key, value] as [string, string]] : [];
+  } else if (keyHeaderNames.includes("cookie")) {
+    const rawCookie = event.req.headers.get("cookie");
+    if (rawCookie !== null) {
+      filteredHeaders.push(["cookie", rawCookie]);
     }
-    const cookie = filterCookie(value, allowedCookieNames);
-    return cookie ? [["cookie", cookie] as [string, string]] : [];
-  });
+  }
   // An authority-less URL (`file:`, `data:`) leaves the handler no host at all.
   if (!_hostIsKeyed && _url.host) {
     filteredHeaders.push(["host", _url.host]);

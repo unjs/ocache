@@ -4760,6 +4760,45 @@ describe("defineCachedHandler", () => {
     expect(await r2.text()).toBe("call-2");
   });
 
+  it("builds the narrowed request without iterating the request headers", async () => {
+    const path = uniquePath();
+    const reads = new Set<string>();
+    const headers = new Proxy(new Headers({ "accept-language": "fr", cookie: "session=abc" }), {
+      get(target, prop) {
+        if (prop === "get" || prop === "has") {
+          return (name: string) => {
+            reads.add(`${String(prop)}:${name}`);
+            return (target as any)[prop](name);
+          };
+        }
+        if (
+          prop === "entries" ||
+          prop === "keys" ||
+          prop === "values" ||
+          prop === "forEach" ||
+          prop === Symbol.iterator
+        ) {
+          reads.add(`iterate:${String(prop)}`);
+        }
+        const value = Reflect.get(target, prop) as any;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const req = new Request(`http://localhost${path}`);
+    Object.defineProperty(req, "headers", { value: headers });
+
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 60,
+      varies: ["accept-language"],
+    });
+    await handler({ req });
+
+    expect([...reads].filter((read) => read.startsWith("iterate"))).toEqual([]);
+    // The unkeyed `cookie` is present on the request but must never be read.
+    expect([...reads].filter((read) => read.endsWith(":cookie"))).toEqual([]);
+    expect(reads).toContain("get:accept-language");
+  });
+
   it("emits a Vary response header for configured varies", async () => {
     const path = uniquePath();
     const handler = defineCachedHandler(() => new Response("ok"), {
