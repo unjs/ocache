@@ -34,6 +34,21 @@ const BINARY_BODY_CHARGE_FACTOR = 2;
 // Response constructors reject non-null bodies for these statuses.
 const nullBodyStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([204, 205, 304]);
 
+// `Server-Timing` of the response each foreground resolution read, for its own caller only.
+let serverTimings: WeakMap<HTTPEvent, string> | undefined;
+
+/**
+ * Takes the `Server-Timing` this event's handler sent. Its metrics describe that request, so
+ * they are kept out of the entry and added back only to the response of the caller that ran it.
+ */
+export function takeServerTiming(event: HTTPEvent): string | undefined {
+  const timing = serverTimings?.get(event);
+  if (timing !== undefined) {
+    serverTimings!.delete(event);
+  }
+  return timing;
+}
+
 // Deduplicated callers share this single body read.
 export async function serializeResponse<E extends HTTPEvent>(
   config: HandlerConfig<E>,
@@ -43,6 +58,12 @@ export async function serializeResponse<E extends HTTPEvent>(
 ): Promise<ResponseCacheEntry> {
   const res = entry.value as Response;
   const limit = resolveMaxBodySize(config.opts.maxBodySize, storage);
+
+  // A background refresh behind a stale hit has no caller of its own to hand this to.
+  const timing = res.headers.get("server-timing");
+  if (timing !== null && event && resolveStatus(event)) {
+    (serverTimings ??= new WeakMap()).set(event, timing);
+  }
 
   // Serve this body while it is still being read, when the caller opted in and this event
   // both leads the resolution and is waiting for it. `resolveStatus` answers only for such
@@ -226,6 +247,9 @@ function buildHeaders<E extends HTTPEvent>(
 
   // Never share a response cookie with deduplicated or later callers.
   headers.delete("set-cookie");
+
+  // Never replay request metrics to deduplicated or later callers (see `takeServerTiming`).
+  headers.delete("server-timing");
 
   // Remove headers that describe the original transport body.
   for (const header of transportHeaders) {
