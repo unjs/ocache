@@ -37,6 +37,11 @@ export function readOnlyEventError(property: string): Error {
   return error("ReadOnlyError", `\`event.${property}\` is read-only.`);
 }
 
+/** A `cacheableStatusCodes` entry has no complete representation to replay. */
+export function unreplayableStatusError(status: number): RangeError {
+  return new RangeError(`${PREFIX} \`cacheableStatusCodes\` cannot include ${status}.`);
+}
+
 /** A value nests deeper than `serialize` may recurse. */
 export function tooDeepError(maxDepth: number): RangeError {
   return new RangeError(

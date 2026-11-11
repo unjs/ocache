@@ -3,15 +3,21 @@
 import { cacheControlForbidsReuse } from "./cache-control.ts";
 import { hasUnkeyedVary, hasVaryWildcard } from "./vary.ts";
 
-import type { HandlerConfig } from "./config.ts";
+import { builtinCacheableStatuses, type HandlerConfig } from "./config.ts";
 import type { HTTPEvent, ResponseCacheEntry } from "../types.ts";
 
-// Store only complete representations that are safe to reuse.
-const cacheableStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([200, 203, 301, 308]);
-
 // Storage validation and cache-control synthesis must share this predicate.
-export function isCacheableStatus(status: number): boolean {
-  return cacheableStatuses.has(status);
+export function isCacheableStatus<E extends HTTPEvent>(
+  config: HandlerConfig<E>,
+  status: number,
+): boolean {
+  return config.cacheableStatuses.has(status);
+}
+
+// A 304 stands in only for the built-in statuses: preconditions are ignored for a response
+// that would otherwise be an error (RFC 9110 §13.2.1), so a cached 404 is served as is.
+export function isConditionalStatus(status: number): boolean {
+  return builtinCacheableStatuses.has(status);
 }
 
 // Validate on write and read so access rejects unsafe legacy entries.
@@ -34,7 +40,7 @@ export async function validateEntry<E extends HTTPEvent>(
   if (value.headers?.["set-cookie"]) {
     return false;
   }
-  if (!isCacheableStatus(value.status)) {
+  if (!isCacheableStatus(config, value.status)) {
     return false;
   }
   // An empty string is a valid zero-byte representation, and a byte view is the binary form.

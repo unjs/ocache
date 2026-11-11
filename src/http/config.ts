@@ -1,6 +1,7 @@
 // Docs: @docs/5.handler.md, @docs/6.query-params.md, @docs/7.cookies.md, @docs/8.cache-control.md
 
 import { definedOptions, resolveName } from "../cache.ts";
+import { unreplayableStatusError } from "../error.ts";
 
 import type { HTTPEvent, EventHandler, CachedEventHandlerOptions } from "../types.ts";
 
@@ -21,6 +22,14 @@ export const authHeaderNames: readonly string[] = /* @__PURE__ */ Object.freeze(
   "proxy-authorization",
 ]);
 
+// Store only complete representations that are safe to reuse.
+export const builtinCacheableStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([
+  200, 203, 301, 308,
+]);
+
+// No complete representation to replay, so `cacheableStatusCodes` cannot admit them.
+const unreplayableStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([204, 205, 206, 304]);
+
 /** Configuration shared by all modules for one handler. */
 export interface HandlerConfig<E extends HTTPEvent> {
   /** Resolved handler options. */
@@ -40,6 +49,9 @@ export interface HandlerConfig<E extends HTTPEvent> {
 
   /** Cache-status header name, or `undefined` to disable it. */
   statusHeader: string | undefined;
+
+  /** Statuses that may be stored and advertised: the built-in set plus `cacheableStatusCodes`. */
+  cacheableStatuses: ReadonlySet<number>;
 }
 
 // Resolve the name before defaults so the default cannot hide the handler name.
@@ -95,7 +107,27 @@ export function resolveHandlerConfig<E extends HTTPEvent>(
     keyHeaderNames,
     varyHeaderNames,
     statusHeader,
+    cacheableStatuses: resolveCacheableStatuses(opts.cacheableStatusCodes),
   };
+}
+
+// The option widens the built-in set and never replaces it.
+function resolveCacheableStatuses(extra: readonly number[] | undefined): ReadonlySet<number> {
+  if (!extra?.length) {
+    return builtinCacheableStatuses;
+  }
+  for (const status of extra) {
+    // `new Response()` only accepts integers from 200 to 599.
+    if (
+      !Number.isInteger(status) ||
+      status < 200 ||
+      status > 599 ||
+      unreplayableStatuses.has(status)
+    ) {
+      throw unreplayableStatusError(status);
+    }
+  }
+  return new Set([...builtinCacheableStatuses, ...extra]);
 }
 
 /**
