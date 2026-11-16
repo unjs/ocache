@@ -25,6 +25,7 @@ src/
 │   └── stream.ts        # Opt-in `stream`: the fill's body, served while it is still read
 ├── error.ts        # Every error class and user-visible error message
 ├── hash.ts         # `hash`/`serialize`: cache keys + integrity, digest via `#crypto`
+├── tracing.ts      # Opt-in `tracing`: the `ocache.handler`/`ocache.function` channel names + lookup
 ├── base64.ts       # Binary-body codec: one implementation picked per runtime
 └── storage.ts      # Storage interface, memory storage, `createBlobStorage` frame, `composeStorage` layers
 
@@ -54,6 +55,7 @@ The `.agents/` layout matches `src/`. Before you edit an area, read the file tha
 | `.agents/http/stream.md`   | `http/stream.ts`: opt-in streamed fills, the foreground gate, what a streamed response gives up          |
 | `.agents/storage.md`       | `storage.ts`: memory-backend ceilings, byte accounting, `resolveStorage`, the blob frame, layered stacks |
 | `.agents/hash.md`          | `hash.ts`: the digest backend lookup, what `serialize` renders and why it must stay stable               |
+| `.agents/tracing.md`       | `tracing.ts`: why a per-call payload, opt-in cost, each path's status, no double publish                 |
 
 ## Cross-module invariants
 
@@ -69,6 +71,7 @@ Most findings in the deep dives came from violations of these rules.
 - `cache.ts` and `storage.ts` export the shared internal functions `resolveName`, `definedOptions`, and `resolveStorage`. The function and handler paths must use these functions so they cannot differ. Both paths must resolve `name` **before** they merge defaults.
 - **Every timer goes through `scheduleTimer` in `storage.ts`.** Node clamps a `setTimeout` delay above `2**31 - 1` ms (~24.8 days) to 1 ms, so a raw `setTimeout(fn, seconds * 1000)` turns a 30-day `maxAge` or `maxResolveTime` into a 1 ms one. The helper chains hops toward the deadline and `unref`s each. The one exception is the `0` ms release in `error.ts`, which cannot overflow.
 - Pass every single segment of a `:`-joined key through `escapeKeySegment`. In `buildCacheKey` these are `group` and `name`. `base` keeps its raw `:` because that separates prefix tiers, and `key` is the terminal namespace whose producer escapes its own segments (`http/key.ts` escapes a custom key because the method component precedes it).
+- **Report a call's status on that call's trace payload, never on its event.** One event carries nested cached calls, the SWR refresh behind a stale hit, and resolutions abandoned by `maxResolveTime`, so a status keyed by event is overwritten by calls that did not serve it. The serve path writes `status` once, after its response exists; live paths and throws leave it unset. See `.agents/tracing.md`.
 
 ## Docs
 
@@ -116,5 +119,5 @@ results that were wrong in direction, not merely noisy — see the method sectio
 - `src/base64.ts` holds all three binary-body codecs and picks one **at module load**: `globalThis.Buffer` where the runtime has it (Node, Bun), then the TC39 `Uint8Array` base64 methods (Deno, current browsers and workers), then a `btoa` loop. Unlike `#crypto` this is a runtime check, not a package condition: every arm is a few lines, so shipping all three costs ~0.5 kB minified, and `Buffer` is read off `globalThis` because bundlers inject a Buffer polyfill when they see the bare identifier. All three must produce identical bytes — a Node process and a worker share a persistent backend — and `test/base64.test.ts` holds them against each other. `http/entry.ts` skips base64 entirely for a backend that declares `binary`, `cache.ts` does the same for a binary function value, and `hash.ts` renders bytes with it. See `.agents/http/response.md`.
 - `base` supports `string | string[]`. For multiple tiers, reads stop at the first hit. Misses write every prefix. Revalidation writes the hit tier and every earlier tier.
 - The default cache key group is `"functions"` in cache.ts and `"handlers"` in http/index.ts. Do not add an `ocache/` prefix.
-- Both `integrityOpts` implementations in cache.ts and http/config.ts exclude the storage-location fields `base`, `group`, `name`, and `storage`, plus the host-plumbing field `waitUntil`. This keeps entries valid after a backend, prefix, or runtime change. The JSDoc in `cache.ts` explains why hashing `storage` has no meaning and costs too much.
+- Both `integrityOpts` implementations in cache.ts and http/config.ts exclude the storage-location fields `base`, `group`, `name`, and `storage`, plus the host-plumbing fields `waitUntil` and `tracing`. This keeps entries valid after a backend, prefix, or runtime change. The JSDoc in `cache.ts` explains why hashing `storage` has no meaning and costs too much.
 - `CachedEventHandlerOptions` provides these framework hooks: `toResponse(value, event)`, `createResponse(body, init)`, and `handleCacheHeaders(event, conditions)`. Each hook replaces the related built-in `Response` or 304 behavior.

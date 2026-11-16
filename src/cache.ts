@@ -4,9 +4,16 @@ import { base64ToBytes, bytesToBase64 } from "./base64.ts";
 import { malformedEntryError, storageRequiredError, timeoutError } from "./error.ts";
 import { hash } from "./hash.ts";
 import { resolveStorage, scheduleTimer } from "./storage.ts";
+import { FUNCTION_CHANNEL, hasSubscribers, openTracingChannel } from "./tracing.ts";
 
 import type { StorageInterface, StorageOption } from "./storage.ts";
-import type { HTTPEvent, CacheEntry, CacheOptions, CacheStatus } from "./types.ts";
+import type {
+  HTTPEvent,
+  CacheEntry,
+  CacheOptions,
+  CacheStatus,
+  FunctionTraceContext,
+} from "./types.ts";
 
 function defaultCacheOptions() {
   return {
@@ -138,6 +145,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       console.error(context, error);
     }
   };
+  // Opt-in: without it, no call looks up or checks a channel. See `.agents/tracing.md`.
+  const tracer = opts.tracing
+    ? openTracingChannel<FunctionTraceContext<ArgsT>>(FUNCTION_CHANNEL)
+    : undefined;
 
   async function get(
     key: string,
@@ -441,7 +452,7 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     return _resolvePromise.then(() => entry) as Promise<ResolvedCacheEntry<T>>;
   }
 
-  const cachedFn = async (...args: ArgsT) => {
+  async function call(args: ArgsT, trace?: FunctionTraceContext<ArgsT>): Promise<T> {
     const shouldBypassCache = await opts.shouldBypassCache?.(...args);
     if (shouldBypassCache) {
       return fn(...args);
@@ -460,7 +471,19 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       // Only `undefined` falls back; a falsy transform result is a real value.
       value = (await opts.transform(entry, ...args)) ?? value;
     }
+    if (trace) {
+      trace.status = entry.status;
+    }
     return value;
+  }
+
+  // Returns the promise of `call` itself, so an untraced call takes no extra tick.
+  const cachedFn = (...args: ArgsT): Promise<T> => {
+    if (!tracer || !hasSubscribers(tracer)) {
+      return call(args);
+    }
+    const trace: FunctionTraceContext<ArgsT> = { args, name, group, status: undefined };
+    return tracer.tracePromise(() => call(args, trace), trace);
   };
 
   // Cancel the storage write of every resolution that started before the purge.
@@ -793,12 +816,12 @@ function remainingTtl(
  *
  * A backend change does not change the cached computation.
  * Hashing storage objects is also expensive and cannot capture closed-over configuration.
- * `waitUntil` only decides who owns background work, so adopting it or moving between
- * runtimes must not invalidate entries.
+ * `waitUntil` only decides who owns background work and `tracing` only who observes a
+ * call, so adopting either or moving between runtimes must not invalidate entries.
  */
 function integrityOpts(
   opts: CacheOptions<any, any>,
-): Omit<CacheOptions, "base" | "group" | "name" | "storage" | "waitUntil"> {
-  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, ...rest } = opts;
+): Omit<CacheOptions, "base" | "group" | "name" | "storage" | "waitUntil" | "tracing"> {
+  const { base: _, group: _g, name: _n, storage: _s, waitUntil: _w, tracing: _t, ...rest } = opts;
   return rest;
 }

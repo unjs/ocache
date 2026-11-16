@@ -19,6 +19,7 @@ Composable caching primitives with TTL, stale-while-revalidate, and HTTP respons
 - 🔑 **[Smart cache keys](https://ocache.unjs.io/query-params)** — derived from arguments or request URL, with per-header and per-query variance.
 - 🔌 **[Pluggable storage](https://ocache.unjs.io/storage)** — bring your own backend via a minimal `get`/`set` interface.
 - ♻️ **[Invalidation & expiration](https://ocache.unjs.io/invalidation)** — remove or mark entries stale on demand, with SWR background refresh.
+- 📡 **[Tracing](https://ocache.unjs.io/handler#tracing)** — opt-in `node:diagnostics_channel` events for every cached call, with how it was served.
 
 ## Usage
 
@@ -279,6 +280,32 @@ await expireCache({
   args: ["user-123"],
 });
 ```
+
+---
+
+### `FUNCTION_CHANNEL`
+
+```ts
+const FUNCTION_CHANNEL = "ocache.function";
+```
+
+Name of the tracing channel each cached-function call is published on.
+
+Subscribers can use it instead of hardcoding the string:
+`tracingChannel<FunctionTraceContext>(FUNCTION_CHANNEL)`.
+
+---
+
+### `HANDLER_CHANNEL`
+
+```ts
+const HANDLER_CHANNEL = "ocache.handler";
+```
+
+Name of the tracing channel each cached-handler call is published on.
+
+Subscribers can use it instead of hardcoding the string:
+`tracingChannel<HandlerTraceContext>(HANDLER_CHANNEL)`.
 
 ---
 

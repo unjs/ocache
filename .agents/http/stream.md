@@ -41,7 +41,8 @@ hands over the decision where it is already made: `serialize` receives `{ args, 
 `status` is the leader's, computed **before** the resolver started and already "must match the
 serve decision below". Anything but `"stale"` means this caller is waiting on this resolution, so
 `entry.ts` gets the gate and the `x-cache` value from one field — `transform` never runs for a
-streamed caller, so the status header is stamped in `streamBody`.
+streamed caller, so the status header is stamped in `streamBody`, and the same status reaches the
+serve path's trace payload in `StreamedResponse.status`.
 
 The status travels with the resolution, never in a map keyed by event. An earlier
 `resolveStatuses` `WeakMap<HTTPEvent, CacheStatus>`, written from the leader branch next to

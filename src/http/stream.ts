@@ -1,11 +1,13 @@
 // Docs: @docs/5.handler.md
 
-import type { HTTPEvent } from "../types.ts";
+import type { CacheStatus, HTTPEvent } from "../types.ts";
 
 /** A live body handed to the request whose resolution is producing it. */
 export interface StreamedResponse {
   body: ReadableStream<Uint8Array>;
   init: ResponseInit;
+  /** The status this response is sent with: `transform` has not run when it goes out. */
+  status: CacheStatus;
 }
 
 // The serve path registers interest before the resolution starts, and `serialize` hands the
