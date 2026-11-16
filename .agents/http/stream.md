@@ -11,7 +11,11 @@ origin's last byte. For a token stream or a streaming SSR render, that is the wh
 ## The split
 
 Nothing about storage changes. `streamBody` produces the same `ResponseCacheEntry` the buffered
-arm produces, from the same chunks, through the same `buildEntry`. Storage, `payload:
+arm produces, from the same chunks, through the same `buildEntry`. Besides the stamped status, the
+streamed headers differ from the stored ones in two ways: no synthesized `etag` (below), and the
+handler's `Server-Timing` stays, because `buildEntry` drops it only from what is stored. They are
+never stored and reach only the caller that ran the handler, so the serve path passes
+`streamed.init` through unchanged. Storage, `payload:
 "value.body"`, `validate`, the blob codec, and every read path are untouched — an entry written by
 a streamed fill is byte-identical to one written by a buffered fill. That is also why `stream` is
 excluded from `integrityOpts`: turning it on must not make existing entries cold.
@@ -42,6 +46,8 @@ hands over the decision where it is already made: `serialize` receives `{ args, 
 serve decision below". Anything but `"stale"` means this caller is waiting on this resolution, so
 `entry.ts` gets the gate and the `x-cache` value from one field — `transform` never runs for a
 streamed caller, so the status header is stamped in `streamBody`.
+The same field decides whether the caller is handed the handler's `Server-Timing` on the
+buffered path (`.agents/http/response.md`).
 
 The status travels with the resolution, never in a map keyed by event. An earlier
 `resolveStatuses` `WeakMap<HTTPEvent, CacheStatus>`, written from the leader branch next to

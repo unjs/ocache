@@ -6,7 +6,7 @@ import { hash, hashBytes } from "../hash.ts";
 
 import type { HandlerConfig } from "./config.ts";
 import { createStreamSink, takeStreamListener } from "./stream.ts";
-import { isCacheableStatus } from "./validate.ts";
+import { isCacheableStatus, serverTimingHeader } from "./validate.ts";
 import { appendVary, hasUnkeyedVary, hasVaryWildcard } from "./vary.ts";
 
 import type { StreamSink, StreamedResponse } from "./stream.ts";
@@ -32,43 +32,34 @@ const BINARY_BODY_CHARGE_FACTOR = 2;
 // Response constructors reject non-null bodies for these statuses.
 const nullBodyStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([204, 205, 304]);
 
-// `Server-Timing` of the response each foreground resolution read, for its own caller only.
-let serverTimings: WeakMap<HTTPEvent, string> | undefined;
-
 /**
- * Takes the `Server-Timing` this event's handler sent. Its metrics describe that request, so
- * they are kept out of the entry and added back only to the response of the caller that ran it.
+ * One `cachedHandler` call, passed to the cached resolver after its event. `serialize` sees the
+ * arguments of the call that runs the handler, so only that call is handed the handler's
+ * `Server-Timing`: its metrics describe that request and are never stored.
  */
-export function takeServerTiming(event: HTTPEvent): string | undefined {
-  const timing = serverTimings?.get(event);
-  if (timing !== undefined) {
-    serverTimings!.delete(event);
-  }
-  return timing;
-}
+export type HandlerCall = { timing?: string };
 
 // Deduplicated callers share this single body read.
 export async function serializeResponse<E extends HTTPEvent>(
   config: HandlerConfig<E>,
   entry: CacheEntry<Response>,
-  storage?: StorageOption,
-  event?: HTTPEvent,
-  status?: CacheStatus,
+  storage: StorageOption | undefined,
+  ctx: { args: unknown[]; status: CacheStatus },
 ): Promise<ResponseCacheEntry> {
   const res = entry.value as Response;
   const limit = resolveMaxBodySize(config.opts.maxBodySize, storage);
+  const [event, call] = ctx.args as [HTTPEvent, HandlerCall];
 
-  // A background refresh behind a stale hit has no caller of its own to hand this to.
-  const timing = res.headers.get("server-timing");
-  if (timing !== null && event && status && status !== "stale") {
-    (serverTimings ??= new WeakMap()).set(event, timing);
+  // Only the call that started this resolution and waits for it may be handed its metrics or
+  // its live body. A stale caller was already served the stored value, so a background refresh
+  // reaches neither. See `.agents/http/stream.md`.
+  const status = ctx.status === "stale" ? undefined : ctx.status;
+  if (status) {
+    call.timing = res.headers.get(serverTimingHeader) ?? undefined;
   }
 
-  // Serve this body while it is still being read, when the caller opted in and the event that
-  // started this resolution is waiting for it. A stale caller was already served the stored
-  // value, so a background refresh never reaches the listener its own caller opened.
-  // See `.agents/http/stream.md`.
-  if (config.opts.stream && res.body && event && status && status !== "stale") {
+  // Serve this body while it is still being read, when the caller opted in.
+  if (config.opts.stream && res.body && status) {
     const listener = takeStreamListener(event);
     if (listener) {
       return streamBody(config, entry, res, limit, status, listener, storage, event);
@@ -103,6 +94,9 @@ function buildEntry<E extends HTTPEvent>(
       : `W/"${hash(text)}"`
     : undefined;
   const headers = buildHeaders(config, entry, res, etag);
+  // Never replay request metrics to deduplicated or later callers. A streamed response keeps
+  // them: its headers are never stored.
+  headers.delete(serverTimingHeader);
 
   const cacheEntry: ResponseCacheEntry = {
     status: res.status,
@@ -245,9 +239,6 @@ function buildHeaders<E extends HTTPEvent>(
 
   // Never share a response cookie with deduplicated or later callers.
   headers.delete("set-cookie");
-
-  // Never replay request metrics to deduplicated or later callers (see `takeServerTiming`).
-  headers.delete("server-timing");
 
   // Remove headers that describe the original transport body.
   for (const header of transportHeaders) {

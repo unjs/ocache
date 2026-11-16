@@ -5795,18 +5795,296 @@ describe("defineCachedHandler", () => {
           headers: { "server-timing": `db;dur=${callCount}` },
         });
       },
-      { maxAge: 0.05, swr: true },
+      { maxAge: 10, swr: true },
     );
 
     await handler(makeEvent(path));
-    await new Promise((r) => setTimeout(r, 80));
+    await handler.expire(makeEvent(path));
 
     const stale = (await handler(makeEvent(path))) as Response;
     expect(stale.headers.get("x-cache")).toBe("STALE");
-    // The refresh runs behind this response, for no caller of its own.
-    expect(stale.headers.get("server-timing")).toBeNull();
-    await new Promise((r) => setTimeout(r, 20));
+    // The refresh has already run by the time this response is built, for no caller of its own.
     expect(callCount).toBe(2);
+    expect(stale.headers.get("server-timing")).toBeNull();
+    expect(await stale.text()).toBe("v1");
+  });
+
+  it("does not add a background refresh's Server-Timing to the stale response of an event that led another resolution", async () => {
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`v${callCount}`, {
+          headers: { "server-timing": `db;dur=${callCount}` },
+        });
+      },
+      { maxAge: 10, swr: true },
+    );
+    const session = defineCachedFunction(async (_event: HTTPEvent) => "session", {
+      maxAge: 10,
+      getKey: (event) => new URL(event.req.url).pathname,
+    });
+
+    await handler(makeEvent(path));
+    await handler.expire(makeEvent(path));
+
+    const event = makeEvent(path);
+    await session(event);
+    const stale = (await handler(event)) as Response;
+    expect(stale.headers.get("x-cache")).toBe("STALE");
+    expect(callCount).toBe(2);
+    expect(stale.headers.get("server-timing")).toBeNull();
+    expect(await stale.text()).toBe("v1");
+  });
+
+  it("never hands a late background refresh's Server-Timing to a later handler on the event", async () => {
+    let callCount = 0;
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const background: Promise<unknown>[] = [];
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      async () => {
+        if (++callCount > 1) {
+          await released;
+        }
+        return new Response(`v${callCount}`, {
+          headers: { "server-timing": `db;dur=${callCount}` },
+        });
+      },
+      { maxAge: 10, swr: true, waitUntil: (promise) => void background.push(promise) },
+    );
+    const other = defineCachedHandler(() => new Response("other"), { maxAge: 10 });
+    const session = defineCachedFunction(async (_event: HTTPEvent) => "session", {
+      maxAge: 10,
+      getKey: (event) => new URL(event.req.url).pathname,
+    });
+
+    await handler(makeEvent(path));
+    await other(makeEvent(path));
+    await handler.expire(makeEvent(path));
+
+    const event = makeEvent(path);
+    await session(event);
+    const stale = (await handler(event)) as Response;
+    expect(stale.headers.get("x-cache")).toBe("STALE");
+    expect(stale.headers.get("server-timing")).toBeNull();
+
+    // The refresh reads its response only after the stale one went out.
+    release();
+    await Promise.all(background);
+    const hit = (await other(event)) as Response;
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+    expect(hit.headers.get("server-timing")).toBeNull();
+  });
+
+  it("keeps each handler's own Server-Timing when two cached handlers share one event", async () => {
+    const path = uniquePath();
+    const a = defineCachedHandler(
+      () => new Response("a", { headers: { "server-timing": "a;dur=1" } }),
+      { maxAge: 10, name: "a" },
+    );
+    const b = defineCachedHandler(
+      () => new Response("b", { headers: { "server-timing": "b;dur=2" } }),
+      { maxAge: 10, name: "b" },
+    );
+
+    const event = makeEvent(path);
+    const [ra, rb] = (await Promise.all([a(event), b(event)])) as [Response, Response];
+
+    expect(ra.headers.get("x-cache")).toBe("MISS");
+    expect(ra.headers.get("server-timing")).toBe("a;dur=1");
+    expect(rb.headers.get("x-cache")).toBe("MISS");
+    expect(rb.headers.get("server-timing")).toBe("b;dur=2");
+  });
+
+  it("never hands a timed-out handler's Server-Timing to a later handler on the event", async () => {
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let markRead!: () => void;
+    const read = new Promise<void>((resolve) => (markRead = resolve));
+    const path = uniquePath();
+    const slow = defineCachedHandler(
+      async () => {
+        await released;
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            markRead();
+            controller.enqueue(new TextEncoder().encode("slow"));
+            controller.close();
+          },
+        });
+        return new Response(body, { headers: { "server-timing": "slow;dur=60" } });
+      },
+      { maxAge: 10, name: "slow", maxResolveTime: 0.01 },
+    );
+    const fallback = defineCachedHandler(() => new Response("fallback"), {
+      maxAge: 10,
+      name: "fallback",
+    });
+
+    await fallback(makeEvent(path));
+    const event = makeEvent(path);
+    await expect(slow(event)).rejects.toMatchObject({ name: "TimeoutError" });
+    // The abandoned resolution still serializes its response, after its caller gave up.
+    release();
+    await read;
+
+    const res = (await fallback(event)) as Response;
+    expect(res.headers.get("x-cache")).toBe("HIT");
+    expect(res.headers.get("server-timing")).toBeNull();
+  });
+
+  it("never hands a page's Server-Timing to a fragment rendered inside its body", async () => {
+    const path = uniquePath();
+    const fragment = defineCachedHandler(() => new Response("fragment"), {
+      maxAge: 10,
+      name: "fragment",
+    });
+    let rendered: Response | undefined;
+    const page = defineCachedHandler(
+      (event) => {
+        // Rendered while `serialize` reads the page's body.
+        const body = new ReadableStream<Uint8Array>(
+          {
+            async pull(controller) {
+              rendered = (await fragment(event)) as Response;
+              const text = await rendered.clone().text();
+              controller.enqueue(new TextEncoder().encode(`page(${text})`));
+              controller.close();
+            },
+          },
+          { highWaterMark: 0 },
+        );
+        return new Response(body, { headers: { "server-timing": "page;dur=5" } });
+      },
+      { maxAge: 10, name: "page" },
+    );
+
+    await fragment(makeEvent(path));
+    const res = (await page(makeEvent(path))) as Response;
+
+    expect(await res.text()).toBe("page(fragment)");
+    expect(res.headers.get("server-timing")).toBe("page;dur=5");
+    expect(rendered!.headers.get("x-cache")).toBe("HIT");
+    expect(rendered!.headers.get("server-timing")).toBeNull();
+  });
+
+  it("keeps Server-Timing on the MISS of an event whose req is not a Request", async () => {
+    const req = new Request(`http://localhost${uniquePath()}`);
+    const event = { req: { url: req.url, method: req.method, headers: req.headers } };
+    const handler = defineCachedHandler(
+      () => new Response("ok", { headers: { "server-timing": "db;dur=1" } }),
+      { maxAge: 10 },
+    );
+
+    const miss = (await handler(event as unknown as HTTPEvent)) as Response;
+
+    expect(miss.headers.get("x-cache")).toBe("MISS");
+    expect(miss.headers.get("server-timing")).toBe("db;dur=1");
+  });
+
+  it("refuses a stored entry carrying Server-Timing and stores its replacement without it", async () => {
+    // Entries written before the header was dropped on write (ocache 0.3.1), including by an
+    // older process sharing the backend, must not replay another request's metrics.
+    let callCount = 0;
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () => {
+        callCount++;
+        return new Response(`call-${callCount}`, {
+          headers: { "server-timing": `db;dur=${callCount}` },
+        });
+      },
+      { maxAge: 10, swr: false },
+    );
+
+    await handler(makeEvent(path));
+    const [key] = await handler.resolveKeys(makeEvent(path));
+    const stored = (await testStorage.get(key!)) as {
+      value: { headers: Record<string, string> };
+    };
+    stored.value.headers["server-timing"] = "db;dur=187";
+    await testStorage.set(key!, stored);
+
+    const rendered = (await handler(makeEvent(path))) as Response;
+    expect(callCount).toBe(2);
+    expect(rendered.headers.get("server-timing")).toBe("db;dur=2");
+    expect(await rendered.text()).toBe("call-2");
+
+    const hit = (await handler(makeEvent(path))) as Response;
+    expect(callCount).toBe(2);
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+    expect(hit.headers.get("server-timing")).toBeNull();
+    expect(await hit.text()).toBe("call-2");
+  });
+
+  it("hands createResponse a plain headers record when it adds Server-Timing", async () => {
+    // A hook that spreads `init.headers` loses every header when it is a `Headers` instance.
+    const createResponse = (
+      body: string | Uint8Array | ReadableStream<Uint8Array> | null,
+      init: ResponseInit,
+    ) =>
+      new Response(body as BodyInit | null, {
+        ...init,
+        headers: { ...(init.headers as Record<string, string>), "x-powered-by": "fw" },
+      });
+    const path = uniquePath();
+    const handler = defineCachedHandler(
+      () =>
+        new Response("ok", {
+          headers: { "content-type": "text/x-ok", "server-timing": "db;dur=1" },
+        }),
+      { maxAge: 10, createResponse },
+    );
+
+    const miss = (await handler(makeEvent(path))) as Response;
+    const hit = (await handler(makeEvent(path))) as Response;
+
+    expect(miss.headers.get("x-cache")).toBe("MISS");
+    expect(miss.headers.get("content-type")).toBe("text/x-ok");
+    expect(miss.headers.get("etag")).toBe(hit.headers.get("etag"));
+    expect(miss.headers.get("x-powered-by")).toBe("fw");
+    expect(miss.headers.get("server-timing")).toBe("db;dur=1");
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+    expect(hit.headers.get("x-powered-by")).toBe("fw");
+  });
+
+  it("never sends Server-Timing on a 304, stored or headersOnly", async () => {
+    const respond = () =>
+      new Response("ok", { headers: { etag: '"v1"', "server-timing": "db;dur=1" } });
+    const conditional = { headers: { "if-none-match": '"v1"' } };
+    const stored = defineCachedHandler(respond, { maxAge: 10 });
+    const headersOnly = defineCachedHandler(respond, { maxAge: 10, headersOnly: true });
+    const path = uniquePath();
+
+    // The request that ran the handler gets a 304 without its metrics too, as a HIT does.
+    const miss = (await stored(makeEvent(path, conditional))) as Response;
+    const hit = (await stored(makeEvent(path, conditional))) as Response;
+    const live = (await headersOnly(makeEvent(uniquePath(), conditional))) as Response;
+
+    expect(miss.status).toBe(304);
+    expect(miss.headers.get("x-cache")).toBe("MISS");
+    expect(miss.headers.get("server-timing")).toBeNull();
+    expect(hit.status).toBe(304);
+    expect(hit.headers.get("x-cache")).toBe("HIT");
+    expect(hit.headers.get("server-timing")).toBeNull();
+    expect(live.status).toBe(304);
+    expect(live.headers.get("server-timing")).toBeNull();
+  });
+
+  it("calls shouldInvalidateCache with the event alone", async () => {
+    const shouldInvalidateCache = vi.fn((_event: HTTPEvent) => false);
+    const handler = defineCachedHandler(() => new Response("ok"), {
+      maxAge: 10,
+      shouldInvalidateCache,
+    });
+
+    const event = makeEvent(uniquePath());
+    await handler(event);
+
+    expect(shouldInvalidateCache.mock.calls).toEqual([[event]]);
   });
 
   it("passes Server-Timing through on bypassed requests", async () => {
