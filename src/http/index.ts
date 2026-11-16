@@ -163,7 +163,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // that precedes it has already resolved `_opts.storage`, whose declared per-entry
     // ceiling bounds how much of a body may be buffered.
     serialize: (entry, ctx) =>
-      serializeResponse(config, entry, _opts.storage, ctx.args[0] as HTTPEvent),
+      serializeResponse(config, entry, _opts.storage, ctx.args[0] as HTTPEvent, ctx.status),
     // The response body is this entry's payload, whether it is text or bytes. A storage
     // codec moves it outside the metadata; every other backend ignores the declaration.
     payload: "value.body",

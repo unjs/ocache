@@ -55,17 +55,6 @@ export function resolveSignal(event: HTTPEvent): AbortSignal | undefined {
   return resolveSignals?.get(event);
 }
 
-// The status of the resolution an event leads, recorded only when its caller waits for
-// that resolution. A stale caller is never registered: it is handed the stored value
-// while the refresh runs behind it, so the refresh has no caller to stream to.
-// Registered from the same place and for the same reason as `resolveSignals`.
-let resolveStatuses: WeakMap<HTTPEvent, CacheStatus> | undefined;
-
-/** The status of the foreground resolution this event leads, if it leads one. */
-export function resolveStatus(event: HTTPEvent): CacheStatus | undefined {
-  return resolveStatuses?.get(event);
-}
-
 // Stops in-flight resolutions for `key` from writing after a purge.
 // Await the result: a write that already reached storage cannot be fenced, so the
 // purge must land after it.
@@ -280,13 +269,6 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
         if (controller && event) {
           (resolveSignals ??= new WeakMap()).set(event, controller.signal);
         }
-        // Record the status before the resolver runs, so the decision cannot depend on how
-        // fast it settles. `status` already matches the serve decision below: anything but
-        // `"stale"` means this caller is waiting for this resolution and may be served from
-        // it directly. See `.agents/http/stream.md`.
-        if (event && status !== "stale") {
-          (resolveStatuses ??= new WeakMap()).set(event, status);
-        }
         // Share serialization because it may consume a one-use stream.
         const resolution = (async () => {
           const value = await resolver();
@@ -308,7 +290,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
             }
           }
           // Run `serialize` after `getMaxAge` so the lifetime hook sees the live value.
-          const stored = opts.serialize ? await opts.serialize(resolvedEntry, validateCtx) : value;
+          // `status` is this leader's: per resolution, not per event (`.agents/http/stream.md`).
+          const stored = opts.serialize
+            ? await opts.serialize(resolvedEntry, { args, status })
+            : value;
           // Every byte value becomes a `Uint8Array` here, so a miss returns what a hit returns.
           return { value: normalizeBinary(stored) as T, maxAge, staleMaxAge };
         })();

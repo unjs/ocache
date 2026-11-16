@@ -37,15 +37,25 @@ would hand a stale hit the refresh's stream instead of the stored value it is ow
 
 Deciding this by racing is not enough. The two paths differ by two or three microtasks, so which
 one wins is a property of how many `await`s a handler happens to have. `cache.ts` therefore
-records the decision where it is already made: `resolveStatuses` is written in `resolveEntry`,
-next to `resolveSignals` and from the same `if (!current)` leader branch, using the `status` that
-was computed **before** the resolver started and that already "must match the serve decision
-below". Anything but `"stale"` means this caller is waiting on this resolution. `resolveStatus`
-returns that status, so `entry.ts` gets the gate and the `x-cache` value from one lookup —
-`transform` never runs for a streamed caller, so the status header is stamped in `streamBody`.
+hands over the decision where it is already made: `serialize` receives `{ args, status }`, where
+`status` is the leader's, computed **before** the resolver started and already "must match the
+serve decision below". Anything but `"stale"` means this caller is waiting on this resolution, so
+`entry.ts` gets the gate and the `x-cache` value from one field — `transform` never runs for a
+streamed caller, so the status header is stamped in `streamBody`.
 
-Followers never register, so they never stream: they cannot read the leader's one-use stream, and
-they wait for the complete entry exactly as they do today. Serving a follower from the same fill
+The status travels with the resolution, never in a map keyed by event. An earlier
+`resolveStatuses` `WeakMap<HTTPEvent, CacheStatus>`, written from the leader branch next to
+`resolveSignals`, was shared by every cached call made with that event and never cleared. A
+middleware's cached lookup on the request left `"miss"` behind, so under `swr` a stale request
+was handed its own background refresh's stream: `MISS` and the fresh body after the full render,
+instead of `STALE` and the stored body at once. A cached call nested in the handler overwrote the
+handler's status, so the streamed `x-cache` reported the nested call's: `MISS` for an expired page
+whose dependency was cold, `REVALIDATED` for a cold page whose dependency was expired.
+`resolveSignals` keeps that shape safely only because `narrowRequest` reads it synchronously,
+right after it is written.
+
+Followers never run `serialize`, so they never stream: they cannot read the leader's one-use
+stream, and they wait for the complete entry exactly as they do today. Serving a follower from the same fill
 needs a fan-out buffer keyed by cache key rather than by event, and it is **tracked, open** — the
 chunk array `streamBody` already keeps is the buffer such a design would replay from.
 
