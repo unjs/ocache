@@ -10148,6 +10148,72 @@ describe("streaming responses (opt-in)", () => {
     await tasks.settle();
   });
 
+  it("never streams a background refresh to a stale caller that ran another cached call", async () => {
+    const path = uniquePath();
+    const refresh = controlledStream();
+    const tasks = backgroundTasks();
+    let calls = 0;
+    const handler = defineCachedHandler(
+      () => {
+        calls++;
+        return calls === 1 ? new Response("stored") : new Response(refresh.stream);
+      },
+      { maxAge: 10, swr: true, stream: true, waitUntil: tasks.waitUntil },
+    );
+    // A middleware lookup cached against the same event, resolved before the handler runs.
+    const lookup = defineCachedFunction(async (_event: HTTPEvent) => "user", {
+      name: "lookup",
+      getKey: () => path,
+      maxAge: 10,
+    });
+
+    expect(await ((await handler(makeEvent(path))) as Response).text()).toBe("stored");
+    await tasks.settle();
+    await handler.expire(makeEvent(path));
+
+    const event = makeEvent(path);
+    await lookup(event);
+    const stale = (await handler(event)) as Response;
+    expect(stale.headers.get("x-cache")).toBe("STALE");
+    expect(await stale.text()).toBe("stored");
+
+    refresh.push("refreshed");
+    refresh.close();
+    await tasks.settle();
+  });
+
+  it("stamps the handler's own status, not a nested cached call's", async () => {
+    const path = uniquePath();
+    const tasks = backgroundTasks();
+    const getUser = defineCachedFunction(async (_event: HTTPEvent) => ({ name: "x" }), {
+      name: "user",
+      getKey: () => path,
+      maxAge: 10,
+    });
+    const handler = defineCachedHandler(
+      async (event) => new Response(`hi ${(await getUser(event)).name}`),
+      { maxAge: 10, stream: true, waitUntil: tasks.waitUntil },
+    );
+    const status = async () => {
+      const res = (await handler(makeEvent(path))) as Response;
+      expect(await res.text()).toBe("hi x");
+      await tasks.settle();
+      return res.headers.get("x-cache");
+    };
+
+    expect(await status()).toBe("MISS");
+
+    // The handler's entry is expired and the nested one is cold.
+    await handler.expire(makeEvent(path));
+    await getUser.invalidate(makeEvent(path));
+    expect(await status()).toBe("REVALIDATED");
+
+    // The handler's entry is cold and the nested one is expired.
+    await handler.invalidate(makeEvent(path));
+    await getUser.expire(makeEvent(path));
+    expect(await status()).toBe("MISS");
+  });
+
   it("truncates the response and stores nothing when the body fails mid-stream", async () => {
     const path = uniquePath();
     const origin = controlledStream();
