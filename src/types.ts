@@ -113,12 +113,15 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * It may safely consume a one-use source shared by deduplicated callers.
    * `validate` receives this stored form on writes and reads.
    *
+   * `ctx.args` and `ctx.status` belong to the call that started the resolution. A `"stale"`
+   * status means a background refresh: that caller was already served the stored value.
+   *
    * @example
    * ```ts
    * serialize: async (entry) => ({ ...entry.value, body: await streamToString(entry.value.body) }),
    * ```
    */
-  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => any;
+  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT; status: CacheStatus }) => any;
   /**
    * Declares where the stored value's bulk payload sits, for a storage codec.
    *

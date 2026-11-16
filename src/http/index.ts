@@ -19,9 +19,10 @@ import { deserializeEntry, serializeResponse } from "./entry.ts";
 import { cacheableMethods, methodKey, resolveKey } from "./key.ts";
 import { isBypassedMethod, narrowRequest, resolveBypass } from "./request.ts";
 import { closeStreamChannel, openStreamChannel } from "./stream.ts";
-import { isCacheableStatus, validateEntry } from "./validate.ts";
+import { isCacheableStatus, serverTimingHeader, validateEntry } from "./validate.ts";
 
 import type { InternalCacheOptions } from "../cache.ts";
+import type { HandlerCall } from "./entry.ts";
 import type {
   HTTPEvent,
   EventHandler,
@@ -162,13 +163,15 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // Serialization uses dynamic lifetimes from the complete entry. The storage read
     // that precedes it has already resolved `_opts.storage`, whose declared per-entry
     // ceiling bounds how much of a body may be buffered.
-    serialize: (entry, ctx) =>
-      serializeResponse(config, entry, _opts.storage, ctx.args[0] as HTTPEvent),
+    serialize: (entry, ctx) => serializeResponse(config, entry, _opts.storage, ctx),
     // The response body is this entry's payload, whether it is text or bytes. A storage
     // codec moves it outside the metadata; every other backend ignores the declaration.
     payload: "value.body",
     // `cachedHandler` answers bypassed requests itself, so this resolver never sees one.
     shouldBypassCache: undefined,
+    // The hook is declared over the event alone: never hand it the internal `HandlerCall`.
+    shouldInvalidateCache:
+      opts.shouldInvalidateCache && ((event: E) => opts.shouldInvalidateCache!(event)),
     getKey: async (event: HTTPEvent) =>
       methodKey(await resolveKey(config, event), event.req.method),
     // Validate the serialized shape on both writes and reads.
@@ -177,7 +180,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     integrity: opts.integrity || hash([handler, integrityOpts(opts)]),
   };
 
-  const cachedFn = cachedFunction<Response>(async (event: HTTPEvent) => {
+  const cachedFn = cachedFunction<Response, [HTTPEvent, HandlerCall]>(async (event) => {
     narrowRequest(config, event);
 
     const rawValue = await handler(event as E);
@@ -225,7 +228,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // Register interest before the resolution starts. `serialize` hands the live body back
     // through this channel when this request is the one waiting on that resolution.
     const streaming = opts.stream ? openStreamChannel(event) : undefined;
-    const settled = cachedFn(event) as Promise<unknown> as Promise<ResponseCacheEntry>;
+    // Only `serialize` writes here, and only for the call that runs the handler.
+    const call: HandlerCall = {};
+    const settled = cachedFn(event, call) as Promise<unknown> as Promise<ResponseCacheEntry>;
     try {
       if (streaming) {
         // Whichever comes first: the live body, or a resolution that never offered one.
@@ -308,6 +313,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     }
 
     const { body, init } = deserializeEntry(response);
+    if (call.timing !== undefined) {
+      // A copy of the record: `init.headers` can be the stored entry's own.
+      init.headers = {
+        ...(init.headers as Record<string, string>),
+        [serverTimingHeader]: call.timing,
+      };
+    }
     return createResponse(body, init);
   };
 

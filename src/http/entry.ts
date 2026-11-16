@@ -4,11 +4,9 @@ import { base64ToBytes, bytesToBase64 } from "../base64.ts";
 import { ResponseTooLargeError } from "../error.ts";
 import { hash, hashBytes } from "../hash.ts";
 
-import { resolveStatus } from "../cache.ts";
-
 import type { HandlerConfig } from "./config.ts";
 import { createStreamSink, takeStreamListener } from "./stream.ts";
-import { isCacheableStatus } from "./validate.ts";
+import { isCacheableStatus, serverTimingHeader } from "./validate.ts";
 import { appendVary, hasUnkeyedVary, hasVaryWildcard } from "./vary.ts";
 
 import type { StreamSink, StreamedResponse } from "./stream.ts";
@@ -34,24 +32,36 @@ const BINARY_BODY_CHARGE_FACTOR = 2;
 // Response constructors reject non-null bodies for these statuses.
 const nullBodyStatuses: ReadonlySet<number> = /* @__PURE__ */ new Set([204, 205, 304]);
 
+/**
+ * One `cachedHandler` call, passed to the cached resolver after its event. `serialize` sees the
+ * arguments of the call that runs the handler, so only that call is handed the handler's
+ * `Server-Timing`: its metrics describe that request and are never stored.
+ */
+export type HandlerCall = { timing?: string };
+
 // Deduplicated callers share this single body read.
 export async function serializeResponse<E extends HTTPEvent>(
   config: HandlerConfig<E>,
   entry: CacheEntry<Response>,
-  storage?: StorageOption,
-  event?: HTTPEvent,
+  storage: StorageOption | undefined,
+  ctx: { args: unknown[]; status: CacheStatus },
 ): Promise<ResponseCacheEntry> {
   const res = entry.value as Response;
   const limit = resolveMaxBodySize(config.opts.maxBodySize, storage);
+  const [event, call] = ctx.args as [HTTPEvent, HandlerCall];
 
-  // Serve this body while it is still being read, when the caller opted in and this event
-  // both leads the resolution and is waiting for it. `resolveStatus` answers only for such
-  // an event, so a background refresh behind a stale hit never reaches the listener its own
-  // caller opened. See `.agents/http/stream.md`.
-  if (config.opts.stream && res.body && event) {
-    const status = resolveStatus(event);
-    const listener = status && takeStreamListener(event);
-    if (status && listener) {
+  // Only the call that started this resolution and waits for it may be handed its metrics or
+  // its live body. A stale caller was already served the stored value, so a background refresh
+  // reaches neither. See `.agents/http/stream.md`.
+  const status = ctx.status === "stale" ? undefined : ctx.status;
+  if (status) {
+    call.timing = res.headers.get(serverTimingHeader) ?? undefined;
+  }
+
+  // Serve this body while it is still being read, when the caller opted in.
+  if (config.opts.stream && res.body && status) {
+    const listener = takeStreamListener(event);
+    if (listener) {
       return streamBody(config, entry, res, limit, status, listener, storage, event);
     }
   }
@@ -84,6 +94,9 @@ function buildEntry<E extends HTTPEvent>(
       : `W/"${hash(text)}"`
     : undefined;
   const headers = buildHeaders(config, entry, res, etag);
+  // Never replay request metrics to deduplicated or later callers. A streamed response keeps
+  // them: its headers are never stored.
+  headers.delete(serverTimingHeader);
 
   const cacheEntry: ResponseCacheEntry = {
     status: res.status,

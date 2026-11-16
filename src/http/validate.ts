@@ -14,6 +14,9 @@ export function isCacheableStatus(status: number): boolean {
   return cacheableStatuses.has(status);
 }
 
+// Request metrics: `serialize` never stores them, and `validate` refuses an entry that has them.
+export const serverTimingHeader = "server-timing";
+
 // Validate on write and read so access rejects unsafe legacy entries.
 export async function validateEntry<E extends HTTPEvent>(
   config: HandlerConfig<E>,
@@ -30,8 +33,8 @@ export async function validateEntry<E extends HTTPEvent>(
   if (hasUnkeyedVary(value.headers?.vary, varyHeaderNames)) {
     return false;
   }
-  // Reject response cookies from legacy or foreign entries.
-  if (value.headers?.["set-cookie"]) {
+  // Reject response cookies, and another request's metrics, from legacy or foreign entries.
+  if (value.headers?.["set-cookie"] || value.headers?.[serverTimingHeader]) {
     return false;
   }
   if (!isCacheableStatus(value.status)) {
