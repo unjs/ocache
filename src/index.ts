@@ -11,6 +11,8 @@ export {
 
 export { defineCachedHandler } from "./http/index.ts";
 
+export { HANDLER_CHANNEL, FUNCTION_CHANNEL } from "./tracing.ts";
+
 export {
   type StorageInterface,
   type StorageOption,
@@ -35,4 +37,6 @@ export type {
   CachedEventHandlerOptions,
   CacheConditions,
   ResponseCacheEntry,
+  HandlerTraceContext,
+  FunctionTraceContext,
 } from "./types.ts";

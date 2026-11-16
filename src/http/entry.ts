@@ -4,8 +4,6 @@ import { base64ToBytes, bytesToBase64 } from "../base64.ts";
 import { ResponseTooLargeError } from "../error.ts";
 import { hash, hashBytes } from "../hash.ts";
 
-import { resolveStatus } from "../cache.ts";
-
 import type { HandlerConfig } from "./config.ts";
 import { createStreamSink, takeStreamListener } from "./stream.ts";
 import { isCacheableStatus } from "./validate.ts";
@@ -40,18 +38,18 @@ export async function serializeResponse<E extends HTTPEvent>(
   entry: CacheEntry<Response>,
   storage?: StorageOption,
   event?: HTTPEvent,
+  status?: CacheStatus,
 ): Promise<ResponseCacheEntry> {
   const res = entry.value as Response;
   const limit = resolveMaxBodySize(config.opts.maxBodySize, storage);
 
-  // Serve this body while it is still being read, when the caller opted in and this event
-  // both leads the resolution and is waiting for it. `resolveStatus` answers only for such
-  // an event, so a background refresh behind a stale hit never reaches the listener its own
-  // caller opened. See `.agents/http/stream.md`.
-  if (config.opts.stream && res.body && event) {
-    const status = resolveStatus(event);
-    const listener = status && takeStreamListener(event);
-    if (status && listener) {
+  // Serve this body while it is still being read, when the caller opted in and the event that
+  // started this resolution is waiting for it. A stale caller was already served the stored
+  // value, so a background refresh never reaches the listener its own caller opened.
+  // See `.agents/http/stream.md`.
+  if (config.opts.stream && res.body && event && status && status !== "stale") {
+    const listener = takeStreamListener(event);
+    if (listener) {
       return streamBody(config, entry, res, limit, status, listener, storage, event);
     }
   }
@@ -125,6 +123,7 @@ async function streamBody<E extends HTTPEvent>(
   listener({
     body: sink.body,
     init: { status: res.status, statusText: res.statusText, headers },
+    status,
   });
 
   const reader = res.body!.getReader();

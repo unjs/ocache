@@ -113,12 +113,15 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * It may safely consume a one-use source shared by deduplicated callers.
    * `validate` receives this stored form on writes and reads.
    *
+   * `ctx.args` and `ctx.status` belong to the call that started the resolution. A `"stale"`
+   * status means a background refresh: that caller was already served the stored value.
+   *
    * @example
    * ```ts
    * serialize: async (entry) => ({ ...entry.value, body: await streamToString(entry.value.body) }),
    * ```
    */
-  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT }) => any;
+  serialize?: (entry: CacheEntry<T>, ctx: { args: ArgsT; status: CacheStatus }) => any;
   /**
    * Declares where the stored value's bulk payload sits, for a storage codec.
    *
@@ -229,8 +232,64 @@ export interface CacheOptions<T = any, ArgsT extends unknown[] = any[]> {
    * ```
    */
   waitUntil?: (promise: Promise<any>) => void;
+  /**
+   * Publishes every call on a `node:diagnostics_channel` tracing channel. Defaults to `false`.
+   *
+   * A cached function publishes on `ocache.function` with a {@link FunctionTraceContext}, and
+   * a cached handler on `ocache.handler` with a {@link HandlerTraceContext}. Each payload
+   * reports how that one call was served. A runtime without `node:diagnostics_channel`
+   * publishes nothing.
+   */
+  tracing?: boolean;
   /** Receives handled cache, hook, and background errors. */
   onError?: (error: unknown) => void;
+}
+
+/**
+ * Payload of the `ocache.function` tracing channel: one cached-function call.
+ *
+ * The channel adds `result` or `error` once the call settles.
+ */
+export interface FunctionTraceContext<ArgsT extends unknown[] = any[]> {
+  /** The arguments of this call. */
+  args: ArgsT;
+  /** Cache-key name of the function. */
+  name: string;
+  /** Cache-key group of the function. */
+  group: string;
+  /**
+   * How this call was served, set just before it returns.
+   *
+   * `undefined` while the call runs, when it throws, and when `shouldBypassCache`
+   * skipped the cache.
+   */
+  status: CacheStatus | undefined;
+}
+
+/**
+ * Payload of the `ocache.handler` tracing channel: one cached-handler call.
+ *
+ * The channel adds `result` (the `Response`) or `error` once the call settles. Each call
+ * has its own payload, so a nested cached handler or an SWR refresh behind this call
+ * reports on a payload of its own.
+ */
+export interface HandlerTraceContext<E extends HTTPEvent = HTTPEvent> {
+  /** The event this call was made with. */
+  event: E;
+  /** Cache-key name of the handler. */
+  name: string;
+  /** Cache-key group of the handler. */
+  group: string;
+  /**
+   * How this call was served, set once its response exists.
+   *
+   * `undefined` while the call runs, when it throws, and when the response was served
+   * live without the cache: a bypassed request, `headersOnly`, and the fallbacks for a
+   * body over `maxBodySize` or an event that cannot be narrowed. A streamed response
+   * reports when it goes out, so a body that then proves too large to store keeps the
+   * status it was sent with.
+   */
+  status: CacheStatus | undefined;
 }
 
 /** Stored HTTP response data. */

@@ -11,6 +11,7 @@ import {
 } from "../cache.ts";
 import { NarrowRequestError, ResponseTooLargeError, UnsupportedValueError } from "../error.ts";
 import { resolveStorage } from "../storage.ts";
+import { HANDLER_CHANNEL, hasSubscribers, openTracingChannel } from "../tracing.ts";
 
 import { requiresRevalidation } from "./cache-control.ts";
 import { integrityOpts, resolveHandlerConfig } from "./config.ts";
@@ -27,9 +28,30 @@ import type {
   EventHandler,
   CachedEventHandler,
   CacheOptions,
+  CacheStatus,
   CachedEventHandlerOptions,
+  HandlerTraceContext,
   ResponseCacheEntry,
 } from "../types.ts";
+
+/** What `transform` hands the serve path: the entry, and how this call was served. */
+interface ServedEntry {
+  value: ResponseCacheEntry;
+  status: CacheStatus;
+}
+
+// Record the status only once the response exists, so a throwing `createResponse` or
+// `handleCacheHeaders` reports none.
+function reportStatus(
+  res: Response,
+  status: CacheStatus | undefined,
+  trace: HandlerTraceContext<any> | undefined,
+): Response {
+  if (trace) {
+    trace.status = status;
+  }
+  return res;
+}
 
 /** Body types `Response` carries as-is. It stringifies everything else. */
 function isBodyInit(value: object): boolean {
@@ -118,23 +140,35 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
 
   const handleCacheHeaders = opts.handleCacheHeaders || defaultHandleCacheHeaders;
 
+  const group = opts.group || "handlers";
+
+  // Opt-in: without it, no call looks up or checks a channel. See `.agents/tracing.md`.
+  const tracer = opts.tracing
+    ? openTracingChannel<HandlerTraceContext<E>>(HANDLER_CHANNEL)
+    : undefined;
+
+  // Only the status header and a tracer read the status. Without either, `transform` stays
+  // undefined: it costs every call an `await`.
+  const readsStatus = !!(statusHeader || tracer);
+
   // Stored values use `ResponseCacheEntry`, although the resolver returns Response.
   const _opts: CacheOptions<Response> & InternalCacheOptions = {
     ...opts,
     [kKeepStale]: keepStale,
-    // Add cache status to a clone, not the stored entry.
-    transform: statusHeader
-      ? (entry) => {
+    // Hand this call's status to the serve path, and add the header to a clone, not the
+    // stored entry.
+    transform: readsStatus
+      ? (entry): ServedEntry | undefined => {
           const value = entry.value as unknown as ResponseCacheEntry | undefined;
           if (!value) {
             return;
           }
+          const status = entry.status!;
           return {
-            ...value,
-            headers: {
-              ...value.headers,
-              [statusHeader]: String(entry.status).toUpperCase(),
-            },
+            value: statusHeader
+              ? { ...value, headers: { ...value.headers, [statusHeader]: status.toUpperCase() } }
+              : value,
+            status,
           };
         }
       : undefined,
@@ -163,7 +197,7 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     // that precedes it has already resolved `_opts.storage`, whose declared per-entry
     // ceiling bounds how much of a body may be buffered.
     serialize: (entry, ctx) =>
-      serializeResponse(config, entry, _opts.storage, ctx.args[0] as HTTPEvent),
+      serializeResponse(config, entry, _opts.storage, ctx.args[0] as HTTPEvent, ctx.status),
     // The response body is this entry's payload, whether it is text or bytes. A storage
     // codec moves it outside the metadata; every other backend ignores the declaration.
     payload: "value.body",
@@ -173,8 +207,11 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       methodKey(await resolveKey(config, event), event.req.method),
     // Validate the serialized shape on both writes and reads.
     validate: (entry) => validateEntry(config, entry.value as unknown as ResponseCacheEntry),
-    group: opts.group || "handlers",
+    group,
     integrity: opts.integrity || hash([handler, integrityOpts(opts)]),
+    // The handler publishes each call on its own channel; its cached function must not
+    // publish the same call again.
+    tracing: undefined,
   };
 
   const cachedFn = cachedFunction<Response>(async (event: HTTPEvent) => {
@@ -184,7 +221,17 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
     return toResponse(rawValue, event as E);
   }, _opts);
 
-  const cachedHandler: EventHandler<E> = async (event) => {
+  // Returns the promise of `serve` itself, so an untraced call takes no extra tick.
+  const cachedHandler: EventHandler<E> = (event) => {
+    if (!tracer || !hasSubscribers(tracer)) {
+      return serve(event);
+    }
+    const trace: HandlerTraceContext<E> = { event, name: opts.name!, group, status: undefined };
+    return tracer.tracePromise(() => serve(event, trace), trace);
+  };
+
+  // Every live path leaves `trace.status` unset; only a response from the cache reports one.
+  async function serve(event: E, trace?: HandlerTraceContext<E>): Promise<Response> {
     // Read the request validators before the handler runs, because narrowing keeps
     // only headers the key covers and no key covers a validator.
     const requestConditions = readConditions(event);
@@ -221,11 +268,13 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       return toResponse(await handler(event), event);
     }
 
-    let response: ResponseCacheEntry;
+    let served: ServedEntry | ResponseCacheEntry;
     // Register interest before the resolution starts. `serialize` hands the live body back
     // through this channel when this request is the one waiting on that resolution.
     const streaming = opts.stream ? openStreamChannel(event) : undefined;
-    const settled = cachedFn(event) as Promise<unknown> as Promise<ResponseCacheEntry>;
+    const settled = cachedFn(event) as Promise<unknown> as Promise<
+      ServedEntry | ResponseCacheEntry
+    >;
     try {
       if (streaming) {
         // Whichever comes first: the live body, or a resolution that never offered one.
@@ -251,10 +300,10 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
             event.req.waitUntil?.(fill);
           }
           // No conditional handling: a streamed response has no validator to compare.
-          return createResponse(streamed.body, streamed.init);
+          return reportStatus(createResponse(streamed.body, streamed.init), streamed.status, trace);
         }
       }
-      response = (await settled)!;
+      served = (await settled)!;
     } catch (error) {
       if (error instanceof ResponseTooLargeError) {
         // Claim before any await: the leader and its followers all see this one error.
@@ -288,6 +337,9 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
       }
     }
 
+    const response = readsStatus ? (served as ServedEntry).value : (served as ResponseCacheEntry);
+    const status = readsStatus ? (served as ServedEntry).status : undefined;
+
     // Only a handler sets `last-modified`, so a stored entry often has none.
     const modifiedTime = response.headers["last-modified"] as string | undefined;
     // A MISS hands back the serialized entry even when `validate` refused to store it, and
@@ -301,15 +353,19 @@ export function defineCachedHandler<E extends HTTPEvent = HTTPEvent>(
         maxAge: opts.maxAge,
       })
     ) {
-      return createResponse(null, {
-        status: 304,
-        headers: notModifiedHeaders(response.headers, statusHeader),
-      });
+      return reportStatus(
+        createResponse(null, {
+          status: 304,
+          headers: notModifiedHeaders(response.headers, statusHeader),
+        }),
+        status,
+        trace,
+      );
     }
 
     const { body, init } = deserializeEntry(response);
-    return createResponse(body, init);
-  };
+    return reportStatus(createResponse(body, init), status, trace);
+  }
 
   // Resource-level operations include every cacheable method variant.
   const variantOptions = async (event: E) => {

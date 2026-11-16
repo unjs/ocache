@@ -372,8 +372,9 @@ harness had no way to observe a cached function's background work at all.
 **measured**
 
 - **`cacheStatusHeader: false` saves nothing.** +25.1 µs against +24.3 µs for plain, well
-  inside noise. Not because the header is free: with no status header `http/index.ts` leaves
-  `transform` undefined and the hit skips the entry clone and both header spreads entirely.
+  inside noise. Not because the header is free: with no status header (and `tracing` off)
+  `http/index.ts` leaves `transform` undefined and the hit skips the entry clone and both
+  header spreads entirely.
   That whole clone is worth less than a microsecond at this header count. Do not recommend
   disabling it for performance, and do not assume `transform` is what costs.
 - **Hit overhead does not scale with payload.** 23-27 µs across 4 KiB to 64 KiB, measured
