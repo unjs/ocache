@@ -93,9 +93,13 @@ type SizeName = "raw" | "min" | "minGzip";
 // streaming arm of `http/entry.ts` are reached through a runtime flag, so they stay in the
 // graph of a handler that never sets `stream`. `raw` carries the rest — the option's JSDoc and
 // the comments on the fill/serve split. Same ~5% headroom on all six rows.
+//
+// Re-based again at the workerd orphaned-resolution takeover (registering a miss with
+// `waitUntil`, plus `isOrphanedResolution`): +0.16 kB min, +0.07 kB gzip on both platforms
+// (68_341 / 27_527 / 10_625 neutral, 64_165 / 25_164 / 9_204 node). Same ~5% headroom.
 const BUDGETS: Record<Platform, Record<SizeName, number>> = {
-  neutral: { raw: 69_500, min: 27_500, minGzip: 10_800 },
-  node: { raw: 65_000, min: 25_200, minGzip: 9300 },
+  neutral: { raw: 71_800, min: 28_900, minGzip: 11_150 },
+  node: { raw: 67_400, min: 26_400, minGzip: 9650 },
 };
 
 // Absolute so the generated entry can live anywhere and still resolve ocache from source.
