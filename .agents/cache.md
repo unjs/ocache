@@ -119,9 +119,17 @@ Without the fence, a resolver that started before the purge wrote its pre-purge 
 
 `opts.storage` accepts a `StorageInterface` or a factory. The default is a fresh `createMemoryStorage()` **for each cached function or handler**, never a global instance. See `.agents/storage.md`. `resolveStorage(_optsRef, opts)` resolves storage lazily on the first read or write. Do not resolve it at definition time because factories support late binding. Memoize the result in both the caller's options and the internal clone. A factory must run at most once. Instance methods and standalone helpers must reach the same store.
 
+## Cross-request resolutions on workerd
+
+With `handle_cross_request_promise_resolution` (Cloudflare's default since 2024-10-14) a promise settles only in the request that created it. Since cloudflare/workerd#8395, another request that awaits it after that request ended gets a plain `Error` ("…created by a request that has since ended, so it can never settle…") at once; before that, the await hung. `pending` is shared across requests, so if the leader's request ends mid-resolution, every follower got that error, and since only the leader releases its slot, every later call for the key followed the dead token until the isolate was recycled.
+
+- **Registering the miss** keeps the leader's request alive past a disconnect, which covers the common case. It cannot cover a resolution that outlives the host's `waitUntil` limit.
+- **Takeover**: a follower whose await rejects with that error releases the token (`releasePending`, so a newer leader's slot is untouched) and calls `resolveEntry()` again, as the new leader or as a follower of another follower's takeover. Every other error is still shared, so a failing upstream is not retried once per waiter.
+- The error has no code or name, so `isOrphanedResolution` matches the message, as workerd's own tests do. A settled promise is safe to await from any request, so a held slot (`holdUntil`) never triggers this.
+
 ## `waitUntil`
 
-`event.req` may provide `waitUntil`, as srvx and Cloudflare `ServerRequest` do. Four sites register background work through the local `waitUntil` helper in `get`: cache write, SWR background refresh, and both evictions. The helper resolves one owner per call — `opts.waitUntil` if the caller supplied it, otherwise `event?.req.waitUntil?.(p)` — and never calls both, so a host that drains its own queue cannot count one promise twice.
+`event.req` may provide `waitUntil`, as srvx and Cloudflare `ServerRequest` do. Five sites register work through the local `waitUntil` helper in `get`: the foreground resolution of a miss, cache write, SWR background refresh, and both evictions. A miss is awaited **and** registered, so a client disconnect cannot cancel a resolution that followers share (see "Cross-request resolutions on workerd"). The helper resolves one owner per call — `opts.waitUntil` if the caller supplied it, otherwise `event?.req.waitUntil?.(p)` — and never calls both, so a host that drains its own queue cannot count one promise twice.
 
 `opts.waitUntil` exists because `event` is only set when `args[0]` is an HTTP-event shape. A plain cached function had no way to reach a host at all: its SWR refresh was an unowned floating promise, which a serverless runtime may freeze before the write lands. The bench harness could only recover this work by draining the loop (`settle()`), and `bench/scenarios/fanout-aggregate.ts` now passes the option so its refreshes reach the driver like a handler's do.
 

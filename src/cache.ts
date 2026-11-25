@@ -325,6 +325,11 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
       try {
         resolved = await current.promise;
       } catch (error) {
+        // workerd: the leader's request ended before this settled. Take the key over.
+        if (isPending && isOrphanedResolution(error)) {
+          releasePending(key, current);
+          return resolveEntry();
+        }
         // Treat a timeout like any other failed resolution.
         if (!isPending) {
           releasePending(key, current);
@@ -433,6 +438,10 @@ export function defineCachedFunction<T, ArgsT extends unknown[] = any[]>(
     const _resolvePromise = expired ? resolveEntry() : Promise.resolve();
 
     if (entry.value === undefined) {
+      if (expired) {
+        // Owned as well as awaited: a disconnect must not cancel work that followers share.
+        waitUntil(_resolvePromise.catch(() => {}));
+      }
       await _resolvePromise;
     } else if (expired) {
       waitUntil(_resolvePromise);
@@ -665,6 +674,13 @@ function withDeadline<T>(
       },
     );
   });
+}
+
+// workerd's `handle_cross_request_promise_resolution` error carries no code or name.
+function isOrphanedResolution(error: unknown): boolean {
+  return (
+    error instanceof Error && error.message.includes("created by a request that has since ended")
+  );
 }
 
 function isHTTPEvent(input: unknown): input is HTTPEvent {

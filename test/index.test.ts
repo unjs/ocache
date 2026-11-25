@@ -9319,7 +9319,7 @@ describe("waitUntil survives request narrowing", () => {
     return { event: { req } as HTTPEvent, req, promises, receivers, seenCookies };
   }
 
-  it("registers exactly one waitUntil call for the cache write on a MISS", async () => {
+  it("registers the MISS resolution and its cache write, and nothing else", async () => {
     let calls = 0;
     const handler = defineCachedHandler(
       () => {
@@ -9333,8 +9333,8 @@ describe("waitUntil survives request narrowing", () => {
     const r1 = (await handler(event)) as Response;
     expect(r1.headers.get("x-cache")).toBe("MISS");
     expect(calls).toBe(1);
-    // The cache write — and nothing else — was handed to the runtime.
-    expect(promises).toHaveLength(1);
+    // The resolution (so a disconnect cannot cancel it) and the cache write.
+    expect(promises).toHaveLength(2);
 
     await Promise.all(promises);
     const r2 = (await handler({ req: new Request("http://localhost/wu-miss") })) as Response;
@@ -10242,5 +10242,121 @@ describe("streaming responses (opt-in)", () => {
     // A buffered fill still synthesizes the validator.
     expect(res.headers.get("etag")).toMatch(/^W\/"/);
     await tasks.settle();
+  });
+});
+
+// On Cloudflare Workers (`handle_cross_request_promise_resolution`) a promise settles only in the
+// request that created it; awaiting it from another request after that request ended rejects
+// with this error. Node has no such rule, so the rejection is simulated.
+describe("workerd: leader's request ends mid-resolution", () => {
+  const orphaned = () =>
+    new Error(
+      "This promise was created by a request that has since ended, so it can never settle.",
+    );
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it("a follower takes the key over instead of failing", async () => {
+    const dead = deferred<string>();
+    const resolver = vi.fn().mockReturnValueOnce(dead.promise).mockResolvedValue("retaken");
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 10,
+      name: "orphanTakeover",
+      getKey: () => "k",
+    });
+
+    const leader = fn();
+    const follower = fn();
+    dead.reject(orphaned());
+
+    await expect(follower).resolves.toBe("retaken");
+    await expect(leader).rejects.toThrow("since ended");
+    expect(resolver).toHaveBeenCalledTimes(2);
+    // The takeover wrote the entry: the key is not left pointing at the dead resolution.
+    expect(await fn()).toBe("retaken");
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  it("followers of the same dead resolution share one takeover", async () => {
+    const dead = deferred<string>();
+    const retry = deferred<string>();
+    const resolver = vi.fn().mockReturnValueOnce(dead.promise).mockReturnValueOnce(retry.promise);
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 10,
+      name: "orphanShared",
+      getKey: () => "k",
+    });
+
+    // Its rejection lands while the test waits for the retry, so observe it now.
+    const leader = fn().catch((error: Error) => error.message);
+    const followers = [fn(), fn(), fn()];
+    dead.reject(orphaned());
+    await vi.waitFor(() => expect(resolver).toHaveBeenCalledTimes(2));
+    retry.resolve("retaken");
+
+    expect(await Promise.all(followers)).toEqual(["retaken", "retaken", "retaken"]);
+    expect(await leader).toContain("since ended");
+    expect(resolver).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares any other failure without retrying it", async () => {
+    const failing = deferred<string>();
+    const resolver = vi.fn(() => failing.promise);
+    const fn = defineCachedFunction(resolver, {
+      maxAge: 10,
+      name: "orphanOther",
+      getKey: () => "k",
+    });
+
+    const leader = fn();
+    const follower = fn();
+    failing.reject(new Error("upstream 502"));
+
+    await expect(leader).rejects.toThrow("upstream 502");
+    await expect(follower).rejects.toThrow("upstream 502");
+    expect(resolver).toHaveBeenCalledOnce();
+  });
+
+  it("hands a miss to waitUntil before it settles, so a disconnect cannot cancel it", async () => {
+    const upstream = deferred<string>();
+    const registered: Promise<unknown>[] = [];
+    const fn = defineCachedFunction(() => upstream.promise, {
+      maxAge: 10,
+      name: "orphanMissOwned",
+      getKey: () => "k",
+      waitUntil: (p) => registered.push(p),
+    });
+
+    const call = fn();
+    await vi.waitFor(() => expect(registered).toHaveLength(1));
+    upstream.resolve("fresh");
+
+    expect(await call).toBe("fresh");
+  });
+
+  it("a miss handed to waitUntil does not leave an unhandled rejection", async () => {
+    const registered: Promise<unknown>[] = [];
+    const fn = defineCachedFunction(
+      () => {
+        throw new Error("boom");
+      },
+      {
+        maxAge: 10,
+        name: "orphanMissReject",
+        getKey: () => "k",
+        waitUntil: (p) => registered.push(p),
+      },
+    );
+
+    await expect(fn()).rejects.toThrow("boom");
+    await expect(Promise.all(registered)).resolves.toBeDefined();
   });
 });
